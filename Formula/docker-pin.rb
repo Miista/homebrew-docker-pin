@@ -5,65 +5,69 @@
 class DockerPin < Formula
   desc "Docker CLI plugins to pin and upgrade container images by tag and SHA digest"
   homepage "https://github.com/Miista/homebrew-docker-pin"
-  version "0.1.8"
+  version "0.1.9"
 
   on_macos do
     if Hardware::CPU.intel?
-      url "https://github.com/Miista/homebrew-docker-pin/releases/download/v0.1.8/homebrew-docker-pin_0.1.8_darwin_amd64.tar.gz"
-      sha256 "67dd7fd5746b057d2585341d4962a1a965edd6a71332d459f79268f76737a29d"
+      url "https://github.com/Miista/homebrew-docker-pin/releases/download/v0.1.9/homebrew-docker-pin_0.1.9_darwin_amd64.tar.gz"
+      sha256 "162a9cb48ee446bfc456c269fd64b0527cb8dfd805beee9e6f8b2c8a36d02e7a"
 
       define_method(:install) do
         libexec.install "docker-pin", "docker-upgrade", "docker-unpin"
         plugin_dir = Pathname.new(ENV.fetch("HOME", Dir.home))/".docker/cli-plugins"
         plugin_dir.mkpath
-        plugin_dir.install_symlink libexec/"docker-pin"
-        plugin_dir.install_symlink libexec/"docker-upgrade"
-        plugin_dir.install_symlink libexec/"docker-unpin"
+        %w[docker-pin docker-upgrade docker-unpin].each do |b|
+          (plugin_dir/b).unlink if (plugin_dir/b).symlink? || (plugin_dir/b).exist?
+          plugin_dir.install_symlink libexec/b
+        end
       end
     end
     if Hardware::CPU.arm?
-      url "https://github.com/Miista/homebrew-docker-pin/releases/download/v0.1.8/homebrew-docker-pin_0.1.8_darwin_arm64.tar.gz"
-      sha256 "230512ba8567b6212d2ecd11aaa68edc2e61a2c7a5455fd4097e91aa37355459"
+      url "https://github.com/Miista/homebrew-docker-pin/releases/download/v0.1.9/homebrew-docker-pin_0.1.9_darwin_arm64.tar.gz"
+      sha256 "49bbddf945ba283c2b22a1bbff81261782b990c0d4c07c2592dc2740dbf3917a"
 
       define_method(:install) do
         libexec.install "docker-pin", "docker-upgrade", "docker-unpin"
         plugin_dir = Pathname.new(ENV.fetch("HOME", Dir.home))/".docker/cli-plugins"
         plugin_dir.mkpath
-        plugin_dir.install_symlink libexec/"docker-pin"
-        plugin_dir.install_symlink libexec/"docker-upgrade"
-        plugin_dir.install_symlink libexec/"docker-unpin"
+        %w[docker-pin docker-upgrade docker-unpin].each do |b|
+          (plugin_dir/b).unlink if (plugin_dir/b).symlink? || (plugin_dir/b).exist?
+          plugin_dir.install_symlink libexec/b
+        end
       end
     end
   end
 
   on_linux do
     if Hardware::CPU.intel? && Hardware::CPU.is_64_bit?
-      url "https://github.com/Miista/homebrew-docker-pin/releases/download/v0.1.8/homebrew-docker-pin_0.1.8_linux_amd64.tar.gz"
-      sha256 "8b900e2b6d292a8c727d9bb66c402cec090edc860f2b52da6626e59ad1929738"
+      url "https://github.com/Miista/homebrew-docker-pin/releases/download/v0.1.9/homebrew-docker-pin_0.1.9_linux_amd64.tar.gz"
+      sha256 "094c9463bc9fcfcc6981554a403285f3cf987544acae0fd80c7965d3239aa967"
       define_method(:install) do
         libexec.install "docker-pin", "docker-upgrade", "docker-unpin"
         plugin_dir = Pathname.new(ENV.fetch("HOME", Dir.home))/".docker/cli-plugins"
         plugin_dir.mkpath
-        plugin_dir.install_symlink libexec/"docker-pin"
-        plugin_dir.install_symlink libexec/"docker-upgrade"
-        plugin_dir.install_symlink libexec/"docker-unpin"
+        %w[docker-pin docker-upgrade docker-unpin].each do |b|
+          (plugin_dir/b).unlink if (plugin_dir/b).symlink? || (plugin_dir/b).exist?
+          plugin_dir.install_symlink libexec/b
+        end
       end
     end
     if Hardware::CPU.arm? && Hardware::CPU.is_64_bit?
-      url "https://github.com/Miista/homebrew-docker-pin/releases/download/v0.1.8/homebrew-docker-pin_0.1.8_linux_arm64.tar.gz"
-      sha256 "c53e78727d0ea5ba4e9d66dbbc654e74475be85e62894479b3b36879f2df632b"
+      url "https://github.com/Miista/homebrew-docker-pin/releases/download/v0.1.9/homebrew-docker-pin_0.1.9_linux_arm64.tar.gz"
+      sha256 "57e72dfd61939ce8e77742912ae520567dc6c6226d791dfdfcc1804ff487f2f3"
       define_method(:install) do
         libexec.install "docker-pin", "docker-upgrade", "docker-unpin"
         plugin_dir = Pathname.new(ENV.fetch("HOME", Dir.home))/".docker/cli-plugins"
         plugin_dir.mkpath
-        plugin_dir.install_symlink libexec/"docker-pin"
-        plugin_dir.install_symlink libexec/"docker-upgrade"
-        plugin_dir.install_symlink libexec/"docker-unpin"
+        %w[docker-pin docker-upgrade docker-unpin].each do |b|
+          (plugin_dir/b).unlink if (plugin_dir/b).symlink? || (plugin_dir/b).exist?
+          plugin_dir.install_symlink libexec/b
+        end
       end
     end
   end
 
   test do
-    system "#{lib}/docker/cli-plugins/docker-pin", "docker-cli-plugin-metadata"
+    system "#{libexec}/docker-pin", "docker-cli-plugin-metadata"
   end
 end
