@@ -52,8 +52,9 @@ brews:
       libexec.install "docker-pin", "docker-upgrade", "docker-unpin"
       plugin_dir = Pathname.new(ENV.fetch("HOME", Dir.home))/".docker/cli-plugins"
       plugin_dir.mkpath
-      plugin_dir.install_symlink libexec/"docker-pin"
-      plugin_dir.install_symlink libexec/"docker-upgrade"
-      plugin_dir.install_symlink libexec/"docker-unpin"
+      %w[docker-pin docker-upgrade docker-unpin].each do |b|
+        (plugin_dir/b).unlink if (plugin_dir/b).symlink? || (plugin_dir/b).exist?
+        plugin_dir.install_symlink libexec/b
+      end
     test: |
-      system "#{lib}/docker/cli-plugins/docker-pin", "docker-cli-plugin-metadata"
+      system "#{libexec}/docker-pin", "docker-cli-plugin-metadata"
