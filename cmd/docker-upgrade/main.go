@@ -104,7 +104,7 @@ func run(service, targetVersion string) error {
 		return err
 	}
 
-	baseImage, _, err := compose.ParseImage(composeFile, service)
+	baseImage, currentTag, err := compose.ParseImage(composeFile, service)
 	if err != nil {
 		return err
 	}
@@ -114,9 +114,14 @@ func run(service, targetVersion string) error {
 		return err
 	}
 
-	pullTag := "latest"
-	if targetVersion != "" {
-		pullTag = targetVersion
+	// With no explicit version, derive the moving tag for the line/variant the
+	// service is currently on, so we never silently switch image flavor.
+	pullTag := targetVersion
+	if pullTag == "" {
+		pullTag, err = registry.MovingPullTag(baseImage, currentTag)
+		if err != nil {
+			return err
+		}
 	}
 
 	pullRef := baseImage + ":" + pullTag
@@ -130,8 +135,10 @@ func run(service, targetVersion string) error {
 		return err
 	}
 
+	// When we derived a moving tag (no explicit version), resolve it back to a
+	// specific version tag for the pin.
 	pinnedTag := pullTag
-	if pullTag == "latest" {
+	if targetVersion == "" {
 		pinnedTag = registry.ResolveOrWarn(baseImage, pullTag, digest, service)
 	}
 
