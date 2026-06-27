@@ -41,7 +41,10 @@ brews:
     homepage: https://github.com/Miista/homebrew-docker-pin
     description: Docker CLI plugins to pin and upgrade container images by tag and SHA digest
     install: |
-      (lib/"docker/cli-plugins").install "docker-pin"
-      (lib/"docker/cli-plugins").install "docker-upgrade"
+      libexec.install "docker-pin", "docker-upgrade"
+      plugin_dir = Pathname.new(Dir.home)/".docker/cli-plugins"
+      plugin_dir.mkpath
+      plugin_dir.install_symlink libexec/"docker-pin"
+      plugin_dir.install_symlink libexec/"docker-upgrade"
     test: |
       system "#{lib}/docker/cli-plugins/docker-pin", "docker-cli-plugin-metadata"
