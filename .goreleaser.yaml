@@ -1,0 +1,47 @@
+version: 2
+
+builds:
+  - id: docker-pin
+    main: ./cmd/docker-pin
+    binary: docker-pin
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w
+
+  - id: docker-upgrade
+    main: ./cmd/docker-upgrade
+    binary: docker-upgrade
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w
+
+archives:
+  - id: default
+    builds: [docker-pin, docker-upgrade]
+    format: tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - none*  # binaries only
+
+checksum:
+  name_template: checksums.txt
+
+brews:
+  - name: docker-plugins
+    repository:
+      owner: Miista
+      name: homebrew-docker-pin
+      token: "{{ .Env.GITHUB_TOKEN }}"
+    directory: Formula
+    commit_author:
+      name: goreleaser-bot
+      email: bot@goreleaser.com
+    homepage: https://github.com/Miista/homebrew-docker-pin
+    description: Docker CLI plugins to pin and upgrade container images by tag and SHA digest
+    install: |
+      (lib/"docker/cli-plugins").install "docker-pin"
+      (lib/"docker/cli-plugins").install "docker-upgrade"
+    test: |
+      system "#{lib}/docker/cli-plugins/docker-pin", "docker-cli-plugin-metadata"
