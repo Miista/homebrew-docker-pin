@@ -5,15 +5,15 @@
 class DockerPin < Formula
   desc "Docker CLI plugins to pin and upgrade container images by tag and SHA digest"
   homepage "https://github.com/Miista/homebrew-docker-pin"
-  version "0.1.6"
+  version "0.1.7"
 
   on_macos do
     if Hardware::CPU.intel?
-      url "https://github.com/Miista/homebrew-docker-pin/releases/download/v0.1.6/homebrew-docker-pin_0.1.6_darwin_amd64.tar.gz"
-      sha256 "d7f0cbf4e830c9374d058765500ab8232f58d914a543abe51702b2697446b2b1"
+      url "https://github.com/Miista/homebrew-docker-pin/releases/download/v0.1.7/homebrew-docker-pin_0.1.7_darwin_amd64.tar.gz"
+      sha256 "bd8f0e78448af4db0f29c2fad8569190522e9baa2c85d159dfd3c7cf65a3f5d9"
 
       define_method(:install) do
-        libexec.install "docker-pin", "docker-upgrade"
+        libexec.install "docker-pin", "docker-upgrade", "docker-unpin"
         plugin_dir = Pathname.new(Dir.home)/".docker/cli-plugins"
         plugin_dir.mkpath
         plugin_dir.install_symlink libexec/"docker-pin"
@@ -22,11 +22,11 @@ class DockerPin < Formula
       end
     end
     if Hardware::CPU.arm?
-      url "https://github.com/Miista/homebrew-docker-pin/releases/download/v0.1.6/homebrew-docker-pin_0.1.6_darwin_arm64.tar.gz"
-      sha256 "370580e9d6f40261c1e1accf0a68a398438c37f13b306c7194a77ffb3c20b173"
+      url "https://github.com/Miista/homebrew-docker-pin/releases/download/v0.1.7/homebrew-docker-pin_0.1.7_darwin_arm64.tar.gz"
+      sha256 "4879fededd42ddca2ddf16be7390e23919f1c3a574feea5a6f9dd3a40e4bdfc5"
 
       define_method(:install) do
-        libexec.install "docker-pin", "docker-upgrade"
+        libexec.install "docker-pin", "docker-upgrade", "docker-unpin"
         plugin_dir = Pathname.new(Dir.home)/".docker/cli-plugins"
         plugin_dir.mkpath
         plugin_dir.install_symlink libexec/"docker-pin"
@@ -38,10 +38,10 @@ class DockerPin < Formula
 
   on_linux do
     if Hardware::CPU.intel? && Hardware::CPU.is_64_bit?
-      url "https://github.com/Miista/homebrew-docker-pin/releases/download/v0.1.6/homebrew-docker-pin_0.1.6_linux_amd64.tar.gz"
-      sha256 "900682656a0963dc8504fde89f0ae9749fd60f86a1bce1e5d08fb8e557e426b6"
+      url "https://github.com/Miista/homebrew-docker-pin/releases/download/v0.1.7/homebrew-docker-pin_0.1.7_linux_amd64.tar.gz"
+      sha256 "6a02b5d5257138125c1112de3454c14d42ec0619c361c4d366208c8709d1582e"
       define_method(:install) do
-        libexec.install "docker-pin", "docker-upgrade"
+        libexec.install "docker-pin", "docker-upgrade", "docker-unpin"
         plugin_dir = Pathname.new(Dir.home)/".docker/cli-plugins"
         plugin_dir.mkpath
         plugin_dir.install_symlink libexec/"docker-pin"
@@ -50,10 +50,10 @@ class DockerPin < Formula
       end
     end
     if Hardware::CPU.arm? && Hardware::CPU.is_64_bit?
-      url "https://github.com/Miista/homebrew-docker-pin/releases/download/v0.1.6/homebrew-docker-pin_0.1.6_linux_arm64.tar.gz"
-      sha256 "9e0229382a5af4eace5b1c3e67b7246707e4648e8c9adb68027460842913eca0"
+      url "https://github.com/Miista/homebrew-docker-pin/releases/download/v0.1.7/homebrew-docker-pin_0.1.7_linux_arm64.tar.gz"
+      sha256 "7a465460211b713037e889a18e1b21efbb980d826ffb1063ddfd444781c730d5"
       define_method(:install) do
-        libexec.install "docker-pin", "docker-upgrade"
+        libexec.install "docker-pin", "docker-upgrade", "docker-unpin"
         plugin_dir = Pathname.new(Dir.home)/".docker/cli-plugins"
         plugin_dir.mkpath
         plugin_dir.install_symlink libexec/"docker-pin"
