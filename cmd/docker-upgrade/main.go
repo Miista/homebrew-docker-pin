@@ -94,6 +94,15 @@ func runAll() error {
 	return nil
 }
 
+// digestOf returns the sha256 digest portion of an image reference, or "" if
+// the reference isn't pinned.
+func digestOf(image string) string {
+	if i := strings.Index(image, "@"); i != -1 {
+		return image[i+1:]
+	}
+	return ""
+}
+
 func run(service, targetVersion string) error {
 	wd, err := os.Getwd()
 	if err != nil {
@@ -133,6 +142,13 @@ func run(service, targetVersion string) error {
 	digest, err := docker.GetDigest(pullRef)
 	if err != nil {
 		return err
+	}
+
+	// If the freshly pulled digest already matches what's pinned, there's
+	// nothing to upgrade.
+	if oldDigest := digestOf(oldRaw); oldDigest != "" && oldDigest == digest {
+		fmt.Printf("%s is already up to date (%s)\n", service, oldRaw)
+		return nil
 	}
 
 	// When we derived a moving tag (no explicit version), resolve it back to a
