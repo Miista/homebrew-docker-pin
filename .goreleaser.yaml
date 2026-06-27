@@ -17,9 +17,17 @@ builds:
     ldflags:
       - -s -w -X main.version={{.Version}}
 
+  - id: docker-unpin
+    main: ./cmd/docker-unpin
+    binary: docker-unpin
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
 archives:
   - id: default
-    builds: [docker-pin, docker-upgrade]
+    builds: [docker-pin, docker-upgrade, docker-unpin]
     format: tar.gz
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
@@ -46,5 +54,6 @@ brews:
       plugin_dir.mkpath
       plugin_dir.install_symlink libexec/"docker-pin"
       plugin_dir.install_symlink libexec/"docker-upgrade"
+      plugin_dir.install_symlink libexec/"docker-unpin"
     test: |
       system "#{lib}/docker/cli-plugins/docker-pin", "docker-cli-plugin-metadata"
