@@ -87,6 +87,22 @@ This repo **is** the Homebrew tap. The formula installs the binaries into
 plugin dir, the formula caveat tells users to add it to `cliPluginsExtraDirs` in
 `~/.docker/config.json`.
 
+## Index vs manifest digests (multi-arch)
+
+`docker image inspect` returns the **index** (manifest-list) digest — the hash of
+the multi-arch wrapper that lists per-platform sub-manifests. Two tags can point to
+byte-identical linux/amd64 images yet have different index digests if one index
+carries extra platforms (e.g. `latest` includes Windows images, `alpine` does not).
+
+This means:
+- Pinning the index digest is correct — it keeps the pin portable across
+  architectures. Pinning a per-arch manifest digest would lock to one platform.
+- The "already up to date" check compares index digests, so it will not recognise
+  `latest` and `alpine` as identical even when the running image bits are the same.
+  This is defensible (different indexes are different artifacts).
+- The Docker Hub "Digest" column shows the per-arch manifest digest, which may
+  differ from the index digest our tool records. This is expected, not a bug.
+
 ## Conventions
 
 - New subcommand = new `cmd/docker-<name>` `main` that responds to
