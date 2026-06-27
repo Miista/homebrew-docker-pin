@@ -13,8 +13,9 @@ const (
 	pluginName = "pin"
 	shortDesc  = "Pin a service image to its current tag and SHA digest"
 	vendor     = "Miista"
-	version    = "v0.1.0"
 )
+
+var version = "dev"
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "docker-cli-plugin-metadata" {

@@ -7,7 +7,7 @@ builds:
     goos: [linux, darwin]
     goarch: [amd64, arm64]
     ldflags:
-      - -s -w
+      - -s -w -X main.version={{.Version}}
 
   - id: docker-upgrade
     main: ./cmd/docker-upgrade
@@ -15,7 +15,7 @@ builds:
     goos: [linux, darwin]
     goarch: [amd64, arm64]
     ldflags:
-      - -s -w
+      - -s -w -X main.version={{.Version}}
 
 archives:
   - id: default
