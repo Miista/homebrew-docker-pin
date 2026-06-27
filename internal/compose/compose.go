@@ -35,6 +35,23 @@ type composeFile struct {
 	} `yaml:"services"`
 }
 
+// RawImage returns the image string exactly as written in the compose file.
+func RawImage(file, serviceName string) (string, error) {
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return "", err
+	}
+	var cf composeFile
+	if err := yaml.Unmarshal(data, &cf); err != nil {
+		return "", fmt.Errorf("parsing %s: %w", file, err)
+	}
+	svc, ok := cf.Services[serviceName]
+	if !ok {
+		return "", fmt.Errorf("service %q not found in %s", serviceName, file)
+	}
+	return svc.Image, nil
+}
+
 // ParseImage returns the base image name and tag for the given service.
 // Strips any existing digest from the current value.
 func ParseImage(file, serviceName string) (base, tag string, err error) {
