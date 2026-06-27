@@ -122,15 +122,7 @@ func run(service string) error {
 
 	pinnedTag := tag
 	if tag == "latest" {
-		fmt.Printf("Resolving version tag for %s ...\n", pullRef)
-		resolved, err := registry.ResolveVersionTag(baseImage, digest)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: could not resolve version tag (%v), pinning as latest\n", err)
-		} else if resolved != "" {
-			pinnedTag = resolved
-		} else {
-			fmt.Fprintf(os.Stderr, "Warning: no matching version tag found in registry, pinning as latest\n")
-		}
+		pinnedTag = registry.ResolveOrWarn(baseImage, tag, digest, service)
 	}
 
 	pinned := fmt.Sprintf("%s:%s@%s", baseImage, pinnedTag, digest)

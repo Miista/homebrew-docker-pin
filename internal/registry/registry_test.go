@@ -91,8 +91,8 @@ func TestResolveDockerHub(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	// Should pick most specific version tag: "1.25.3" (3 dots beats "1.25")
-	if got != "1.25.3" {
-		t.Errorf("got %q, want %q", got, "1.25.3")
+	if got.Tag != "1.25.3" {
+		t.Errorf("got %q, want %q", got.Tag, "1.25.3")
 	}
 }
 
@@ -110,8 +110,11 @@ func TestResolveDockerHub_NoMatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got != "" {
-		t.Errorf("expected empty result, got %q", got)
+	if got.Tag != "" {
+		t.Errorf("expected empty tag, got %q", got.Tag)
+	}
+	if got.VersionTagsSeen != 0 {
+		t.Errorf("expected 0 version tags seen, got %d", got.VersionTagsSeen)
 	}
 }
 
@@ -145,8 +148,8 @@ func TestResolveGHCR(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got != "2024.6.1" {
-		t.Errorf("got %q, want %q", got, "2024.6.1")
+	if got.Tag != "2024.6.1" {
+		t.Errorf("got %q, want %q", got.Tag, "2024.6.1")
 	}
 }
 
@@ -168,8 +171,40 @@ func TestResolveGHCR_NoMatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got != "" {
-		t.Errorf("expected empty result, got %q", got)
+	if got.Tag != "" {
+		t.Errorf("expected empty tag, got %q", got.Tag)
+	}
+	if got.VersionTagsSeen != 0 {
+		t.Errorf("expected 0 version tags seen, got %d", got.VersionTagsSeen)
+	}
+}
+
+// TestResolveGHCR_OrphanedDigest covers the case where version tags exist but
+// none match the local digest — the stale/orphaned-build scenario.
+func TestResolveGHCR_OrphanedDigest(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/token") || r.URL.RawQuery != "":
+			json.NewEncoder(w).Encode(map[string]string{"token": "testtoken"})
+		case strings.HasSuffix(r.URL.Path, "/tags/list"):
+			json.NewEncoder(w).Encode(map[string]any{"tags": []string{"latest", "2024.6.1"}})
+		default:
+			// Every version tag resolves to a digest other than the local one.
+			w.Header().Set("Docker-Content-Digest", "sha256:newbuild")
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer srv.Close()
+
+	got, err := resolveGHCRWithBase("ghcr.io/foo/bar", "sha256:oldbuild", srv.URL)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Tag != "" {
+		t.Errorf("expected empty tag, got %q", got.Tag)
+	}
+	if got.VersionTagsSeen != 1 {
+		t.Errorf("expected 1 version tag seen, got %d", got.VersionTagsSeen)
 	}
 }
 
@@ -180,21 +215,21 @@ func TestResolveVersionTag_UnknownRegistry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got != "" {
-		t.Errorf("expected empty string for unknown registry, got %q", got)
+	if got.Tag != "" {
+		t.Errorf("expected empty tag for unknown registry, got %q", got.Tag)
 	}
 }
 
 // Helpers that accept a base URL so tests can point at httptest servers.
 
-func resolveDockerHubWithBase(image, digest, baseURL string) (string, error) {
+func resolveDockerHubWithBase(image, digest, baseURL string) (Result, error) {
 	namespace, repo := splitDockerHubImage(image)
 	url := fmt.Sprintf("%s/v2/repositories/%s/%s/tags?page_size=100&ordering=last_updated",
 		baseURL, namespace, repo)
 	return resolveDockerHubFromURL(digest, url)
 }
 
-func resolveGHCRWithBase(image, digest, baseURL string) (string, error) {
+func resolveGHCRWithBase(image, digest, baseURL string) (Result, error) {
 	path := strings.TrimPrefix(image, "ghcr.io/")
 	return resolveGHCRFromBase(path, digest, baseURL)
 }
