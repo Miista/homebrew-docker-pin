@@ -35,6 +35,23 @@ type composeFile struct {
 	} `yaml:"services"`
 }
 
+// ListServices returns all service names in the compose file.
+func ListServices(file string) ([]string, error) {
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return nil, err
+	}
+	var cf composeFile
+	if err := yaml.Unmarshal(data, &cf); err != nil {
+		return nil, fmt.Errorf("parsing %s: %w", file, err)
+	}
+	services := make([]string, 0, len(cf.Services))
+	for name := range cf.Services {
+		services = append(services, name)
+	}
+	return services, nil
+}
+
 // RawImage returns the image string exactly as written in the compose file.
 func RawImage(file, serviceName string) (string, error) {
 	data, err := os.ReadFile(file)

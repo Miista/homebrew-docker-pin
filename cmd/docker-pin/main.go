@@ -29,8 +29,24 @@ func main() {
 	if len(args) > 0 && args[0] == pluginName {
 		args = args[1:]
 	}
+
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "Usage: docker pin <service>")
+		fmt.Fprintln(os.Stderr, "       docker pin --all")
+		os.Exit(1)
+	}
+
+	if args[0] == "--all" {
+		if err := runAll(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	if len(args) != 1 {
 		fmt.Fprintln(os.Stderr, "Usage: docker pin <service>")
+		fmt.Fprintln(os.Stderr, "       docker pin --all")
 		os.Exit(1)
 	}
 
@@ -38,6 +54,32 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func runAll() error {
+	wd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	composeFile, err := compose.FindFile(wd)
+	if err != nil {
+		return err
+	}
+	services, err := compose.ListServices(composeFile)
+	if err != nil {
+		return err
+	}
+	var failed []string
+	for _, service := range services {
+		if err := run(service); err != nil {
+			fmt.Fprintf(os.Stderr, "Error pinning %s: %v\n", service, err)
+			failed = append(failed, service)
+		}
+	}
+	if len(failed) > 0 {
+		return fmt.Errorf("failed to pin: %s", strings.Join(failed, ", "))
+	}
+	return nil
 }
 
 func run(service string) error {
