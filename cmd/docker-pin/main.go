@@ -57,14 +57,9 @@ func run(service string) error {
 	fmt.Printf("Service %q: %s:%s\n", service, baseImage, tag)
 
 	pullRef := baseImage + ":" + tag
-	fmt.Printf("Pulling %s ...\n", pullRef)
-	if err := docker.Pull(pullRef); err != nil {
-		return fmt.Errorf("pull: %w", err)
-	}
-
 	digest, err := docker.GetDigest(pullRef)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w — image not found locally, run `docker pull %s` first or use `docker upgrade`", err, pullRef)
 	}
 	fmt.Printf("Digest: %s\n", digest)
 
