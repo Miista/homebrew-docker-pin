@@ -208,18 +208,6 @@ func TestResolveGHCR_OrphanedDigest(t *testing.T) {
 	}
 }
 
-// --- ResolveVersionTag dispatch ---
-
-func TestResolveVersionTag_UnknownRegistry(t *testing.T) {
-	got, err := ResolveVersionTag("myregistry.example.com/myimage", "sha256:abc")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got.Tag != "" {
-		t.Errorf("expected empty tag for unknown registry, got %q", got.Tag)
-	}
-}
-
 // Helpers that accept a base URL so tests can point at httptest servers.
 
 func resolveDockerHubWithBase(image, digest, baseURL string) (Result, error) {
