@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/Miista/homebrew-docker-pin/internal/compose"
 	"github.com/Miista/homebrew-docker-pin/internal/docker"
@@ -54,6 +55,17 @@ func run(service string) error {
 	if err != nil {
 		return err
 	}
+
+	raw, err := compose.RawImage(composeFile, service)
+	if err != nil {
+		return err
+	}
+	if strings.Contains(raw, "@sha256:") {
+		fmt.Printf("Service %q is already pinned to %s\n", service, raw)
+		fmt.Println("Run `docker unpin` to unpin first, or `docker upgrade` to move to a new version.")
+		return nil
+	}
+
 	fmt.Printf("Service %q: %s:%s\n", service, baseImage, tag)
 
 	pullRef := baseImage + ":" + tag
