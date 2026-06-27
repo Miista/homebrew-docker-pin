@@ -55,5 +55,12 @@ brews:
       %w[docker-pin docker-upgrade docker-unpin].each do |b|
         system "ln", "-sf", (lib/"docker/cli-plugins/#{b}").to_s, (plugin_dir/b).to_s
       end
+    custom_block: |
+      def uninstall
+        plugin_dir = Pathname.new(ENV.fetch("HOME", Dir.home))/".docker/cli-plugins"
+        %w[docker-pin docker-upgrade docker-unpin].each do |b|
+          (plugin_dir/b).unlink if (plugin_dir/b).symlink? || (plugin_dir/b).exist?
+        end
+      end
     test: |
       system "#{lib}/docker/cli-plugins/docker-pin", "docker-cli-plugin-metadata"
