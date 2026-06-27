@@ -47,26 +47,25 @@ func run(service string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Using: %s\n", composeFile)
 
 	base, tag, err := compose.ParseImage(composeFile, service)
 	if err != nil {
 		return err
 	}
 
-	// ParseImage already strips the digest, so base:tag is the unpinned form.
-	unpinned := base + ":" + tag
-
-	// Check if there was actually a digest to remove.
 	rawImage, err := compose.RawImage(composeFile, service)
 	if err != nil {
 		return err
 	}
 	if !strings.Contains(rawImage, "@sha256:") {
-		fmt.Printf("Service %q is not pinned, nothing to do\n", service)
+		fmt.Printf("%s is not pinned\n", service)
 		return nil
 	}
 
-	fmt.Printf("Unpinning %q: %s\n", service, unpinned)
-	return compose.PinImage(composeFile, service, unpinned)
+	unpinned := base + ":" + tag
+	if err := compose.PinImage(composeFile, service, unpinned); err != nil {
+		return err
+	}
+	fmt.Printf("Unpinned %s: now at %s\n", service, unpinned)
+	return nil
 }

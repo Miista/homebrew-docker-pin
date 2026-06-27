@@ -49,7 +49,6 @@ func run(service string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Using: %s\n", composeFile)
 
 	baseImage, tag, err := compose.ParseImage(composeFile, service)
 	if err != nil {
@@ -61,53 +60,41 @@ func run(service string) error {
 		return err
 	}
 	if strings.Contains(raw, "@sha256:") {
-		fmt.Printf("Service %q is already pinned to %s\n", service, raw)
-		fmt.Println("Run `docker unpin` to unpin first, or `docker upgrade` to move to a new version.")
+		fmt.Printf("%s is already pinned to %s\n", service, raw)
+		fmt.Println("Run `docker unpin` first, or `docker upgrade` to move to a new version.")
 		return nil
 	}
-
-	fmt.Printf("Service %q: %s:%s\n", service, baseImage, tag)
 
 	pullRef := baseImage + ":" + tag
 	digest, err := docker.GetDigest(pullRef)
 	if err != nil {
 		fmt.Printf("Image not found locally, pulling %s ...\n", pullRef)
 		if err := docker.Pull(pullRef); err != nil {
-			return fmt.Errorf("pull: %w", err)
+			return fmt.Errorf("pull failed: %w", err)
 		}
 		digest, err = docker.GetDigest(pullRef)
 		if err != nil {
 			return err
 		}
 	}
-	fmt.Printf("Digest: %s\n", digest)
 
-	pinnedTag, err := resolveTag(baseImage, tag, digest)
-	if err != nil {
-		return err
+	pinnedTag := tag
+	if tag == "latest" {
+		fmt.Printf("Resolving version tag for %s ...\n", pullRef)
+		resolved, err := registry.ResolveVersionTag(baseImage, digest)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not resolve version tag (%v), pinning as latest\n", err)
+		} else if resolved != "" {
+			pinnedTag = resolved
+		} else {
+			fmt.Fprintf(os.Stderr, "Warning: no matching version tag found in registry, pinning as latest\n")
+		}
 	}
 
 	pinned := fmt.Sprintf("%s:%s@%s", baseImage, pinnedTag, digest)
-	fmt.Printf("Pinning to: %s\n", pinned)
-	return compose.PinImage(composeFile, service, pinned)
-}
-
-// resolveTag returns the tag to pin with. If tag is "latest", attempts to
-// resolve it to a specific version tag via the registry API.
-func resolveTag(baseImage, tag, digest string) (string, error) {
-	if tag != "latest" {
-		return tag, nil
+	if err := compose.PinImage(composeFile, service, pinned); err != nil {
+		return err
 	}
-	fmt.Println("Resolving version tag for latest ...")
-	resolved, err := registry.ResolveVersionTag(baseImage, digest)
-	if err != nil {
-		fmt.Printf("Warning: version tag lookup failed (%v), pinning as latest\n", err)
-		return "latest", nil
-	}
-	if resolved == "" {
-		fmt.Println("No matching version tag found, pinning as latest")
-		return "latest", nil
-	}
-	fmt.Printf("Resolved: %s\n", resolved)
-	return resolved, nil
+	fmt.Printf("Pinned %s to %s\n", service, pinned)
+	return nil
 }
