@@ -29,7 +29,7 @@ type hubTagsResponse struct {
 	Next string `json:"next"`
 }
 
-func resolveDockerHub(image, digest string) (string, error) {
+func resolveDockerHub(image, digest string) (Result, error) {
 	namespace, repo := splitDockerHubImage(image)
 	url := fmt.Sprintf(
 		"https://hub.docker.com/v2/repositories/%s/%s/tags?page_size=100&ordering=last_updated",
@@ -38,26 +38,31 @@ func resolveDockerHub(image, digest string) (string, error) {
 	return resolveDockerHubFromURL(digest, url)
 }
 
-func resolveDockerHubFromURL(digest, url string) (string, error) {
+func resolveDockerHubFromURL(digest, url string) (Result, error) {
 	client := &http.Client{Timeout: 15 * time.Second}
 
 	var matches []string
+	versionTagsSeen := 0
 	for url != "" {
 		resp, err := client.Get(url)
 		if err != nil {
-			return "", err
+			return Result{}, err
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
-			return "", fmt.Errorf("docker hub API: HTTP %d", resp.StatusCode)
+			return Result{}, fmt.Errorf("docker hub API: HTTP %d", resp.StatusCode)
 		}
 
 		var data hubTagsResponse
 		if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-			return "", err
+			return Result{}, err
 		}
 		for _, tag := range data.Results {
-			if tag.Digest == digest && isVersionTag(tag.Name) {
+			if !isVersionTag(tag.Name) {
+				continue
+			}
+			versionTagsSeen++
+			if tag.Digest == digest {
 				matches = append(matches, tag.Name)
 			}
 		}
@@ -67,8 +72,9 @@ func resolveDockerHubFromURL(digest, url string) (string, error) {
 		url = data.Next
 	}
 
+	result := Result{VersionTagsSeen: versionTagsSeen}
 	if len(matches) == 0 {
-		return "", nil
+		return result, nil
 	}
 	sort.Slice(matches, func(i, j int) bool {
 		di, li := tagSpecificity(matches[i])
@@ -78,7 +84,8 @@ func resolveDockerHubFromURL(digest, url string) (string, error) {
 		}
 		return li > lj
 	})
-	return matches[0], nil
+	result.Tag = matches[0]
+	return result, nil
 }
 
 func splitDockerHubImage(image string) (namespace, repo string) {

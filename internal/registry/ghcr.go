@@ -11,22 +11,22 @@ import (
 
 const ghcrMaxTagChecks = 20
 
-func resolveGHCR(image, digest string) (string, error) {
+func resolveGHCR(image, digest string) (Result, error) {
 	path := strings.TrimPrefix(image, "ghcr.io/")
 	return resolveGHCRFromBase(path, digest, "https://ghcr.io")
 }
 
-func resolveGHCRFromBase(path, digest, baseURL string) (string, error) {
+func resolveGHCRFromBase(path, digest, baseURL string) (Result, error) {
 	client := &http.Client{Timeout: 15 * time.Second}
 
 	token, err := ghcrTokenFromBase(client, path, baseURL)
 	if err != nil {
-		return "", fmt.Errorf("ghcr auth: %w", err)
+		return Result{}, fmt.Errorf("ghcr auth: %w", err)
 	}
 
 	tags, err := ghcrListTagsFromBase(client, token, path, baseURL)
 	if err != nil {
-		return "", fmt.Errorf("ghcr tags: %w", err)
+		return Result{}, fmt.Errorf("ghcr tags: %w", err)
 	}
 
 	// Filter and sort version tags by specificity, most specific first.
@@ -45,6 +45,7 @@ func resolveGHCRFromBase(path, digest, baseURL string) (string, error) {
 		return li > lj
 	})
 
+	result := Result{VersionTagsSeen: len(versionTags)}
 	for i, tag := range versionTags {
 		if i >= ghcrMaxTagChecks {
 			break
@@ -54,10 +55,11 @@ func resolveGHCRFromBase(path, digest, baseURL string) (string, error) {
 			continue
 		}
 		if tagDigest == digest {
-			return tag, nil
+			result.Tag = tag
+			return result, nil
 		}
 	}
-	return "", nil
+	return result, nil
 }
 
 func ghcrToken(client *http.Client, path string) (string, error) {
