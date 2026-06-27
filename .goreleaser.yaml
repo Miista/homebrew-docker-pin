@@ -29,7 +29,7 @@ checksum:
   name_template: checksums.txt
 
 brews:
-  - name: docker-plugins
+  - name: docker-pin
     repository:
       owner: Miista
       name: homebrew-docker-pin
