@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/Miista/homebrew-docker-pin/internal/compose"
 	"github.com/Miista/homebrew-docker-pin/internal/docker"
@@ -28,9 +29,31 @@ func main() {
 	if len(args) > 0 && args[0] == pluginName {
 		args = args[1:]
 	}
-	if len(args) < 1 || len(args) > 2 {
+
+	usage := func() {
 		fmt.Fprintln(os.Stderr, "Usage: docker upgrade <service> [version]")
+		fmt.Fprintln(os.Stderr, "       docker upgrade --all")
 		os.Exit(1)
+	}
+
+	if len(args) == 0 {
+		usage()
+	}
+
+	if args[0] == "--all" {
+		if len(args) != 1 {
+			fmt.Fprintln(os.Stderr, "Error: --all cannot be combined with a version")
+			os.Exit(1)
+		}
+		if err := runAll(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	if len(args) > 2 {
+		usage()
 	}
 
 	service := args[0]
@@ -43,6 +66,32 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func runAll() error {
+	wd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	composeFile, err := compose.FindFile(wd)
+	if err != nil {
+		return err
+	}
+	services, err := compose.ListServices(composeFile)
+	if err != nil {
+		return err
+	}
+	var failed []string
+	for _, service := range services {
+		if err := run(service, ""); err != nil {
+			fmt.Fprintf(os.Stderr, "Error upgrading %s: %v\n", service, err)
+			failed = append(failed, service)
+		}
+	}
+	if len(failed) > 0 {
+		return fmt.Errorf("failed to upgrade: %s", strings.Join(failed, ", "))
+	}
+	return nil
 }
 
 func run(service, targetVersion string) error {
