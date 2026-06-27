@@ -30,7 +30,21 @@ func ResolveVersionTag(baseImage, digest string) (Result, error) {
 		return resolveDockerHub(baseImage, digest)
 	}
 
-	return Result{}, nil // unknown registry
+	// Any other registry: attempt a generic OCI Distribution lookup.
+	return resolveOCI(baseImage, digest)
+}
+
+// registryKind returns a human-readable name for the registry an image lives in,
+// used to make resolution feedback explicit about what we're querying.
+func registryKind(baseImage string) string {
+	if strings.HasPrefix(baseImage, "ghcr.io/") {
+		return "GitHub Container Registry"
+	}
+	first := strings.SplitN(baseImage, "/", 2)[0]
+	if !strings.Contains(first, ".") || strings.HasPrefix(baseImage, "docker.io/") {
+		return "Docker Hub"
+	}
+	return fmt.Sprintf("the OCI registry API at %s", first)
 }
 
 // ResolveOrWarn resolves the version tag for an image pulled by pullTag, printing
@@ -39,11 +53,11 @@ func ResolveVersionTag(baseImage, digest string) (Result, error) {
 //
 // service is the compose service name, used only to suggest a follow-up command.
 func ResolveOrWarn(baseImage, pullTag, digest, service string) string {
-	fmt.Printf("Resolving version tag for %s:%s ...\n", baseImage, pullTag)
+	fmt.Printf("Resolving version tag for %s:%s via %s ...\n", baseImage, pullTag, registryKind(baseImage))
 	res, err := ResolveVersionTag(baseImage, digest)
 	switch {
 	case err != nil:
-		fmt.Fprintf(os.Stderr, "Warning: could not reach registry to resolve version tag (%v).\n", err)
+		fmt.Fprintf(os.Stderr, "Warning: could not resolve version tag via %s (%v).\n", registryKind(baseImage), err)
 		fmt.Fprintf(os.Stderr, "         Pinning as %s with the current digest.\n", pullTag)
 	case res.Tag != "":
 		return res.Tag
