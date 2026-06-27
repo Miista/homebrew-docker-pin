@@ -50,17 +50,14 @@ brews:
     description: Docker CLI plugins to pin and upgrade container images by tag and SHA digest
     install: |
       (lib/"docker/cli-plugins").install "docker-pin", "docker-upgrade", "docker-unpin"
-      plugin_dir = Pathname.new(ENV.fetch("HOME", Dir.home))/".docker/cli-plugins"
-      plugin_dir.mkpath
-      %w[docker-pin docker-upgrade docker-unpin].each do |b|
-        system "ln", "-sf", (lib/"docker/cli-plugins/#{b}").to_s, (plugin_dir/b).to_s
-      end
-    custom_block: |
-      def uninstall
-        plugin_dir = Pathname.new(ENV.fetch("HOME", Dir.home))/".docker/cli-plugins"
-        %w[docker-pin docker-upgrade docker-unpin].each do |b|
-          (plugin_dir/b).unlink if (plugin_dir/b).symlink? || (plugin_dir/b).exist?
-        end
-      end
+    caveats: |
+      docker-pin is a Docker CLI plugin. To enable it, add the Homebrew
+      lib path to Docker's plugin search path in ~/.docker/config.json:
+
+        {
+          "cliPluginsExtraDirs": ["#{HOMEBREW_PREFIX}/lib/docker/cli-plugins"]
+        }
+
+      If config.json already exists, add just the "cliPluginsExtraDirs" key.
     test: |
       system "#{lib}/docker/cli-plugins/docker-pin", "docker-cli-plugin-metadata"
