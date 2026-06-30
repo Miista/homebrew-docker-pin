@@ -101,6 +101,9 @@ func run(service string) error {
 	if err != nil {
 		return err
 	}
+
+	fmt.Printf("Read tag from compose file: %s\n", tag)
+
 	if strings.Contains(raw, "@sha256:") {
 		fmt.Printf("%s is already pinned to %s\n", service, raw)
 		fmt.Println("Run `docker unpin` first, or `docker upgrade` to move to a new version.")
@@ -118,6 +121,9 @@ func run(service string) error {
 		if err != nil {
 			return err
 		}
+		fmt.Printf("Using digest from pulled image: %s\n", digest)
+	} else {
+		fmt.Printf("Using digest from local image: %s\n", digest)
 	}
 
 	pinnedTag := tag
