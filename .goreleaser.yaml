@@ -9,14 +9,6 @@ builds:
     ldflags:
       - -s -w -X main.version={{.Version}}
 
-  - id: docker-upgrade
-    main: ./cmd/docker-upgrade
-    binary: docker-upgrade
-    goos: [linux, darwin]
-    goarch: [amd64, arm64]
-    ldflags:
-      - -s -w -X main.version={{.Version}}
-
   - id: docker-unpin
     main: ./cmd/docker-unpin
     binary: docker-unpin
@@ -27,7 +19,7 @@ builds:
 
 archives:
   - id: default
-    builds: [docker-pin, docker-upgrade, docker-unpin]
+    builds: [docker-pin, docker-unpin]
     format: tar.gz
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
@@ -49,7 +41,7 @@ brews:
     homepage: https://github.com/Miista/homebrew-docker-pin
     description: Docker CLI plugins to pin and upgrade container images by tag and SHA digest
     install: |
-      (lib/"docker/cli-plugins").install "docker-pin", "docker-upgrade", "docker-unpin"
+      (lib/"docker/cli-plugins").install "docker-pin", "docker-unpin"
     caveats: |
       docker-pin is a Docker CLI plugin. To enable it, add the Homebrew
       lib path to Docker's plugin search path in ~/.docker/config.json:

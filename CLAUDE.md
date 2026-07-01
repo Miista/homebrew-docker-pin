@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Three Docker CLI plugins — `docker pin`, `docker upgrade`, `docker unpin` — that
+Two Docker CLI plugins — `docker pin` and `docker unpin` — that
 pin/upgrade/unpin a Docker Compose service's image to a specific tag **and** SHA
 digest (`image:tag@sha256:...`), rewriting the `image:` line in place. The repo
 is also the Homebrew tap it's distributed through
@@ -10,7 +10,7 @@ is also the Homebrew tap it's distributed through
 ## Build / test / install
 
 ```sh
-make build      # builds docker-pin, docker-upgrade, docker-unpin in repo root
+make build      # builds docker-pin, docker-unpin in repo root
 make install    # build + install -m 755 into ~/.docker/cli-plugins/
 make clean      # remove built binaries
 go test ./...   # unit tests (internal/compose, internal/registry)
@@ -21,12 +21,14 @@ Each binary is built from its own `cmd/<name>` package. `version` is injected vi
 
 ## Architecture
 
-### Plugins (`cmd/docker-{pin,upgrade,unpin}/main.go`)
+### Plugins (`cmd/docker-{pin,unpin}/main.go`)
 Each `main` is a Docker CLI plugin: invoked as `docker-<name> docker-cli-plugin-metadata`
 it prints the metadata JSON Docker expects; otherwise it strips a leading
-`<name>` arg (Docker passes it) and runs. All three accept `<service>` or `--all`
-(iterate every service from the compose file, collecting failures). `upgrade` also
-takes an optional positional `[version]`.
+`<name>` arg (Docker passes it) and runs. Both accept `<service>` or `--all`
+(iterate every service from the compose file, collecting failures).
+
+`docker pin` also accepts an `upgrade` subcommand with an optional positional
+`[version]` argument.
 
 ### `internal/compose`
 - `FindFile(dir)` — walks up from `dir` looking for `docker-compose.yml|yaml` /
@@ -59,21 +61,21 @@ Resolves which *version* tag (e.g. `1.2.3`) corresponds to a digest, so a
   plugins call. It prints progress and, on failure, distinguishes three cases:
   resolution error, registry publishes no version tags, or version tags exist but
   **none match the local digest** (orphaned/stale image — warns that a newer build
-  replaced the tag and suggests `docker upgrade <service>`). In every failure case
-  it falls back to pinning with `pullTag` unchanged.
+  replaced the tag and suggests `docker pin upgrade <service>`). In every failure
+  case it falls back to pinning with `pullTag` unchanged.
 
 ## Command semantics
 
-- **pin** `<service>`: no-op if the image is already digest-pinned. Uses the
+- **`docker pin <service>`**: no-op if the image is already digest-pinned. Uses the
   *local* digest, pulling only if the image isn't present locally. If the tag is
   `latest`, resolves it to a version tag via `ResolveOrWarn`. Writes
   `base:tag@sha256:...`.
-- **upgrade** `<service> [version]`: *always* pulls (`version` or `latest`), then
-  pins to the freshly pulled digest; resolves the version tag when pulling
+- **`docker pin upgrade <service> [version]`**: *always* pulls (`version` or `latest`),
+  then pins to the freshly pulled digest; resolves the version tag when pulling
   `latest`. `--all` cannot be combined with a version.
-- **unpin** `<service>`: strips the `@sha256:...` digest, keeping `base:tag`;
+- **`docker unpin <service>`**: strips the `@sha256:...` digest, keeping `base:tag`;
   no-op if not pinned.
-- `--all` is supported by all three.
+- `--all` is supported by all commands.
 
 ## Release & distribution
 
@@ -105,9 +107,8 @@ This means:
 
 ## Conventions
 
-- New subcommand = new `cmd/docker-<name>` `main` that responds to
-  `docker-cli-plugin-metadata` and strips its own leading arg; register it in the
-  `Makefile` `BINARIES`, `.goreleaser.yaml` `builds`/`archives`, and the formula
-  `install` line.
+- New subcommand on `docker pin` = new `case` in `cmd/docker-pin/main.go`'s `main()` switch.
+- New top-level plugin = new `cmd/docker-<name>` package; register in `Makefile` `BINARIES`,
+  `.goreleaser.yaml` `builds`/`archives`, and the formula `install` line.
 - Only the standard library plus `gopkg.in/yaml.v3`; the `docker` CLI must be on
   PATH at runtime.
