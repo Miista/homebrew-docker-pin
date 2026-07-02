@@ -2,8 +2,11 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
+	"sort"
 	"strings"
+	"text/tabwriter"
 
 	"github.com/Miista/homebrew-docker-pin/internal/compose"
 	"github.com/Miista/homebrew-docker-pin/internal/docker"
@@ -51,6 +54,11 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
+	case "list":
+		if err := runList(args[1:]); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
 	default:
 		if err := runPin(args, realDocker); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -64,6 +72,7 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, "       docker pin --all")
 	fmt.Fprintln(os.Stderr, "       docker pin upgrade <service> [version]")
 	fmt.Fprintln(os.Stderr, "       docker pin upgrade --all")
+	fmt.Fprintln(os.Stderr, "       docker pin list [--missing] [-q]")
 }
 
 // pin
@@ -164,6 +173,101 @@ func pinInFile(composeFile, service string, d dockerFuncs) error {
 	}
 	fmt.Printf("Pinned %s to %s\n", service, pinned)
 	return nil
+}
+
+// list
+
+func runList(args []string) error {
+	missing, quiet := false, false
+	for _, arg := range args {
+		switch arg {
+		case "--missing":
+			missing = true
+		case "-q", "--quiet":
+			quiet = true
+		default:
+			fmt.Fprintln(os.Stderr, "Usage: docker pin list [--missing] [-q]")
+			os.Exit(1)
+		}
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	composeFile, err := compose.FindFile(wd)
+	if err != nil {
+		return err
+	}
+	unpinned, err := listInFile(composeFile, missing, quiet, os.Stdout)
+	if err != nil {
+		return err
+	}
+	// In --missing mode the exit code is the point: non-zero when anything
+	// is unpinned, so `docker pin list --missing` works as a CI gate.
+	if missing && unpinned > 0 {
+		os.Exit(1)
+	}
+	return nil
+}
+
+func listInFile(composeFile string, missing, quiet bool, out io.Writer) (unpinned int, err error) {
+	services, err := compose.ListServices(composeFile)
+	if err != nil {
+		return 0, err
+	}
+	sort.Strings(services)
+
+	type row struct {
+		service, base, tag, digest string
+		pinned                     bool
+	}
+	var rows []row
+	for _, service := range services {
+		raw, err := compose.RawImage(composeFile, service)
+		if err != nil {
+			return 0, err
+		}
+		base, tag, err := compose.ParseImage(composeFile, service)
+		if err != nil {
+			return 0, err
+		}
+		digest := digestOf(raw)
+		r := row{service: service, base: base, tag: tag, digest: digest, pinned: digest != ""}
+		if !r.pinned {
+			unpinned++
+		}
+		if missing && r.pinned {
+			continue
+		}
+		rows = append(rows, r)
+	}
+
+	if quiet {
+		for _, r := range rows {
+			fmt.Fprintln(out, r.service)
+		}
+		return unpinned, nil
+	}
+
+	w := tabwriter.NewWriter(out, 2, 8, 2, ' ', 0)
+	fmt.Fprintln(w, "SERVICE\tIMAGE\tTAG\tDIGEST\tPINNED")
+	for _, r := range rows {
+		digest, pin := "-", "✗"
+		if r.pinned {
+			digest, pin = shortDigest(r.digest), "✓"
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", r.service, r.base, r.tag, digest, pin)
+	}
+	return unpinned, w.Flush()
+}
+
+// shortDigest abbreviates "sha256:<64 hex>" to its first 12 hex chars.
+func shortDigest(digest string) string {
+	h := strings.TrimPrefix(digest, "sha256:")
+	if len(h) > 12 {
+		h = h[:12]
+	}
+	return h
 }
 
 // upgrade

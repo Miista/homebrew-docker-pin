@@ -118,6 +118,30 @@ docker pin upgrade db 17
 
 `--all` cannot be combined with an explicit version.
 
+### List services and their pin status
+
+```bash
+docker pin list             # table: service, image, tag, digest, pinned
+docker pin list --missing   # only unpinned services; exits non-zero if any
+docker pin list -q          # names only (for scripting)
+```
+
+```
+SERVICE  IMAGE               TAG     DIGEST        PINNED
+db       postgres            16.3    a3dc6bd4a4a5  ✓
+plex     plexinc/pms-docker  latest  -             ✗
+```
+
+`--missing` is CI-friendly: it prints only unpinned services and exits `1`
+when any exist, so a single step enforces "everything in this repo is pinned":
+
+```yaml
+- name: All images must be pinned
+  run: docker pin list --missing
+```
+
+Read-only — parses the compose file, never touches Docker or the network.
+
 ### Unpin a service
 
 ```bash

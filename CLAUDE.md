@@ -73,6 +73,10 @@ Resolves which *version* tag (e.g. `1.2.3`) corresponds to a digest, so a
 - **`docker pin upgrade <service> [version]`**: *always* pulls (`version` or `latest`),
   then pins to the freshly pulled digest; resolves the version tag when pulling
   `latest`. `--all` cannot be combined with a version.
+- **`docker pin list [--missing] [-q]`**: read-only table of every service's
+  image/tag/digest/pin-status (compose parse only — no docker/network calls).
+  `--missing` shows only unpinned services and exits 1 if any exist (CI gate);
+  `-q` prints bare service names for piping.
 - **`docker unpin <service>`**: strips the `@sha256:...` digest, keeping `base:tag`;
   no-op if not pinned.
 - `--all` is supported by all commands.

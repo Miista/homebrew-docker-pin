@@ -237,3 +237,69 @@ func TestPinAll(t *testing.T) {
 		t.Errorf("expected 2 pinned services, got:\n%s", got)
 	}
 }
+
+// --- listInFile ---
+
+const listCompose = `services:
+  db:
+    image: postgres:16.3@sha256:a3dc6bd4a4a5a26a2e04ecb548d94a52b972e01e6b18ad4e37d51703cd0eeecd
+  plex:
+    image: plexinc/pms-docker:latest
+  web:
+    image: nginx:1.25@sha256:b2e814d28359e77bd0aa5fed1939620075e4ffa0eb20423cc557b375bd5c14ad
+`
+
+func TestListInFile_Table(t *testing.T) {
+	f := writeTempCompose(t, listCompose)
+	var buf strings.Builder
+	unpinned, err := listInFile(f, false, false, &buf)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if unpinned != 1 {
+		t.Errorf("unpinned = %d, want 1", unpinned)
+	}
+	out := buf.String()
+	for _, want := range []string{"SERVICE", "db", "plex", "web", "a3dc6bd4a4a5", "✓", "✗"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q:\n%s", want, out)
+		}
+	}
+	// Sorted: db before plex before web.
+	if strings.Index(out, "db") > strings.Index(out, "plex") || strings.Index(out, "plex") > strings.Index(out, "web") {
+		t.Errorf("services not sorted:\n%s", out)
+	}
+}
+
+func TestListInFile_MissingQuiet(t *testing.T) {
+	f := writeTempCompose(t, listCompose)
+	var buf strings.Builder
+	unpinned, err := listInFile(f, true, true, &buf)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if unpinned != 1 {
+		t.Errorf("unpinned = %d, want 1", unpinned)
+	}
+	if got := buf.String(); got != "plex\n" {
+		t.Errorf("quiet --missing output = %q, want %q", got, "plex\n")
+	}
+}
+
+func TestListInFile_AllPinnedQuiet(t *testing.T) {
+	f := writeTempCompose(t, `services:
+  db:
+    image: postgres:16.3@sha256:a3dc6bd4a4a5a26a2e04ecb548d94a52b972e01e6b18ad4e37d51703cd0eeecd
+`)
+	var buf strings.Builder
+	unpinned, err := listInFile(f, true, true, &buf)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if unpinned != 0 {
+		t.Errorf("unpinned = %d, want 0", unpinned)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("expected no output, got %q", buf.String())
+	}
+}
