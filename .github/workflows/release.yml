@@ -4,12 +4,18 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to (re)publish to the apt repo"
+        required: true
 
 permissions:
   contents: write
 
 jobs:
   release:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -29,10 +35,16 @@ jobs:
 
   apt-repo:
     needs: release
+    if: always() && !cancelled() && !failure()
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v7
-
       - name: Install reprepro
         run: sudo apt-get update -q && sudo apt-get install -y -q reprepro
 
@@ -40,24 +52,16 @@ jobs:
         run: echo "${{ secrets.APT_GPG_PRIVATE_KEY }}" | gpg --batch --import
 
       - name: Download release .debs
-        run: gh release download "$GITHUB_REF_NAME" --pattern '*.deb' --dir /tmp/debs
+        run: gh release download "${{ inputs.tag || github.ref_name }}" --pattern '*.deb' --dir /tmp/debs
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
 
-      - name: Publish to apt repo on gh-pages
+      - name: Build apt repository
         run: |
           set -euo pipefail
-          git config user.name goreleaser-bot
-          git config user.email bot@goreleaser.com
-          if git ls-remote --exit-code origin gh-pages >/dev/null 2>&1; then
-            git fetch origin gh-pages
-            git checkout gh-pages
-          else
-            git checkout --orphan gh-pages
-            git rm -rfq .
-          fi
-          mkdir -p conf
-          cat > conf/distributions <<'EOF'
+          mkdir -p site/conf
+          cat > site/conf/distributions <<'EOF'
           Origin: docker-pin
           Label: docker-pin
           Codename: stable
@@ -66,9 +70,13 @@ jobs:
           Description: apt repository for docker-pin
           SignWith: yes
           EOF
-          reprepro --basedir . includedeb stable /tmp/debs/*.deb
-          gpg --armor --export > docker-pin.asc
-          touch .nojekyll
-          git add -A
-          git commit -m "apt: publish $GITHUB_REF_NAME"
-          git push origin gh-pages
+          reprepro --basedir site includedeb stable /tmp/debs/*.deb
+          gpg --armor --export > site/docker-pin.asc
+          rm -rf site/conf site/db
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - id: deploy
+        uses: actions/deploy-pages@v4

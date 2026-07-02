@@ -155,8 +155,10 @@ This repo is the Homebrew tap. Pushing a `vX.Y.Z` tag triggers a GoReleaser work
 1. Builds `docker-pin` and `docker-unpin` for `linux/darwin` × `amd64/arm64`
 2. Creates a GitHub release with archives, `.deb` packages, and a checksum file
 3. Commits an updated `Formula/docker-pin.rb` back to this repo
-4. Updates the apt repository on the `gh-pages` branch (served via GitHub Pages),
-   signed with the GPG key in the `APT_GPG_PRIVATE_KEY` repo secret
+4. Rebuilds the apt repository from the release `.deb`s and deploys it to
+   GitHub Pages, signed with the GPG key in the `APT_GPG_PRIVATE_KEY` repo
+   secret (only the latest version is served via apt; older `.deb`s remain
+   downloadable from the releases)
 
 ## License
 
