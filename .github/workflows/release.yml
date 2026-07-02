@@ -68,6 +68,23 @@ jobs:
           reprepro --basedir site includedeb stable /tmp/debs/*.deb
           gpg --armor --export > site/docker-pin.asc
           rm -rf site/conf site/db
+          cat > site/index.html <<'EOF'
+          <!doctype html>
+          <html lang="en"><head><meta charset="utf-8"><title>docker-pin apt repository</title>
+          <style>body{font-family:system-ui,sans-serif;max-width:44rem;margin:3rem auto;padding:0 1rem;line-height:1.5}pre{background:#f4f4f4;padding:1rem;overflow-x:auto}</style>
+          </head><body>
+          <h1>docker-pin apt repository</h1>
+          <p>Docker CLI plugins to pin Compose service images to tag + digest.
+          Source and docs: <a href="https://github.com/Miista/homebrew-docker-pin">github.com/Miista/homebrew-docker-pin</a></p>
+          <h2>Install (Debian/Ubuntu)</h2>
+          <pre>sudo install -d /etc/apt/keyrings
+          curl -fsSL https://miista.github.io/homebrew-docker-pin/docker-pin.asc \
+            | sudo gpg --dearmor -o /etc/apt/keyrings/docker-pin.gpg
+          echo "deb [signed-by=/etc/apt/keyrings/docker-pin.gpg] https://miista.github.io/homebrew-docker-pin stable main" \
+            | sudo tee /etc/apt/sources.list.d/docker-pin.list
+          sudo apt update &amp;&amp; sudo apt install docker-pin</pre>
+          </body></html>
+          EOF
 
       # Force-push a fresh orphan commit: gh-pages always holds exactly one
       # release's apt tree, so the branch never accumulates old binaries.
