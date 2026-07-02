@@ -49,6 +49,8 @@ func main() {
 	}
 
 	switch args[0] {
+	case "version", "--version", "-v":
+		fmt.Println("docker-pin", version)
 	case "upgrade":
 		if err := runUpgrade(args[1:], realDocker); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -73,6 +75,7 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, "       docker pin upgrade <service> [version]")
 	fmt.Fprintln(os.Stderr, "       docker pin upgrade --all")
 	fmt.Fprintln(os.Stderr, "       docker pin list [--missing] [-q]")
+	fmt.Fprintln(os.Stderr, "       docker pin version")
 }
 
 // pin

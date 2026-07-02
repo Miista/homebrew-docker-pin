@@ -34,6 +34,11 @@ func main() {
 		os.Exit(1)
 	}
 
+	if args[0] == "version" || args[0] == "--version" || args[0] == "-v" {
+		fmt.Println("docker-unpin", version)
+		return
+	}
+
 	if args[0] == "--all" {
 		if err := runAll(); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
