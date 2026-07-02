@@ -1,3 +1,5 @@
 /docker-pin
+/docker-unpin
 /docker-upgrade
 dist/
+coverage.out

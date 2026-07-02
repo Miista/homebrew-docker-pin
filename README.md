@@ -35,6 +35,20 @@ Then add the Homebrew lib path to Docker's plugin search in `~/.docker/config.js
 
 Replace `/opt/homebrew` with your `HOMEBREW_PREFIX` (`brew --prefix`). On Intel Macs it's `/usr/local`.
 
+### Debian / Ubuntu (apt)
+
+```bash
+sudo install -d /etc/apt/keyrings
+curl -fsSL https://miista.github.io/homebrew-docker-pin/docker-pin.asc \
+  | sudo gpg --dearmor -o /etc/apt/keyrings/docker-pin.gpg
+echo "deb [signed-by=/etc/apt/keyrings/docker-pin.gpg] https://miista.github.io/homebrew-docker-pin stable main" \
+  | sudo tee /etc/apt/sources.list.d/docker-pin.list
+sudo apt update && sudo apt install docker-pin
+```
+
+The plugins are installed into `/usr/libexec/docker/cli-plugins`, which Docker
+scans by default — no extra configuration needed.
+
 ### Manual
 
 Download the binaries for your platform from the [releases page](https://github.com/Miista/homebrew-docker-pin/releases), then install them:
@@ -139,8 +153,10 @@ Resolution is supported for:
 This repo is the Homebrew tap. Pushing a `vX.Y.Z` tag triggers a GoReleaser workflow that:
 
 1. Builds `docker-pin` and `docker-unpin` for `linux/darwin` × `amd64/arm64`
-2. Creates a GitHub release with archives and a checksum file
+2. Creates a GitHub release with archives, `.deb` packages, and a checksum file
 3. Commits an updated `Formula/docker-pin.rb` back to this repo
+4. Updates the apt repository on the `gh-pages` branch (served via GitHub Pages),
+   signed with the GPG key in the `APT_GPG_PRIVATE_KEY` repo secret
 
 ## License
 

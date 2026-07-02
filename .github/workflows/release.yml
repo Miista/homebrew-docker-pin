@@ -26,3 +26,49 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  apt-repo:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install reprepro
+        run: sudo apt-get update -q && sudo apt-get install -y -q reprepro
+
+      - name: Import GPG signing key
+        run: echo "${{ secrets.APT_GPG_PRIVATE_KEY }}" | gpg --batch --import
+
+      - name: Download release .debs
+        run: gh release download "$GITHUB_REF_NAME" --pattern '*.deb' --dir /tmp/debs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish to apt repo on gh-pages
+        run: |
+          set -euo pipefail
+          git config user.name goreleaser-bot
+          git config user.email bot@goreleaser.com
+          if git ls-remote --exit-code origin gh-pages >/dev/null 2>&1; then
+            git fetch origin gh-pages
+            git checkout gh-pages
+          else
+            git checkout --orphan gh-pages
+            git rm -rfq .
+          fi
+          mkdir -p conf
+          cat > conf/distributions <<'EOF'
+          Origin: docker-pin
+          Label: docker-pin
+          Codename: stable
+          Architectures: amd64 arm64
+          Components: main
+          Description: apt repository for docker-pin
+          SignWith: yes
+          EOF
+          reprepro --basedir . includedeb stable /tmp/debs/*.deb
+          gpg --armor --export > docker-pin.asc
+          touch .nojekyll
+          git add -A
+          git commit -m "apt: publish $GITHUB_REF_NAME"
+          git push origin gh-pages

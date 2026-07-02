@@ -84,6 +84,14 @@ Pushing a `vX.Y.Z` tag triggers `.github/workflows/release.yml` →
 amd64/arm64 archives, creates the GitHub release, and commits an updated
 `Formula/docker-pin.rb` back to this repo (the `brews` block).
 
+GoReleaser also builds `.deb` packages (`nfpms` block) installing both plugins
+into `/usr/libexec/docker/cli-plugins` (scanned by Docker by default on Linux).
+A follow-up `apt-repo` workflow job downloads the release `.deb`s, runs
+`reprepro` on the `gh-pages` branch, and signs the repo with the GPG key in the
+`APT_GPG_PRIVATE_KEY` secret. GitHub Pages serves the apt repo at
+`https://miista.github.io/homebrew-docker-pin`; the public key is published as
+`docker-pin.asc` at the repo root.
+
 This repo **is** the Homebrew tap. The formula installs the binaries into
 `#{HOMEBREW_PREFIX}/lib/docker/cli-plugins`; because that isn't a default Docker
 plugin dir, the formula caveat tells users to add it to `cliPluginsExtraDirs` in

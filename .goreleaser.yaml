@@ -25,6 +25,22 @@ archives:
     files:
       - none*  # binaries only
 
+nfpms:
+  - id: docker-pin
+    package_name: docker-pin
+    ids: [docker-pin, docker-unpin]
+    formats: [deb]
+    vendor: Miista
+    homepage: https://github.com/Miista/homebrew-docker-pin
+    maintainer: Miista <miista@users.noreply.github.com>
+    description: Docker CLI plugins to pin and upgrade container images by tag and SHA digest
+    license: MIT
+    # Docker scans this directory for CLI plugins by default on Linux,
+    # so no cliPluginsExtraDirs config is needed (unlike the brew install).
+    bindir: /usr/libexec/docker/cli-plugins
+    recommends:
+      - docker-ce | docker.io
+
 checksum:
   name_template: checksums.txt
 
