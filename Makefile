@@ -6,8 +6,8 @@ BINARIES     := docker-pin docker-unpin
 all: build
 
 build:
-	go build -o docker-pin   ./cmd/docker-pin
-	go build -o docker-unpin ./cmd/docker-unpin
+	go build -trimpath -o docker-pin   ./cmd/docker-pin
+	go build -trimpath -o docker-unpin ./cmd/docker-unpin
 
 install: build
 	mkdir -p $(INSTALL_DIR)

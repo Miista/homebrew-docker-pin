@@ -6,6 +6,7 @@ builds:
     binary: docker-pin
     goos: [linux, darwin]
     goarch: [amd64, arm64]
+    flags: [-trimpath]
     ldflags:
       - -s -w -X main.version={{.Version}}
 
@@ -14,6 +15,7 @@ builds:
     binary: docker-unpin
     goos: [linux, darwin]
     goarch: [amd64, arm64]
+    flags: [-trimpath]
     ldflags:
       - -s -w -X main.version={{.Version}}
 
