@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/Miista/homebrew-docker-pin/internal/compose"
+	"github.com/Miista/homebrew-docker-pin/internal/help"
 )
 
 const (
@@ -29,9 +30,15 @@ func main() {
 	}
 
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Usage: docker unpin <service>")
-		fmt.Fprintln(os.Stderr, "       docker unpin --all")
+		fmt.Fprintln(os.Stderr, help.UnpinUsage)
 		os.Exit(1)
+	}
+
+	for _, a := range args {
+		if a == "-h" || a == "--help" || a == "help" {
+			fmt.Fprintln(os.Stderr, help.UnpinUsage)
+			return
+		}
 	}
 
 	if args[0] == "version" || args[0] == "--version" || args[0] == "-v" {
@@ -39,7 +46,7 @@ func main() {
 		return
 	}
 
-	if args[0] == "--all" {
+	if args[0] == "--all" || args[0] == "-a" {
 		if err := runAll(); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
@@ -48,8 +55,7 @@ func main() {
 	}
 
 	if len(args) != 1 {
-		fmt.Fprintln(os.Stderr, "Usage: docker unpin <service>")
-		fmt.Fprintln(os.Stderr, "       docker unpin --all")
+		fmt.Fprintln(os.Stderr, help.UnpinUsage)
 		os.Exit(1)
 	}
 

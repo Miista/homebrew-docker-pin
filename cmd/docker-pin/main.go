@@ -10,6 +10,7 @@ import (
 
 	"github.com/Miista/homebrew-docker-pin/internal/compose"
 	"github.com/Miista/homebrew-docker-pin/internal/docker"
+	"github.com/Miista/homebrew-docker-pin/internal/help"
 	"github.com/Miista/homebrew-docker-pin/internal/registry"
 )
 
@@ -48,6 +49,11 @@ func main() {
 		os.Exit(1)
 	}
 
+	// `help [<command>]` and -h/--help anywhere print help and exit 0.
+	if done := maybeHelp(args); done {
+		return
+	}
+
 	switch args[0] {
 	case "version", "--version", "-v":
 		fmt.Println("docker-pin", version)
@@ -70,18 +76,47 @@ func main() {
 }
 
 func printUsage() {
-	fmt.Fprintln(os.Stderr, "Usage: docker pin <service>")
-	fmt.Fprintln(os.Stderr, "       docker pin --all")
-	fmt.Fprintln(os.Stderr, "       docker pin upgrade <service> [version]")
-	fmt.Fprintln(os.Stderr, "       docker pin upgrade --all")
-	fmt.Fprintln(os.Stderr, "       docker pin list [--missing] [-q]")
-	fmt.Fprintln(os.Stderr, "       docker pin version")
+	fmt.Fprintln(os.Stderr, help.PinUsage)
+}
+
+// maybeHelp handles `help [<command>]` and -h/--help in any position.
+// Returns true (after printing) if help was requested.
+func maybeHelp(args []string) bool {
+	want := args[0] == "help"
+	topic := ""
+	if want && len(args) > 1 {
+		topic = args[1]
+	}
+	for _, a := range args {
+		if a == "-h" || a == "--help" {
+			want = true
+		}
+	}
+	if !want {
+		return false
+	}
+	if topic == "" {
+		switch args[0] {
+		case "upgrade", "list", "version":
+			topic = args[0]
+		case "help":
+			// bare `help`: fall through to full usage
+		default:
+			topic = "pin" // `docker pin <service> --help` / `docker pin --help`
+		}
+	}
+	if text, ok := help.For(help.PinTopics, topic); ok {
+		fmt.Fprintln(os.Stderr, text)
+	} else {
+		printUsage()
+	}
+	return true
 }
 
 // pin
 
 func runPin(args []string, d dockerFuncs) error {
-	if args[0] == "--all" {
+	if args[0] == "--all" || args[0] == "-a" {
 		return pinAll(d)
 	}
 	if len(args) != 1 {
@@ -184,7 +219,7 @@ func runList(args []string) error {
 	missing, quiet := false, false
 	for _, arg := range args {
 		switch arg {
-		case "--missing":
+		case "-m", "--missing":
 			missing = true
 		case "-q", "--quiet":
 			quiet = true
@@ -282,7 +317,7 @@ func runUpgrade(args []string, d dockerFuncs) error {
 		os.Exit(1)
 	}
 
-	if args[0] == "--all" {
+	if args[0] == "--all" || args[0] == "-a" {
 		if len(args) != 1 {
 			fmt.Fprintln(os.Stderr, "Error: --all cannot be combined with a version")
 			os.Exit(1)
