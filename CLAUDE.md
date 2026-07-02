@@ -86,16 +86,17 @@ amd64/arm64 archives, creates the GitHub release, and commits an updated
 
 GoReleaser also builds `.deb` packages (`nfpms` block) installing both plugins
 into `/usr/libexec/docker/cli-plugins` (scanned by Docker by default on Linux).
-A follow-up `apt-repo` workflow job downloads that release's `.deb`s, builds a
-fresh single-version apt tree with `reprepro`, signs it with the GPG key in the
-`APT_GPG_PRIVATE_KEY` secret, and force-pushes it as a single orphan commit to
-`gh-pages`, which GitHub Pages serves (branch deploy). The branch always holds
-exactly one release — no binary accumulation; older `.deb`s live on the GitHub
-releases. (Actions-based Pages deploys were tried and reverted: this repo's
-Pages backend cancels `deploy-pages` deployments.)
-The repo is served at `https://miista.github.io/homebrew-docker-pin`; the
-public key is published as `docker-pin.asc` at the repo root. The workflow's
-`workflow_dispatch` trigger re-publishes an existing release tag to apt.
+A follow-up `apt-repo` workflow job rebuilds the **shared** apt repo — the
+latest `.deb`s of both this repo and `Miista/homebrew-sd` (splitdns), fetched
+from their GitHub releases — signs it with the GPG key in the
+`APT_GPG_PRIVATE_KEY` secret (one key for both repos), and deploys it to the
+Cloudflare Pages project `apt-guldmund`, served at `https://apt.guldmund.dk`
+(secrets `CLOUDFLARE_API_TOKEN`/`CLOUDFLARE_ACCOUNT_ID`). Stateless: each
+publish is a full fresh tree; only the latest version of each tool is served;
+older `.deb`s live on the GitHub releases. The identical job exists in the
+homebrew-sd repo — keep them in sync. `workflow_dispatch` re-publishes without
+a release. The public key is served as `guldmund-archive-keyring.asc`.
+(GitHub Pages was used before and dropped: flaky builds, wedged deploys.)
 
 This repo **is** the Homebrew tap. The formula installs the binaries into
 `#{HOMEBREW_PREFIX}/lib/docker/cli-plugins`; because that isn't a default Docker

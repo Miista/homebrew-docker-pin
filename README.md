@@ -38,7 +38,7 @@ Replace `/opt/homebrew` with your `HOMEBREW_PREFIX` (`brew --prefix`). On Intel 
 ### Debian / Ubuntu (apt)
 
 ```bash
-curl -fsSL https://miista.github.io/homebrew-docker-pin/setup.sh | sudo sh
+curl -fsSL https://apt.guldmund.dk/setup.sh | sudo sh
 sudo apt install docker-pin
 ```
 
@@ -47,10 +47,10 @@ explicitly (one-time):
 
 ```bash
 sudo install -d /etc/apt/keyrings
-curl -fsSL https://miista.github.io/homebrew-docker-pin/docker-pin.asc \
-  | sudo gpg --dearmor -o /etc/apt/keyrings/docker-pin.gpg
-echo "deb [signed-by=/etc/apt/keyrings/docker-pin.gpg] https://miista.github.io/homebrew-docker-pin stable main" \
-  | sudo tee /etc/apt/sources.list.d/docker-pin.list
+curl -fsSL https://apt.guldmund.dk/guldmund-archive-keyring.asc \
+  | sudo tee /etc/apt/keyrings/guldmund-archive-keyring.asc > /dev/null
+echo "deb [signed-by=/etc/apt/keyrings/guldmund-archive-keyring.asc] https://apt.guldmund.dk stable main" \
+  | sudo tee /etc/apt/sources.list.d/guldmund.list
 sudo apt update && sudo apt install docker-pin
 ```
 
@@ -163,10 +163,10 @@ This repo is the Homebrew tap. Pushing a `vX.Y.Z` tag triggers a GoReleaser work
 1. Builds `docker-pin` and `docker-unpin` for `linux/darwin` × `amd64/arm64`
 2. Creates a GitHub release with archives, `.deb` packages, and a checksum file
 3. Commits an updated `Formula/docker-pin.rb` back to this repo
-4. Rebuilds the apt repository from the release `.deb`s, signs it with the GPG
-   key in the `APT_GPG_PRIVATE_KEY` repo secret, and force-pushes it to the
-   `gh-pages` branch served by GitHub Pages (only the latest version is served
-   via apt; older `.deb`s remain downloadable from the releases)
+4. Rebuilds the shared apt repository (docker-pin + splitdns, latest release
+   of each), signs it with the GPG key in the `APT_GPG_PRIVATE_KEY` repo
+   secret, and deploys it to Cloudflare Pages at https://apt.guldmund.dk
+   (only latest versions served via apt; older `.deb`s stay on the releases)
 
 ## License
 

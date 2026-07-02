@@ -4,11 +4,7 @@ on:
   push:
     tags:
       - "v*"
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: "Existing release tag to (re)publish to the apt repo"
-        required: true
+  workflow_dispatch: {}
 
 permissions:
   contents: write
@@ -33,12 +29,16 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  # Rebuild the shared apt repo (docker-pin + splitdns, latest release of each)
+  # and deploy it to Cloudflare Pages (apt.guldmund.dk). Stateless: the GitHub
+  # releases are the source of truth; each publish is a full fresh tree.
+  # The same job exists in Miista/homebrew-sd — keep them in sync.
   apt-repo:
     needs: release
     if: always() && !cancelled() && !failure()
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
     steps:
       - name: Install reprepro
         run: sudo apt-get update -q && sudo apt-get install -y -q reprepro
@@ -46,73 +46,69 @@ jobs:
       - name: Import GPG signing key
         run: echo "${{ secrets.APT_GPG_PRIVATE_KEY }}" | gpg --batch --import
 
-      - name: Download release .debs
-        run: gh release download "${{ inputs.tag || github.ref_name }}" --pattern '*.deb' --dir /tmp/debs
+      - name: Download latest .debs from both repos
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release download --repo Miista/homebrew-docker-pin --pattern '*.deb' --dir /tmp/debs
+          gh release download --repo Miista/homebrew-sd --pattern '*.deb' --dir /tmp/debs
 
       - name: Build apt repository
         run: |
           set -euo pipefail
           mkdir -p site/conf
           cat > site/conf/distributions <<'EOF'
-          Origin: docker-pin
-          Label: docker-pin
+          Origin: apt.guldmund.dk
+          Label: guldmund
           Codename: stable
           Architectures: amd64 arm64
           Components: main
-          Description: apt repository for docker-pin
+          Description: apt repository for guldmund.dk tools
           SignWith: yes
           EOF
           reprepro --basedir site includedeb stable /tmp/debs/*.deb
-          gpg --armor --export > site/docker-pin.asc
+          gpg --armor --export > site/guldmund-archive-keyring.asc
           rm -rf site/conf site/db
           cat > site/setup.sh <<'EOF'
           #!/bin/sh
-          # Adds the docker-pin apt repository. Run as root.
+          # Adds the apt.guldmund.dk repository. Run as root:
+          #   curl -fsSL https://apt.guldmund.dk/setup.sh | sudo sh
           set -eu
-          [ "$(id -u)" -eq 0 ] || { echo "run as root: curl -fsSL ... | sudo sh" >&2; exit 1; }
-          base=https://miista.github.io/homebrew-docker-pin
+          [ "$(id -u)" -eq 0 ] || { echo "run as root: curl -fsSL https://apt.guldmund.dk/setup.sh | sudo sh" >&2; exit 1; }
           install -d /etc/apt/keyrings
-          curl -fsSL "$base/docker-pin.asc" | gpg --dearmor --yes -o /etc/apt/keyrings/docker-pin.gpg
-          echo "deb [signed-by=/etc/apt/keyrings/docker-pin.gpg] $base stable main" > /etc/apt/sources.list.d/docker-pin.list
+          curl -fsSL https://apt.guldmund.dk/guldmund-archive-keyring.asc -o /etc/apt/keyrings/guldmund-archive-keyring.asc
+          echo "deb [signed-by=/etc/apt/keyrings/guldmund-archive-keyring.asc] https://apt.guldmund.dk stable main" > /etc/apt/sources.list.d/guldmund.list
           apt-get update -q
-          echo "docker-pin repository added. Install with: sudo apt install docker-pin"
+          echo "guldmund repository added. Install with: sudo apt install docker-pin splitdns"
           EOF
           cat > site/index.html <<'EOF'
           <!doctype html>
-          <html lang="en"><head><meta charset="utf-8"><title>docker-pin apt repository</title>
+          <html lang="en"><head><meta charset="utf-8"><title>apt.guldmund.dk</title>
           <style>body{font-family:system-ui,sans-serif;max-width:44rem;margin:3rem auto;padding:0 1rem;line-height:1.5}pre{background:#f4f4f4;padding:1rem;overflow-x:auto}</style>
           </head><body>
-          <h1>docker-pin apt repository</h1>
-          <p>Docker CLI plugins to pin Compose service images to tag + digest.
-          Source and docs: <a href="https://github.com/Miista/homebrew-docker-pin">github.com/Miista/homebrew-docker-pin</a></p>
+          <h1>apt.guldmund.dk</h1>
+          <p>Signed apt repository for guldmund.dk tools:</p>
+          <ul>
+          <li><a href="https://github.com/Miista/homebrew-docker-pin">docker-pin</a> — pin Docker Compose images to tag + digest</li>
+          <li><a href="https://github.com/Miista/homebrew-sd">splitdns</a> — split-horizon DNS + Caddy config from services.yaml</li>
+          </ul>
           <h2>Install (Debian/Ubuntu)</h2>
-          <pre>curl -fsSL https://miista.github.io/homebrew-docker-pin/setup.sh | sudo sh
-          sudo apt install docker-pin</pre>
+          <pre>curl -fsSL https://apt.guldmund.dk/setup.sh | sudo sh
+          sudo apt install docker-pin splitdns</pre>
           <p>Or do the repo setup explicitly:</p>
           <pre>sudo install -d /etc/apt/keyrings
-          curl -fsSL https://miista.github.io/homebrew-docker-pin/docker-pin.asc \
-            | sudo gpg --dearmor -o /etc/apt/keyrings/docker-pin.gpg
-          echo "deb [signed-by=/etc/apt/keyrings/docker-pin.gpg] https://miista.github.io/homebrew-docker-pin stable main" \
-            | sudo tee /etc/apt/sources.list.d/docker-pin.list
-          sudo apt update &amp;&amp; sudo apt install docker-pin</pre>
+          curl -fsSL https://apt.guldmund.dk/guldmund-archive-keyring.asc \
+            | sudo tee /etc/apt/keyrings/guldmund-archive-keyring.asc > /dev/null
+          echo "deb [signed-by=/etc/apt/keyrings/guldmund-archive-keyring.asc] https://apt.guldmund.dk stable main" \
+            | sudo tee /etc/apt/sources.list.d/guldmund.list
+          sudo apt update &amp;&amp; sudo apt install docker-pin splitdns</pre>
           </body></html>
           EOF
 
-      # Force-push a fresh orphan commit: gh-pages always holds exactly one
-      # release's apt tree, so the branch never accumulates old binaries.
-      - name: Publish to gh-pages
-        run: |
-          set -euo pipefail
-          cd site
-          touch .nojekyll
-          git init -q -b gh-pages
-          git config user.name goreleaser-bot
-          git config user.email bot@goreleaser.com
-          git add -A
-          git commit -qm "apt: publish ${{ inputs.tag || github.ref_name }}"
-          git push -qf "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" gh-pages
+      - name: Deploy to Cloudflare Pages
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          npx --yes wrangler pages project create apt-guldmund --production-branch=main 2>/dev/null || true
+          npx --yes wrangler pages deploy site --project-name=apt-guldmund --branch=main --commit-dirty=true
