@@ -105,6 +105,14 @@ jobs:
           sudo apt update &amp;&amp; sudo apt install docker-pin splitdns</pre>
           </body></html>
           EOF
+          # apt metadata (InRelease + Packages) must always come from the same
+          # deploy — Cloudflare's default 4h edge cache can mix two deploys and
+          # break `apt update` with hash/size mismatches. no-cache forces edge
+          # revalidation for metadata; the .deb pool stays cacheable.
+          cat > site/_headers <<'EOF'
+          /dists/*
+            Cache-Control: no-cache
+          EOF
 
       - name: Deploy to Cloudflare Pages
         env:
