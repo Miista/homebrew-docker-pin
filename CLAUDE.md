@@ -88,9 +88,11 @@ GoReleaser also builds `.deb` packages (`nfpms` block) installing both plugins
 into `/usr/libexec/docker/cli-plugins` (scanned by Docker by default on Linux).
 A follow-up `apt-repo` workflow job downloads that release's `.deb`s, builds a
 fresh single-version apt tree with `reprepro`, signs it with the GPG key in the
-`APT_GPG_PRIVATE_KEY` secret, and deploys it straight to GitHub Pages
-(`upload-pages-artifact`/`deploy-pages` — no `gh-pages` branch; the apt repo
-serves only the latest version, older `.deb`s live on the GitHub releases).
+`APT_GPG_PRIVATE_KEY` secret, and force-pushes it as a single orphan commit to
+`gh-pages`, which GitHub Pages serves (branch deploy). The branch always holds
+exactly one release — no binary accumulation; older `.deb`s live on the GitHub
+releases. (Actions-based Pages deploys were tried and reverted: this repo's
+Pages backend cancels `deploy-pages` deployments.)
 The repo is served at `https://miista.github.io/homebrew-docker-pin`; the
 public key is published as `docker-pin.asc` at the repo root. The workflow's
 `workflow_dispatch` trigger re-publishes an existing release tag to apt.

@@ -38,12 +38,7 @@ jobs:
     if: always() && !cancelled() && !failure()
     runs-on: ubuntu-latest
     permissions:
-      contents: read
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
+      contents: write
     steps:
       - name: Install reprepro
         run: sudo apt-get update -q && sudo apt-get install -y -q reprepro
@@ -74,9 +69,18 @@ jobs:
           gpg --armor --export > site/docker-pin.asc
           rm -rf site/conf site/db
 
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: site
-
-      - id: deploy
-        uses: actions/deploy-pages@v4
+      # Force-push a fresh orphan commit: gh-pages always holds exactly one
+      # release's apt tree, so the branch never accumulates old binaries.
+      - name: Publish to gh-pages
+        run: |
+          set -euo pipefail
+          cd site
+          touch .nojekyll
+          git init -q -b gh-pages
+          git config user.name goreleaser-bot
+          git config user.email bot@goreleaser.com
+          git add -A
+          git commit -qm "apt: publish ${{ inputs.tag || github.ref_name }}"
+          git push -qf "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" gh-pages
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
