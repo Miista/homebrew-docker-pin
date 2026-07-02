@@ -38,6 +38,14 @@ Replace `/opt/homebrew` with your `HOMEBREW_PREFIX` (`brew --prefix`). On Intel 
 ### Debian / Ubuntu (apt)
 
 ```bash
+curl -fsSL https://miista.github.io/homebrew-docker-pin/setup.sh | sudo sh
+sudo apt install docker-pin
+```
+
+Or, if you'd rather not pipe scripts into a root shell, do the repo setup
+explicitly (one-time):
+
+```bash
 sudo install -d /etc/apt/keyrings
 curl -fsSL https://miista.github.io/homebrew-docker-pin/docker-pin.asc \
   | sudo gpg --dearmor -o /etc/apt/keyrings/docker-pin.gpg
