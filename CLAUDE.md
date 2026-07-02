@@ -87,14 +87,14 @@ amd64/arm64 archives, creates the GitHub release, and commits an updated
 GoReleaser also builds `.deb` packages (`nfpms` block) installing both plugins
 into `/usr/libexec/docker/cli-plugins` (scanned by Docker by default on Linux).
 A follow-up `apt-repo` workflow job rebuilds the **shared** apt repo — the
-latest `.deb`s of both this repo and `Miista/homebrew-sd` (splitdns), fetched
+latest `.deb`s of both this repo and `Miista/homebrew-splitdns` (splitdns), fetched
 from their GitHub releases — signs it with the GPG key in the
 `APT_GPG_PRIVATE_KEY` secret (one key for both repos), and deploys it to the
 Cloudflare Pages project `apt-guldmund`, served at `https://apt.guldmund.dk`
 (secrets `CLOUDFLARE_API_TOKEN`/`CLOUDFLARE_ACCOUNT_ID`). Stateless: each
 publish is a full fresh tree; only the latest version of each tool is served;
 older `.deb`s live on the GitHub releases. The identical job exists in the
-homebrew-sd repo — keep them in sync. `workflow_dispatch` re-publishes without
+homebrew-splitdns repo — keep them in sync. `workflow_dispatch` re-publishes without
 a release. The public key is served as `guldmund-archive-keyring.asc`.
 (GitHub Pages was used before and dropped: flaky builds, wedged deploys.)
 
