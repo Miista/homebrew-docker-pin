@@ -30,10 +30,11 @@ type sysFuncs struct {
 	systemctl func(args ...string) (string, error)
 	// analyze runs `systemd-analyze args...` and returns combined output.
 	analyze func(args ...string) (string, error)
-	// shell runs `sh -c command` in dir, streaming output to the caller.
-	shell func(dir, command string) error
-	// composeUp runs `docker compose -f file up -d`, streaming output.
-	composeUp func(file string) error
+	// shell runs `sh -c command` in dir with extraEnv appended to the
+	// environment, streaming output to the caller.
+	shell func(dir, command string, extraEnv []string) error
+	// composeUp runs `docker compose -f file up -d service`, streaming output.
+	composeUp func(file, service string) error
 }
 
 var realSys = sysFuncs{
@@ -48,15 +49,16 @@ var realSys = sysFuncs{
 		out, err := exec.Command("systemd-analyze", args...).CombinedOutput()
 		return string(out), err
 	},
-	shell: func(dir, command string) error {
+	shell: func(dir, command string, extraEnv []string) error {
 		cmd := exec.Command("sh", "-c", command)
 		cmd.Dir = dir
+		cmd.Env = append(os.Environ(), extraEnv...)
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		return cmd.Run()
 	},
-	composeUp: func(file string) error {
-		cmd := exec.Command("docker", "compose", "-f", file, "up", "-d")
+	composeUp: func(file, service string) error {
+		cmd := exec.Command("docker", "compose", "-f", file, "up", "-d", service)
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		return cmd.Run()
@@ -369,80 +371,96 @@ func scheduleRun(d dockerFuncs, sys sysFuncs) error {
 		}
 	}
 
-	before, err := os.ReadFile(composeFile)
-	if err != nil {
-		return err
-	}
-
-	var failed, upgraded []string
+	// Each service is its own transaction: upgrade the pin, up -d just that
+	// service, run on_change, notify — independently. One failing service is
+	// rolled back alone and never blocks or reverts the others, and each
+	// upgrade lands as its own on_change invocation (= its own commit).
+	var failed []string
+	changedAny := false
 	for _, service := range services {
-		target := ""
-		if service.Tags != "" {
-			target, err = constrainedTarget(composeFile, service, d)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error upgrading %s: %v\n", service.Name, err)
-				failed = append(failed, service.Name)
-				continue
-			}
-			if target == "" {
-				fmt.Printf("%s: no newer tag matching %s; leaving as is\n", service.Name, service.Tags)
-				continue
-			}
-		}
-		oldRaw, _ := compose.RawImage(composeFile, service.Name)
-		if err := upgradeInFile(composeFile, service.Name, target, d); err != nil {
+		changed, err := upgradeServiceTxn(cfg, composeFile, service, d, sys)
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error upgrading %s: %v\n", service.Name, err)
 			failed = append(failed, service.Name)
 			continue
 		}
-		if newRaw, _ := compose.RawImage(composeFile, service.Name); newRaw != oldRaw {
-			upgraded = append(upgraded, fmt.Sprintf("%s: %s -> %s", service.Name, oldRaw, newRaw))
-		}
+		changedAny = changedAny || changed
 	}
 
-	after, err := os.ReadFile(composeFile)
-	if err != nil {
-		return err
-	}
-
-	var notes []string
-	if !bytes.Equal(before, after) {
-		fmt.Printf("Compose file changed, running docker compose up -d ...\n")
-		if err := sys.composeUp(composeFile); err != nil {
-			// Never leave the system on pins that don't come up: restore the
-			// pre-run compose file and re-assert the last working state. The
-			// upgrade is retried from scratch on the next scheduled run.
-			fmt.Fprintf(os.Stderr, "docker compose up -d failed: %v\nRolling back %s to its previous pins ...\n", err, composeFile)
-			if werr := os.WriteFile(composeFile, before, 0o644); werr != nil {
-				notifyRun(cfg, nil, append(failed, "compose up failed AND rollback write failed — manual intervention needed"), nil)
-				return fmt.Errorf("compose up failed (%v) and rollback write failed: %w", err, werr)
-			}
-			if rerr := sys.composeUp(composeFile); rerr != nil {
-				notifyRun(cfg, nil, append(failed, "compose up failed; rollback compose up ALSO failed — containers may be down"), nil)
-				return fmt.Errorf("compose up failed (%v); rollback compose up also failed: %w", err, rerr)
-			}
-			notifyRun(cfg, nil, append(failed, "compose up failed; rolled back to previous pins (retrying next run)"), nil)
-			return fmt.Errorf("docker compose up -d failed, rolled back: %w", err)
-		}
-		if cfg.OnChange != "" {
-			fmt.Printf("Running on_change: %s\n", cfg.OnChange)
-			if err := sys.shell(filepath.Dir(composeFile), cfg.OnChange); err != nil {
-				// Non-fatal: the upgrade itself succeeded and is running. A
-				// failed commit/push just means the change stays local until
-				// the next push (or the next run's on_change) carries it.
-				fmt.Fprintf(os.Stderr, "Warning: on_change command failed: %v (compose file change remains local)\n", err)
-				notes = append(notes, "note: on_change failed — change not pushed yet")
-			}
-		}
-	} else {
+	if !changedAny && len(failed) == 0 {
 		fmt.Println("All services already up to date; compose file unchanged.")
 	}
-
-	notifyRun(cfg, upgraded, failed, notes)
 	if len(failed) > 0 {
 		return fmt.Errorf("failed to upgrade: %s", strings.Join(failed, ", "))
 	}
 	return nil
+}
+
+// upgradeServiceTxn upgrades one service end to end: pin rewrite, compose up
+// of that service only, on_change hook, notification. On a failed compose up
+// the service's previous pin is restored and re-asserted, leaving the system
+// exactly as before; the upgrade retries on the next scheduled run.
+func upgradeServiceTxn(cfg *schedule.Config, composeFile string, service schedule.Service, d dockerFuncs, sys sysFuncs) (changed bool, err error) {
+	target := ""
+	if service.Tags != "" {
+		target, err = constrainedTarget(composeFile, service, d)
+		if err != nil {
+			notifyFailed(cfg, service.Name, "", "", err.Error())
+			return false, err
+		}
+		if target == "" {
+			fmt.Printf("%s: no newer tag matching %s; leaving as is\n", service.Name, service.Tags)
+			return false, nil
+		}
+	}
+
+	before, err := os.ReadFile(composeFile)
+	if err != nil {
+		return false, err
+	}
+	oldRaw, _ := compose.RawImage(composeFile, service.Name)
+
+	if err := upgradeInFile(composeFile, service.Name, target, d); err != nil {
+		notifyFailed(cfg, service.Name, "", "", err.Error())
+		return false, err
+	}
+	newRaw, _ := compose.RawImage(composeFile, service.Name)
+	if newRaw == oldRaw {
+		return false, nil
+	}
+
+	fmt.Printf("Running docker compose up -d %s ...\n", service.Name)
+	if err := sys.composeUp(composeFile, service.Name); err != nil {
+		fmt.Fprintf(os.Stderr, "compose up %s failed: %v\nRolling back to %s ...\n", service.Name, err, oldRaw)
+		if werr := os.WriteFile(composeFile, before, 0o644); werr != nil {
+			notifyFailed(cfg, service.Name, oldRaw, newRaw, "compose up failed AND rollback write failed — manual intervention needed")
+			return false, fmt.Errorf("compose up failed (%v) and rollback write failed: %w", err, werr)
+		}
+		if rerr := sys.composeUp(composeFile, service.Name); rerr != nil {
+			notifyFailed(cfg, service.Name, oldRaw, newRaw, "compose up failed; rollback compose up ALSO failed — container may be down")
+			return false, fmt.Errorf("compose up failed (%v); rollback compose up also failed: %w", err, rerr)
+		}
+		notifyFailed(cfg, service.Name, oldRaw, newRaw, "compose up failed; rolled back to previous pin (retrying next run)")
+		return false, fmt.Errorf("compose up failed, rolled back: %w", err)
+	}
+
+	note := ""
+	if cfg.OnChange != "" {
+		fmt.Printf("Running on_change for %s: %s\n", service.Name, cfg.OnChange)
+		env := []string{
+			"PIN_SERVICE=" + service.Name,
+			"PIN_OLD_IMAGE=" + oldRaw,
+			"PIN_NEW_IMAGE=" + newRaw,
+		}
+		if err := sys.shell(filepath.Dir(composeFile), cfg.OnChange, env); err != nil {
+			// Non-fatal: the upgrade is live. A failed commit/push just means
+			// the change stays local until the next push carries it.
+			fmt.Fprintf(os.Stderr, "Warning: on_change for %s failed: %v (change remains local)\n", service.Name, err)
+			note = "note: on_change failed — change not pushed yet"
+		}
+	}
+	notifyUpgraded(cfg, service.Name, oldRaw, newRaw, note)
+	return true, nil
 }
 
 // maxDelayChecks bounds how many candidate publish dates one service may
@@ -504,15 +522,29 @@ func constrainedTarget(composeFile string, service schedule.Service, d dockerFun
 	return "", nil
 }
 
-// notifyRun reports the outcome of a schedule run via the configured ntfy
-// target. Notification failures only warn: losing a message must not turn a
-// successful upgrade run into a failed one. notes are informational lines
-// appended to the body without raising the priority.
-func notifyRun(cfg *schedule.Config, upgraded, failed, notes []string) {
-	if cfg.Notify == nil || cfg.Notify.Ntfy == nil {
-		return
+// notifyUpgraded announces one service's successful upgrade via ntfy; note
+// (e.g. a failed push) is appended without raising the priority.
+func notifyUpgraded(cfg *schedule.Config, name, oldRaw, newRaw, note string) {
+	body := fmt.Sprintf("%s -> %s", oldRaw, newRaw)
+	if note != "" {
+		body += "\n" + note
 	}
-	if len(upgraded) == 0 && len(failed) == 0 {
+	sendNotification(cfg, fmt.Sprintf("docker pin: %s upgraded", name), body, notify.PriorityDefault)
+}
+
+// notifyFailed reports one service's failed upgrade at high priority.
+func notifyFailed(cfg *schedule.Config, name, oldRaw, newRaw, reason string) {
+	body := reason
+	if oldRaw != "" {
+		body = fmt.Sprintf("%s -> %s\n%s", oldRaw, newRaw, reason)
+	}
+	sendNotification(cfg, fmt.Sprintf("docker pin: %s FAILED", name), body, notify.PriorityHigh)
+}
+
+// sendNotification publishes to the configured ntfy target, if any.
+// Notification failures only warn: losing a message must not fail a run.
+func sendNotification(cfg *schedule.Config, title, body string, priority int) {
+	if cfg.Notify == nil || cfg.Notify.Ntfy == nil {
 		return
 	}
 	token, err := cfg.Notify.Ntfy.Token()
@@ -521,18 +553,7 @@ func notifyRun(cfg *schedule.Config, upgraded, failed, notes []string) {
 		return
 	}
 	n := notify.Ntfy{URL: cfg.Notify.Ntfy.URL, Topic: cfg.Notify.Ntfy.Topic, Token: token}
-
-	title := fmt.Sprintf("docker pin: %d service(s) upgraded", len(upgraded))
-	priority := notify.PriorityDefault
-	var body []string
-	body = append(body, upgraded...)
-	if len(failed) > 0 {
-		title = fmt.Sprintf("docker pin: %d upgraded, %d FAILED", len(upgraded), len(failed))
-		priority = notify.PriorityHigh
-		body = append(body, "failed: "+strings.Join(failed, ", "))
-	}
-	body = append(body, notes...)
-	if err := n.Send(title, strings.Join(body, "\n"), priority); err != nil {
+	if err := n.Send(title, body, priority); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: notification failed: %v\n", err)
 	}
 }

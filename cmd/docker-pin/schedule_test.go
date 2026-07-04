@@ -50,8 +50,8 @@ func fakeSys(goos string, euid int) sysFuncs {
 		execPath:  func() (string, error) { return "/usr/bin/docker-pin", nil },
 		systemctl: func(args ...string) (string, error) { return "", nil },
 		analyze:   func(args ...string) (string, error) { return "", nil },
-		shell:     func(dir, command string) error { return nil },
-		composeUp: func(file string) error { return nil },
+		shell:     func(dir, command string, extraEnv []string) error { return nil },
+		composeUp: func(file, service string) error { return nil },
 	}
 }
 
@@ -130,17 +130,23 @@ func TestScheduleRun_UpgradesListedAndRunsHooks(t *testing.T) {
 	}
 	composeUps, shells := 0, 0
 	sys := fakeSys("linux", 1000)
-	sys.composeUp = func(file string) error {
+	sys.composeUp = func(file, service string) error {
 		composeUps++
-		if file != filepath.Join(dir, "docker-compose.yml") {
-			t.Errorf("composeUp got %q", file)
+		if file != filepath.Join(dir, "docker-compose.yml") || service != "caddy" {
+			t.Errorf("composeUp got file=%q service=%q", file, service)
 		}
 		return nil
 	}
-	sys.shell = func(shellDir, command string) error {
+	sys.shell = func(shellDir, command string, extraEnv []string) error {
 		shells++
 		if shellDir != dir || command != "./hook.sh" {
 			t.Errorf("shell got dir=%q command=%q", shellDir, command)
+		}
+		env := strings.Join(extraEnv, " ")
+		if !strings.Contains(env, "PIN_SERVICE=caddy") ||
+			!strings.Contains(env, "PIN_OLD_IMAGE=caddy:2.7.6@sha256:old1") ||
+			!strings.Contains(env, "PIN_NEW_IMAGE=caddy:") {
+			t.Errorf("on_change env missing PIN_* vars: %v", extraEnv)
 		}
 		return nil
 	}
@@ -169,8 +175,8 @@ func TestScheduleRun_NoChangeSkipsHooks(t *testing.T) {
 		resolve: noResolve,
 	}
 	sys := fakeSys("linux", 1000)
-	sys.composeUp = func(file string) error { t.Error("composeUp should not run"); return nil }
-	sys.shell = func(dir, command string) error { t.Error("on_change should not run"); return nil }
+	sys.composeUp = func(file, service string) error { t.Error("composeUp should not run"); return nil }
+	sys.shell = func(dir, command string, extraEnv []string) error { t.Error("on_change should not run"); return nil }
 
 	if err := scheduleRun(d, sys); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -263,7 +269,7 @@ func TestScheduleRun_DelayAllTooFresh(t *testing.T) {
 		},
 	}
 	sys := fakeSys("linux", 1000)
-	sys.composeUp = func(file string) error { t.Error("composeUp should not run"); return nil }
+	sys.composeUp = func(file, service string) error { t.Error("composeUp should not run"); return nil }
 
 	if err := scheduleRun(d, sys); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -283,7 +289,7 @@ func TestScheduleRun_TagConstraintUpToDate(t *testing.T) {
 		},
 	}
 	sys := fakeSys("linux", 1000)
-	sys.composeUp = func(file string) error { t.Error("composeUp should not run"); return nil }
+	sys.composeUp = func(file, service string) error { t.Error("composeUp should not run"); return nil }
 
 	if err := scheduleRun(d, sys); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -302,7 +308,7 @@ func TestScheduleRun_ComposeUpFailureRollsBack(t *testing.T) {
 	}
 	sys := fakeSys("linux", 1000)
 	composeUps := 0
-	sys.composeUp = func(file string) error {
+	sys.composeUp = func(file, service string) error {
 		composeUps++
 		if composeUps == 1 {
 			return fmt.Errorf("service caddy failed to start")
@@ -314,11 +320,11 @@ func TestScheduleRun_ComposeUpFailureRollsBack(t *testing.T) {
 		}
 		return nil
 	}
-	sys.shell = func(dir, command string) error { t.Error("on_change must not run after rollback"); return nil }
+	sys.shell = func(dir, command string, extraEnv []string) error { t.Error("on_change must not run after rollback"); return nil }
 
 	err := scheduleRun(d, sys)
-	if err == nil || !strings.Contains(err.Error(), "rolled back") {
-		t.Fatalf("want rolled-back error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "failed to upgrade: caddy") {
+		t.Fatalf("want failure mentioning caddy, got %v", err)
 	}
 	if composeUps != 2 {
 		t.Errorf("composeUp ran %d times, want 2 (failed up + rollback up)", composeUps)
@@ -327,6 +333,45 @@ func TestScheduleRun_ComposeUpFailureRollsBack(t *testing.T) {
 	if string(restored) != string(original) {
 		t.Errorf("compose file not restored to original:\n%s", restored)
 	}
+}
+
+func TestScheduleRun_OneRollbackDoesNotBlockOthers(t *testing.T) {
+	dir := chdirTemp(t, twoServices, "schedule: \"0 6 * * 1\"\n")
+	composeFile := filepath.Join(dir, "docker-compose.yml")
+
+	d := dockerFuncs{
+		getDigest: func(ref string) (string, error) { return "sha256:new-" + strings.SplitN(ref, ":", 2)[0], nil },
+		pull:      func(ref string) error { return nil },
+		resolve:   noResolve,
+	}
+	sys := fakeSys("linux", 1000)
+	sys.composeUp = func(file, service string) error {
+		if service == "caddy" && strings.Contains(mustRead(t, file), "sha256:new-caddy") {
+			return fmt.Errorf("caddy failed to start") // fail only the NEW caddy; rollback re-up succeeds
+		}
+		return nil
+	}
+
+	err := scheduleRun(d, sys)
+	if err == nil || !strings.Contains(err.Error(), "caddy") {
+		t.Fatalf("want failure mentioning caddy, got %v", err)
+	}
+	data := mustRead(t, composeFile)
+	if !strings.Contains(data, "caddy:2.7.6@sha256:old1") {
+		t.Errorf("caddy not rolled back:\n%s", data)
+	}
+	if !strings.Contains(data, "sha256:new-cloudflared") {
+		t.Errorf("cloudflared should still have upgraded despite caddy's rollback:\n%s", data)
+	}
+}
+
+func mustRead(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
 }
 
 func TestScheduleRun_OnChangeFailureIsNonFatal(t *testing.T) {
@@ -338,7 +383,7 @@ func TestScheduleRun_OnChangeFailureIsNonFatal(t *testing.T) {
 		resolve:   noResolve,
 	}
 	sys := fakeSys("linux", 1000)
-	sys.shell = func(dir, command string) error { return fmt.Errorf("push rejected") }
+	sys.shell = func(dir, command string, extraEnv []string) error { return fmt.Errorf("push rejected") }
 
 	// A failed push must not fail the run: the upgrade is live and committed
 	// locally; the next push carries it.
@@ -362,7 +407,7 @@ func TestScheduleRun_CollectsFailures(t *testing.T) {
 	}
 	sys := fakeSys("linux", 1000)
 	composeUps := 0
-	sys.composeUp = func(file string) error { composeUps++; return nil }
+	sys.composeUp = func(file, service string) error { composeUps++; return nil }
 
 	err := scheduleRun(d, sys)
 	if err == nil || !strings.Contains(err.Error(), "caddy") {
