@@ -171,6 +171,8 @@ sudo docker pin schedule apply    # install/update the systemd timer (idempotent
 docker pin schedule status        # config, install/drift state, next fire time
 sudo docker pin schedule remove   # disable + delete the units; pin.yaml stays
 docker pin schedule run           # one scheduled run in the foreground
+docker pin schedule run --dry-run # full discovery, prints what would upgrade,
+                                  # changes nothing
 ```
 
 `apply` translates the cron expression to a systemd `OnCalendar` and writes a

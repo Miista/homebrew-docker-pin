@@ -103,6 +103,9 @@ Resolves which *version* tag (e.g. `1.2.3`) corresponds to a digest, so a
   that service's pin (restore pre-txn bytes + re-up) — other services proceed
   and the upgrade retries next run; a failed `on_change` is non-fatal (warn +
   note in the notification — a stranded commit rides with the next push).
+  `run --dry-run` (`-n`) does full discovery including pulls but changes
+  nothing — prints "Would upgrade ..." per service; no compose rewrite, up,
+  on_change, or notifications.
   `notify.ntfy` (url + topic; token via `token_env`, default `NTFY_TOKEN`,
   optionally sourced from a `token_file` KEY=VALUE file so no secret sits in
   pin.yaml) makes `run` post a summary when anything upgraded or failed

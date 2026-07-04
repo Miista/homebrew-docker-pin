@@ -66,8 +66,9 @@ var realSys = sysFuncs{
 }
 
 func runSchedule(args []string, d dockerFuncs, sys sysFuncs) error {
-	if len(args) != 1 {
-		fmt.Fprintln(os.Stderr, "Usage: docker pin schedule <apply|status|remove|run>")
+	usage := "Usage: docker pin schedule <apply|status|remove|run [--dry-run]>"
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, usage)
 		os.Exit(1)
 	}
 	switch args[0] {
@@ -78,10 +79,20 @@ func runSchedule(args []string, d dockerFuncs, sys sysFuncs) error {
 	case "remove":
 		return scheduleRemove(sys)
 	case "run":
-		return scheduleRun(d, sys)
+		dryRun := false
+		for _, a := range args[1:] {
+			switch a {
+			case "--dry-run", "-n":
+				dryRun = true
+			default:
+				fmt.Fprintln(os.Stderr, "Usage: docker pin schedule run [--dry-run]")
+				os.Exit(1)
+			}
+		}
+		return scheduleRun(d, sys, dryRun)
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown schedule command: %s\n", args[0])
-		fmt.Fprintln(os.Stderr, "Usage: docker pin schedule <apply|status|remove|run>")
+		fmt.Fprintln(os.Stderr, usage)
 		os.Exit(1)
 		return nil
 	}
@@ -351,13 +362,16 @@ func scheduleRemove(sys sysFuncs) error {
 
 // run
 
-func scheduleRun(d dockerFuncs, sys sysFuncs) error {
+func scheduleRun(d dockerFuncs, sys sysFuncs, dryRun bool) error {
 	cfg, composeFile, _, err := loadScheduleConfig()
 	if err != nil {
 		return err
 	}
 	if err := validateSchedule(cfg, composeFile); err != nil {
 		return err
+	}
+	if dryRun {
+		fmt.Println("Dry run: discovering upgrades; nothing will be changed.")
 	}
 
 	services := cfg.Services
@@ -378,7 +392,7 @@ func scheduleRun(d dockerFuncs, sys sysFuncs) error {
 	var failed []string
 	changedAny := false
 	for _, service := range services {
-		changed, err := upgradeServiceTxn(cfg, composeFile, service, d, sys)
+		changed, err := upgradeServiceTxn(cfg, composeFile, service, d, sys, dryRun)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error upgrading %s: %v\n", service.Name, err)
 			failed = append(failed, service.Name)
@@ -400,12 +414,14 @@ func scheduleRun(d dockerFuncs, sys sysFuncs) error {
 // of that service only, on_change hook, notification. On a failed compose up
 // the service's previous pin is restored and re-asserted, leaving the system
 // exactly as before; the upgrade retries on the next scheduled run.
-func upgradeServiceTxn(cfg *schedule.Config, composeFile string, service schedule.Service, d dockerFuncs, sys sysFuncs) (changed bool, err error) {
+func upgradeServiceTxn(cfg *schedule.Config, composeFile string, service schedule.Service, d dockerFuncs, sys sysFuncs, dryRun bool) (changed bool, err error) {
 	target := ""
 	if service.Tags != "" {
 		target, err = constrainedTarget(composeFile, service, d)
 		if err != nil {
-			notifyFailed(cfg, service.Name, "", "", err.Error())
+			if !dryRun {
+				notifyFailed(cfg, service.Name, "", "", err.Error())
+			}
 			return false, err
 		}
 		if target == "" {
@@ -414,13 +430,19 @@ func upgradeServiceTxn(cfg *schedule.Config, composeFile string, service schedul
 		}
 	}
 
+	if dryRun {
+		// Full discovery (including the pull, which digest comparison needs),
+		// no side effects beyond the local image cache.
+		return false, upgradeInFile(composeFile, service.Name, target, d, true)
+	}
+
 	before, err := os.ReadFile(composeFile)
 	if err != nil {
 		return false, err
 	}
 	oldRaw, _ := compose.RawImage(composeFile, service.Name)
 
-	if err := upgradeInFile(composeFile, service.Name, target, d); err != nil {
+	if err := upgradeInFile(composeFile, service.Name, target, d, false); err != nil {
 		notifyFailed(cfg, service.Name, "", "", err.Error())
 		return false, err
 	}

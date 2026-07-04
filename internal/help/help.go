@@ -123,7 +123,12 @@ root and Linux.`},
 
 	{"schedule run", `docker pin schedule run — execute one scheduled run in the foreground
 
-Usage: docker pin schedule run
+Usage: docker pin schedule run [--dry-run]
+
+  -n, --dry-run   Full discovery (registry tags, delay checks, pulls) but
+                  change nothing: prints "Would upgrade ..." per service.
+                  No compose rewrite, no compose up, no on_change, no
+                  notifications.
 
 What the systemd service calls; also usable by hand to test. Each
 listed service (or all of them) is its own transaction: upgrade the

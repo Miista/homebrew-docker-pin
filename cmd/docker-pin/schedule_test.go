@@ -151,7 +151,7 @@ func TestScheduleRun_UpgradesListedAndRunsHooks(t *testing.T) {
 		return nil
 	}
 
-	if err := scheduleRun(d, sys); err != nil {
+	if err := scheduleRun(d, sys, false); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(pulled) != 1 || !strings.HasPrefix(pulled[0], "caddy:") {
@@ -178,7 +178,7 @@ func TestScheduleRun_NoChangeSkipsHooks(t *testing.T) {
 	sys.composeUp = func(file, service string) error { t.Error("composeUp should not run"); return nil }
 	sys.shell = func(dir, command string, extraEnv []string) error { t.Error("on_change should not run"); return nil }
 
-	if err := scheduleRun(d, sys); err != nil {
+	if err := scheduleRun(d, sys, false); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -198,7 +198,7 @@ func TestScheduleRun_TagConstraint(t *testing.T) {
 	}
 	sys := fakeSys("linux", 1000)
 
-	if err := scheduleRun(d, sys); err != nil {
+	if err := scheduleRun(d, sys, false); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	// Newest tag matching the regex, NOT 3.0.0 and NOT the beta.
@@ -242,7 +242,7 @@ func TestScheduleRun_ExcludeAndDelay(t *testing.T) {
 	}
 	sys := fakeSys("linux", 1000)
 
-	if err := scheduleRun(d, sys); err != nil {
+	if err := scheduleRun(d, sys, false); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	// 2.9.0 matches but is 1 day old; 2.9.0-beta.2 is excluded; 2.8.4 is aged.
@@ -271,7 +271,7 @@ func TestScheduleRun_DelayAllTooFresh(t *testing.T) {
 	sys := fakeSys("linux", 1000)
 	sys.composeUp = func(file, service string) error { t.Error("composeUp should not run"); return nil }
 
-	if err := scheduleRun(d, sys); err != nil {
+	if err := scheduleRun(d, sys, false); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -291,7 +291,7 @@ func TestScheduleRun_TagConstraintUpToDate(t *testing.T) {
 	sys := fakeSys("linux", 1000)
 	sys.composeUp = func(file, service string) error { t.Error("composeUp should not run"); return nil }
 
-	if err := scheduleRun(d, sys); err != nil {
+	if err := scheduleRun(d, sys, false); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -322,7 +322,7 @@ func TestScheduleRun_ComposeUpFailureRollsBack(t *testing.T) {
 	}
 	sys.shell = func(dir, command string, extraEnv []string) error { t.Error("on_change must not run after rollback"); return nil }
 
-	err := scheduleRun(d, sys)
+	err := scheduleRun(d, sys, false)
 	if err == nil || !strings.Contains(err.Error(), "failed to upgrade: caddy") {
 		t.Fatalf("want failure mentioning caddy, got %v", err)
 	}
@@ -332,6 +332,32 @@ func TestScheduleRun_ComposeUpFailureRollsBack(t *testing.T) {
 	restored, _ := os.ReadFile(composeFile)
 	if string(restored) != string(original) {
 		t.Errorf("compose file not restored to original:\n%s", restored)
+	}
+}
+
+func TestScheduleRun_DryRun(t *testing.T) {
+	dir := chdirTemp(t, twoServices, "schedule: \"0 6 * * 1\"\nservices:\n  - caddy\non_change: ./hook.sh\n")
+	composeFile := filepath.Join(dir, "docker-compose.yml")
+	original := mustRead(t, composeFile)
+
+	pulls := 0
+	d := dockerFuncs{
+		getDigest: func(ref string) (string, error) { return "sha256:new1", nil },
+		pull:      func(ref string) error { pulls++; return nil },
+		resolve:   noResolve,
+	}
+	sys := fakeSys("linux", 1000)
+	sys.composeUp = func(file, service string) error { t.Error("composeUp must not run in dry run"); return nil }
+	sys.shell = func(dir, command string, extraEnv []string) error { t.Error("on_change must not run in dry run"); return nil }
+
+	if err := scheduleRun(d, sys, true); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if pulls != 1 {
+		t.Errorf("pulls = %d, want 1 (dry run still pulls to detect the upgrade)", pulls)
+	}
+	if mustRead(t, composeFile) != original {
+		t.Error("dry run modified the compose file")
 	}
 }
 
@@ -352,7 +378,7 @@ func TestScheduleRun_OneRollbackDoesNotBlockOthers(t *testing.T) {
 		return nil
 	}
 
-	err := scheduleRun(d, sys)
+	err := scheduleRun(d, sys, false)
 	if err == nil || !strings.Contains(err.Error(), "caddy") {
 		t.Fatalf("want failure mentioning caddy, got %v", err)
 	}
@@ -387,7 +413,7 @@ func TestScheduleRun_OnChangeFailureIsNonFatal(t *testing.T) {
 
 	// A failed push must not fail the run: the upgrade is live and committed
 	// locally; the next push carries it.
-	if err := scheduleRun(d, sys); err != nil {
+	if err := scheduleRun(d, sys, false); err != nil {
 		t.Fatalf("on_change failure should be non-fatal, got %v", err)
 	}
 }
@@ -409,7 +435,7 @@ func TestScheduleRun_CollectsFailures(t *testing.T) {
 	composeUps := 0
 	sys.composeUp = func(file, service string) error { composeUps++; return nil }
 
-	err := scheduleRun(d, sys)
+	err := scheduleRun(d, sys, false)
 	if err == nil || !strings.Contains(err.Error(), "caddy") {
 		t.Fatalf("want failure mentioning caddy, got %v", err)
 	}

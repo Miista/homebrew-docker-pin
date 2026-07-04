@@ -400,10 +400,13 @@ func upgrade(service, targetVersion string, d dockerFuncs) error {
 	if err != nil {
 		return err
 	}
-	return upgradeInFile(composeFile, service, targetVersion, d)
+	return upgradeInFile(composeFile, service, targetVersion, d, false)
 }
 
-func upgradeInFile(composeFile, service, targetVersion string, d dockerFuncs) error {
+// upgradeInFile pulls the target (or discovered moving) tag and pins service
+// to the pulled digest. With dryRun it does everything except rewrite the
+// compose file, printing what the upgrade would be instead.
+func upgradeInFile(composeFile, service, targetVersion string, d dockerFuncs, dryRun bool) error {
 	baseImage, currentTag, err := compose.ParseImage(composeFile, service)
 	if err != nil {
 		return err
@@ -444,6 +447,10 @@ func upgradeInFile(composeFile, service, targetVersion string, d dockerFuncs) er
 	}
 
 	pinned := fmt.Sprintf("%s:%s@%s", baseImage, pinnedTag, digest)
+	if dryRun {
+		fmt.Printf("Would upgrade %s: %s -> %s\n", service, oldRaw, pinned)
+		return nil
+	}
 	if err := compose.PinImage(composeFile, service, pinned); err != nil {
 		return err
 	}
