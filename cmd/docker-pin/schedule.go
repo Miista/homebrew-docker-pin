@@ -597,7 +597,7 @@ func notifyUpgraded(cfg *schedule.Config, name, oldRaw, newRaw, note string) {
 	if note != "" {
 		body += "\n" + note
 	}
-	sendNotification(cfg, fmt.Sprintf("docker pin@%s: %s upgraded", shortHostname(), name), body, notify.PriorityDefault)
+	sendNotification(cfg, fmt.Sprintf("docker pin@%s: %s upgraded", hostLabel(cfg), name), body, notify.PriorityDefault)
 }
 
 // notifyFailed reports one service's failed upgrade at high priority.
@@ -606,12 +606,16 @@ func notifyFailed(cfg *schedule.Config, name, oldRaw, newRaw, reason string) {
 	if oldRaw != "" {
 		body = fmt.Sprintf("%s -> %s\n%s", oldRaw, newRaw, reason)
 	}
-	sendNotification(cfg, fmt.Sprintf("docker pin@%s: %s FAILED", shortHostname(), name), body, notify.PriorityHigh)
+	sendNotification(cfg, fmt.Sprintf("docker pin@%s: %s FAILED", hostLabel(cfg), name), body, notify.PriorityHigh)
 }
 
-// shortHostname identifies this box in notifications, so several hosts can
-// share one ntfy topic.
-func shortHostname() string {
+// hostLabel identifies this box in notifications, so several hosts can share
+// one ntfy topic: pin.yaml's `hostname:` when set (the box name may differ
+// from the OS hostname), otherwise the short OS hostname.
+func hostLabel(cfg *schedule.Config) string {
+	if cfg.Hostname != "" {
+		return cfg.Hostname
+	}
 	h, err := os.Hostname()
 	if err != nil || h == "" {
 		return "unknown-host"

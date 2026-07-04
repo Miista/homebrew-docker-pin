@@ -158,6 +158,8 @@ services:                     # optional; omitted = every service
                               # this long ago ("48h", "7d", "2w")
 on_change: ./pin-upgraded.sh  # optional; run in the compose dir after
                               # upgrades changed the compose file
+hostname: optiplex            # optional; box name in notification titles
+                              # (defaults to the OS hostname)
 notify:                       # optional; report each run via ntfy
   ntfy:
     url: https://ntfy.example.net

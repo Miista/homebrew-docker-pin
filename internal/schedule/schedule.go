@@ -31,6 +31,9 @@ type Config struct {
 	// Notify configures where `schedule run` reports applied upgrades
 	// and failures. Optional.
 	Notify *Notify `yaml:"notify"`
+	// Hostname identifies this box in notification titles (several hosts
+	// can share one ntfy topic). Optional; defaults to the OS hostname.
+	Hostname string `yaml:"hostname"`
 }
 
 // Service is one entry under `services:` — either a bare name or a mapping
