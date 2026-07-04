@@ -428,6 +428,7 @@ func upgradeServiceTxn(cfg *schedule.Config, composeFile string, service schedul
 			fmt.Printf("%s: no newer tag matching %s; leaving as is\n", service.Name, service.Tags)
 			return false, nil
 		}
+		fmt.Printf("%s: newest tag matching %s is %s\n", service.Name, service.Tags, target)
 	}
 
 	if dryRun {

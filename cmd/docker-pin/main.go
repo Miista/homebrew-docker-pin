@@ -423,6 +423,8 @@ func upgradeInFile(composeFile, service, targetVersion string, d dockerFuncs, dr
 		if err != nil {
 			return err
 		}
+		fmt.Printf("%s: on %s:%s — checking whether the %q moving tag has a newer build ...\n",
+			service, baseImage, currentTag, pullTag)
 	}
 
 	pullRef := baseImage + ":" + pullTag
@@ -437,7 +439,7 @@ func upgradeInFile(composeFile, service, targetVersion string, d dockerFuncs, dr
 	}
 
 	if oldDigest := digestOf(oldRaw); oldDigest != "" && oldDigest == digest {
-		fmt.Printf("%s is already up to date (%s)\n", service, oldRaw)
+		fmt.Printf("%s: up to date — %s still points at the pinned digest (%s)\n", service, pullRef, shortDigest(oldDigest))
 		return nil
 	}
 
