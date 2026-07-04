@@ -7,10 +7,10 @@ import (
 	"strings"
 )
 
-// Pull pulls the given image reference, streaming output to the terminal.
+// Pull pulls the given image reference quietly (-q): docker's layer-progress
+// dump would drown the tool's own output. Errors still stream to stderr.
 func Pull(imageRef string) error {
-	cmd := exec.Command("docker", "pull", imageRef)
-	cmd.Stdout = os.Stdout
+	cmd := exec.Command("docker", "pull", "-q", imageRef)
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
 }

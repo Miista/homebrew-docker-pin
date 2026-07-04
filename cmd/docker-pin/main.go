@@ -400,28 +400,39 @@ func upgrade(service, targetVersion string, d dockerFuncs) error {
 	if err != nil {
 		return err
 	}
-	return upgradeInFile(composeFile, service, targetVersion, d, false)
+	_, err = upgradeInFile(composeFile, service, targetVersion, d, false)
+	return err
+}
+
+// upgradeOutcome describes what an upgradeInFile call did (or, in dry-run
+// mode, would have done).
+type upgradeOutcome struct {
+	OldRaw string
+	NewRaw string
+	// Changed is true when the pin moved (or would move, in a dry run).
+	Changed bool
 }
 
 // upgradeInFile pulls the target (or discovered moving) tag and pins service
 // to the pulled digest. With dryRun it does everything except rewrite the
 // compose file, printing what the upgrade would be instead.
-func upgradeInFile(composeFile, service, targetVersion string, d dockerFuncs, dryRun bool) error {
+func upgradeInFile(composeFile, service, targetVersion string, d dockerFuncs, dryRun bool) (upgradeOutcome, error) {
 	baseImage, currentTag, err := compose.ParseImage(composeFile, service)
 	if err != nil {
-		return err
+		return upgradeOutcome{}, err
 	}
 
 	oldRaw, err := compose.RawImage(composeFile, service)
 	if err != nil {
-		return err
+		return upgradeOutcome{}, err
 	}
+	outcome := upgradeOutcome{OldRaw: oldRaw, NewRaw: oldRaw}
 
 	pullTag := targetVersion
 	if pullTag == "" {
 		pullTag, err = registry.MovingPullTag(baseImage, currentTag)
 		if err != nil {
-			return err
+			return outcome, err
 		}
 		fmt.Printf("%s: on %s:%s — checking whether the %q moving tag has a newer build ...\n",
 			service, baseImage, currentTag, pullTag)
@@ -430,17 +441,17 @@ func upgradeInFile(composeFile, service, targetVersion string, d dockerFuncs, dr
 	pullRef := baseImage + ":" + pullTag
 	fmt.Printf("Pulling %s ...\n", pullRef)
 	if err := d.pull(pullRef); err != nil {
-		return fmt.Errorf("pull failed: %w", err)
+		return outcome, fmt.Errorf("pull failed: %w", err)
 	}
 
 	digest, err := d.getDigest(pullRef)
 	if err != nil {
-		return err
+		return outcome, err
 	}
 
 	if oldDigest := digestOf(oldRaw); oldDigest != "" && oldDigest == digest {
 		fmt.Printf("%s: up to date — %s still points at the pinned digest (%s)\n", service, pullRef, shortDigest(oldDigest))
-		return nil
+		return outcome, nil
 	}
 
 	pinnedTag := pullTag
@@ -449,16 +460,18 @@ func upgradeInFile(composeFile, service, targetVersion string, d dockerFuncs, dr
 	}
 
 	pinned := fmt.Sprintf("%s:%s@%s", baseImage, pinnedTag, digest)
+	outcome.NewRaw = pinned
+	outcome.Changed = true
 	if dryRun {
 		fmt.Printf("Would upgrade %s: %s -> %s\n", service, oldRaw, pinned)
-		return nil
+		return outcome, nil
 	}
 	if err := compose.PinImage(composeFile, service, pinned); err != nil {
-		return err
+		return outcome, err
 	}
 	fmt.Printf("Upgraded %s: %s -> %s\n", service, oldRaw, pinned)
 	fmt.Printf("Pinned to %s\n", digest)
-	return nil
+	return outcome, nil
 }
 
 func digestOf(image string) string {

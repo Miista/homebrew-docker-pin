@@ -139,7 +139,7 @@ func TestUpgradeInFile_AlreadyUpToDate(t *testing.T) {
 		getDigest: func(ref string) (string, error) { return "sha256:currenthash", nil },
 		pull:      func(ref string) error { return nil },
 	}
-	if err := upgradeInFile(f, "db", "16.3", d, false); err != nil {
+	if _, err := upgradeInFile(f, "db", "16.3", d, false); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(readCompose(t, f), "sha256:currenthash") {
@@ -156,7 +156,7 @@ func TestUpgradeInFile_NewDigest(t *testing.T) {
 		getDigest: func(ref string) (string, error) { return "sha256:newhash", nil },
 		pull:      func(ref string) error { return nil },
 	}
-	if err := upgradeInFile(f, "db", "16.3", d, false); err != nil {
+	if _, err := upgradeInFile(f, "db", "16.3", d, false); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	got := readCompose(t, f)
@@ -177,7 +177,7 @@ func TestUpgradeInFile_PullFails(t *testing.T) {
 		getDigest: func(ref string) (string, error) { return "", errors.New("not found") },
 		pull:      func(ref string) error { return errors.New("registry unreachable") },
 	}
-	err := upgradeInFile(f, "db", "16", d, false)
+	_, err := upgradeInFile(f, "db", "16", d, false)
 	if err == nil {
 		t.Fatal("expected error when pull fails")
 	}

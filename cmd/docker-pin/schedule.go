@@ -390,20 +390,26 @@ func scheduleRun(d dockerFuncs, sys sysFuncs, dryRun bool) error {
 	// rolled back alone and never blocks or reverts the others, and each
 	// upgrade lands as its own on_change invocation (= its own commit).
 	var failed []string
-	changedAny := false
+	verdicts := make([]string, 0, len(services))
+	width := 0
+	for _, s := range services {
+		if len(s.Name) > width {
+			width = len(s.Name)
+		}
+	}
 	for _, service := range services {
-		changed, err := upgradeServiceTxn(cfg, composeFile, service, d, sys, dryRun)
+		verdict, err := upgradeServiceTxn(cfg, composeFile, service, d, sys, dryRun)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error upgrading %s: %v\n", service.Name, err)
 			failed = append(failed, service.Name)
-			continue
+			if verdict == "" {
+				verdict = "FAILED — " + err.Error()
+			}
 		}
-		changedAny = changedAny || changed
+		verdicts = append(verdicts, fmt.Sprintf("  %-*s  %s", width, service.Name, verdict))
 	}
 
-	if !changedAny && len(failed) == 0 {
-		fmt.Println("All services already up to date; compose file unchanged.")
-	}
+	fmt.Printf("\nSummary%s:\n%s\n", map[bool]string{true: " (dry run — nothing changed)", false: ""}[dryRun], strings.Join(verdicts, "\n"))
 	if len(failed) > 0 {
 		return fmt.Errorf("failed to upgrade: %s", strings.Join(failed, ", "))
 	}
@@ -413,20 +419,22 @@ func scheduleRun(d dockerFuncs, sys sysFuncs, dryRun bool) error {
 // upgradeServiceTxn upgrades one service end to end: pin rewrite, compose up
 // of that service only, on_change hook, notification. On a failed compose up
 // the service's previous pin is restored and re-asserted, leaving the system
-// exactly as before; the upgrade retries on the next scheduled run.
-func upgradeServiceTxn(cfg *schedule.Config, composeFile string, service schedule.Service, d dockerFuncs, sys sysFuncs, dryRun bool) (changed bool, err error) {
+// exactly as before; the upgrade retries on the next scheduled run. The
+// returned verdict is a one-line human summary of what happened.
+func upgradeServiceTxn(cfg *schedule.Config, composeFile string, service schedule.Service, d dockerFuncs, sys sysFuncs, dryRun bool) (verdict string, err error) {
 	target := ""
 	if service.Tags != "" {
-		target, err = constrainedTarget(composeFile, service, d)
+		var hold string
+		target, hold, err = constrainedTarget(composeFile, service, d)
 		if err != nil {
 			if !dryRun {
 				notifyFailed(cfg, service.Name, "", "", err.Error())
 			}
-			return false, err
+			return "", err
 		}
 		if target == "" {
-			fmt.Printf("%s: no newer tag matching %s; leaving as is\n", service.Name, service.Tags)
-			return false, nil
+			fmt.Printf("%s: %s; leaving as is\n", service.Name, hold)
+			return "up to date — " + hold, nil
 		}
 		fmt.Printf("%s: newest tag matching %s is %s\n", service.Name, service.Tags, target)
 	}
@@ -434,44 +442,56 @@ func upgradeServiceTxn(cfg *schedule.Config, composeFile string, service schedul
 	if dryRun {
 		// Full discovery (including the pull, which digest comparison needs),
 		// no side effects beyond the local image cache.
-		return false, upgradeInFile(composeFile, service.Name, target, d, true)
+		outcome, err := upgradeInFile(composeFile, service.Name, target, d, true)
+		switch {
+		case err != nil:
+			return "", err
+		case outcome.Changed:
+			oldTag, _ := tagAndDigest(outcome.OldRaw)
+			newTag, _ := tagAndDigest(outcome.NewRaw)
+			return fmt.Sprintf("WOULD UPGRADE  %s -> %s", oldTag, newTag), nil
+		default:
+			return "up to date — pinned digest is still current", nil
+		}
 	}
 
 	before, err := os.ReadFile(composeFile)
 	if err != nil {
-		return false, err
+		return "", err
 	}
-	oldRaw, _ := compose.RawImage(composeFile, service.Name)
 
-	if err := upgradeInFile(composeFile, service.Name, target, d, false); err != nil {
+	outcome, err := upgradeInFile(composeFile, service.Name, target, d, false)
+	if err != nil {
 		notifyFailed(cfg, service.Name, "", "", err.Error())
-		return false, err
+		return "", err
 	}
-	newRaw, _ := compose.RawImage(composeFile, service.Name)
-	if newRaw == oldRaw {
-		return false, nil
+	if !outcome.Changed {
+		return "up to date — pinned digest is still current", nil
 	}
+	oldRaw, newRaw := outcome.OldRaw, outcome.NewRaw
+	oldTag, _ := tagAndDigest(oldRaw)
+	newTag, _ := tagAndDigest(newRaw)
 
 	fmt.Printf("Running docker compose up -d %s ...\n", service.Name)
 	if err := sys.composeUp(composeFile, service.Name); err != nil {
 		fmt.Fprintf(os.Stderr, "compose up %s failed: %v\nRolling back to %s ...\n", service.Name, err, oldRaw)
 		if werr := os.WriteFile(composeFile, before, 0o644); werr != nil {
 			notifyFailed(cfg, service.Name, oldRaw, newRaw, "compose up failed AND rollback write failed — manual intervention needed")
-			return false, fmt.Errorf("compose up failed (%v) and rollback write failed: %w", err, werr)
+			return "FAILED — compose up failed and rollback write failed", fmt.Errorf("compose up failed (%v) and rollback write failed: %w", err, werr)
 		}
 		if rerr := sys.composeUp(composeFile, service.Name); rerr != nil {
 			notifyFailed(cfg, service.Name, oldRaw, newRaw, "compose up failed; rollback compose up ALSO failed — container may be down")
-			return false, fmt.Errorf("compose up failed (%v); rollback compose up also failed: %w", err, rerr)
+			return "FAILED — compose up failed; rollback also failed", fmt.Errorf("compose up failed (%v); rollback compose up also failed: %w", err, rerr)
 		}
 		notifyFailed(cfg, service.Name, oldRaw, newRaw, "compose up failed; rolled back to previous pin (retrying next run)")
-		return false, fmt.Errorf("compose up failed, rolled back: %w", err)
+		return fmt.Sprintf("FAILED — %s did not come up; rolled back to %s", newTag, oldTag), fmt.Errorf("compose up failed, rolled back: %w", err)
 	}
 
 	note := ""
 	if cfg.OnChange != "" {
 		fmt.Printf("Running on_change for %s: %s\n", service.Name, cfg.OnChange)
-		oldTag, oldDigest := tagAndDigest(oldRaw)
-		newTag, newDigest := tagAndDigest(newRaw)
+		_, oldDigest := tagAndDigest(oldRaw)
+		_, newDigest := tagAndDigest(newRaw)
 		env := []string{
 			"PIN_SERVICE=" + service.Name,
 			"PIN_OLD_IMAGE=" + oldRaw,
@@ -489,7 +509,11 @@ func upgradeServiceTxn(cfg *schedule.Config, composeFile string, service schedul
 		}
 	}
 	notifyUpgraded(cfg, service.Name, oldRaw, newRaw, note)
-	return true, nil
+	verdict = fmt.Sprintf("UPGRADED  %s -> %s", oldTag, newTag)
+	if note != "" {
+		verdict += " (not pushed yet)"
+	}
+	return verdict, nil
 }
 
 // tagAndDigest splits a raw image reference ("base:tag@sha256:...") into its
@@ -517,38 +541,39 @@ const maxDelayChecks = 10
 // the newest registry tag matching the regex (and not matching the optional
 // exclude) that is newer than the current tag — and, with a delay configured,
 // the newest such tag that has been published for at least that long. Returns
-// "" when nothing qualifies. Unlike the unconstrained flow it never falls
-// back to a moving tag, so the constraint can't be silently escaped.
-func constrainedTarget(composeFile string, service schedule.Service, d dockerFuncs) (string, error) {
+// "" when nothing qualifies, with hold explaining why in one human-readable
+// clause. Unlike the unconstrained flow it never falls back to a moving tag,
+// so the constraint can't be silently escaped.
+func constrainedTarget(composeFile string, service schedule.Service, d dockerFuncs) (target, hold string, err error) {
 	baseImage, currentTag, err := compose.ParseImage(composeFile, service.Name)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	include, err := regexp.Compile(service.Tags)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	var exclude *regexp.Regexp
 	if service.Exclude != "" {
 		if exclude, err = regexp.Compile(service.Exclude); err != nil {
-			return "", err
+			return "", "", err
 		}
 	}
 	tags, err := d.listTags(baseImage)
 	if err != nil {
-		return "", fmt.Errorf("listing tags for %s: %w", baseImage, err)
+		return "", "", fmt.Errorf("listing tags for %s: %w", baseImage, err)
 	}
 	candidates := registry.MatchingCandidates(tags, include, exclude, currentTag)
 	if len(candidates) == 0 {
-		return "", nil
+		return "", fmt.Sprintf("no tag newer than %s matches %s", currentTag, service.Tags), nil
 	}
 	if service.Delay == "" {
-		return candidates[0], nil
+		return candidates[0], "", nil
 	}
 
 	delay, err := schedule.ParseDelay(service.Delay)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	if len(candidates) > maxDelayChecks {
 		candidates = candidates[:maxDelayChecks]
@@ -556,16 +581,16 @@ func constrainedTarget(composeFile string, service schedule.Service, d dockerFun
 	for _, tag := range candidates {
 		created, err := d.tagCreated(baseImage, tag)
 		if err != nil {
-			return "", fmt.Errorf("publish date for %s:%s: %w", baseImage, tag, err)
+			return "", "", fmt.Errorf("publish date for %s:%s: %w", baseImage, tag, err)
 		}
 		age := time.Since(created)
 		if age >= delay {
-			return tag, nil
+			return tag, "", nil
 		}
 		fmt.Printf("%s: %s is only %s old (delay %s); skipping\n",
 			service.Name, tag, age.Round(time.Hour), service.Delay)
 	}
-	return "", nil
+	return "", fmt.Sprintf("%d newer tag(s) match %s but none is %s old yet", len(candidates), service.Tags, service.Delay), nil
 }
 
 // notifyUpgraded announces one service's successful upgrade via ntfy; note
