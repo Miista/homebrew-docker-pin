@@ -187,7 +187,11 @@ environment, so a hook like
 on_change: git add docker-compose.yml && git commit -m "optiplex/$PIN_SERVICE: upgrade to $PIN_NEW_IMAGE" && git push
 ```
 
-produces one revertable commit per service upgrade. A service with a `tags` regex only ever moves to the newest registry
+produces one revertable commit per service upgrade. The full set of hook
+variables: `PIN_SERVICE`, `PIN_OLD_IMAGE`/`PIN_NEW_IMAGE` (full references),
+`PIN_OLD_TAG`/`PIN_NEW_TAG` and `PIN_OLD_DIGEST`/`PIN_NEW_DIGEST` — so e.g.
+`git commit -m "$PIN_SERVICE: $PIN_OLD_TAG -> $PIN_NEW_TAG"` needs no string
+surgery. A service with a `tags` regex only ever moves to the newest registry
 tag matching that regex (numeric version order, prerelease/build suffixes rank
 below the bare release) and is left untouched when nothing newer matches — it
 never falls back to a moving tag, so e.g. a database can track `17.x-alpine`

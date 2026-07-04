@@ -470,10 +470,16 @@ func upgradeServiceTxn(cfg *schedule.Config, composeFile string, service schedul
 	note := ""
 	if cfg.OnChange != "" {
 		fmt.Printf("Running on_change for %s: %s\n", service.Name, cfg.OnChange)
+		oldTag, oldDigest := tagAndDigest(oldRaw)
+		newTag, newDigest := tagAndDigest(newRaw)
 		env := []string{
 			"PIN_SERVICE=" + service.Name,
 			"PIN_OLD_IMAGE=" + oldRaw,
 			"PIN_NEW_IMAGE=" + newRaw,
+			"PIN_OLD_TAG=" + oldTag,
+			"PIN_OLD_DIGEST=" + oldDigest,
+			"PIN_NEW_TAG=" + newTag,
+			"PIN_NEW_DIGEST=" + newDigest,
 		}
 		if err := sys.shell(filepath.Dir(composeFile), cfg.OnChange, env); err != nil {
 			// Non-fatal: the upgrade is live. A failed commit/push just means
@@ -484,6 +490,23 @@ func upgradeServiceTxn(cfg *schedule.Config, composeFile string, service schedul
 	}
 	notifyUpgraded(cfg, service.Name, oldRaw, newRaw, note)
 	return true, nil
+}
+
+// tagAndDigest splits a raw image reference ("base:tag@sha256:...") into its
+// tag and digest, either of which may be empty.
+func tagAndDigest(raw string) (tag, digest string) {
+	ref := raw
+	if i := strings.Index(ref, "@"); i != -1 {
+		digest = ref[i+1:]
+		ref = ref[:i]
+	}
+	// The tag is after the last ":" that follows the last "/" (so a registry
+	// host port never masquerades as a tag).
+	slash := strings.LastIndex(ref, "/")
+	if colon := strings.LastIndex(ref, ":"); colon > slash {
+		tag = ref[colon+1:]
+	}
+	return tag, digest
 }
 
 // maxDelayChecks bounds how many candidate publish dates one service may

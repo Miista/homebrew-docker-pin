@@ -145,7 +145,11 @@ func TestScheduleRun_UpgradesListedAndRunsHooks(t *testing.T) {
 		env := strings.Join(extraEnv, " ")
 		if !strings.Contains(env, "PIN_SERVICE=caddy") ||
 			!strings.Contains(env, "PIN_OLD_IMAGE=caddy:2.7.6@sha256:old1") ||
-			!strings.Contains(env, "PIN_NEW_IMAGE=caddy:") {
+			!strings.Contains(env, "PIN_NEW_IMAGE=caddy:") ||
+			!strings.Contains(env, "PIN_OLD_TAG=2.7.6") ||
+			!strings.Contains(env, "PIN_OLD_DIGEST=sha256:old1") ||
+			!strings.Contains(env, "PIN_NEW_TAG=") ||
+			!strings.Contains(env, "PIN_NEW_DIGEST=sha256:new1") {
 			t.Errorf("on_change env missing PIN_* vars: %v", extraEnv)
 		}
 		return nil

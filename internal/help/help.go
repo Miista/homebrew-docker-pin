@@ -133,9 +133,9 @@ Usage: docker pin schedule run [--dry-run]
 What the systemd service calls; also usable by hand to test. Each
 listed service (or all of them) is its own transaction: upgrade the
 pin like `+"`"+`docker pin upgrade`+"`"+`, run `+"`"+`docker compose up -d <service>`+"`"+`,
-run on_change (with PIN_SERVICE, PIN_OLD_IMAGE, PIN_NEW_IMAGE in its
-environment — so each upgrade can be its own commit), and send one
-ntfy notification. A service with a tags regex is upgraded to the
+run on_change (environment: PIN_SERVICE, PIN_OLD_IMAGE/PIN_NEW_IMAGE,
+PIN_OLD_TAG/PIN_NEW_TAG, PIN_OLD_DIGEST/PIN_NEW_DIGEST — so each
+upgrade can be its own commit), and send one ntfy notification. A service with a tags regex is upgraded to the
 newest matching registry tag only, and left alone when nothing newer
 matches. When a service's compose up fails, only that service's pin is
 rolled back and re-asserted — the remaining services proceed

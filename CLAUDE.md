@@ -97,8 +97,9 @@ Resolves which *version* tag (e.g. `1.2.3`) corresponds to a digest, so a
   falling back to a moving tag — when nothing qualifies. `exclude`/`delay`
   require `tags`. `run` executes each service as an independent transaction
   (`upgradeServiceTxn`): pin rewrite → `docker compose up -d <service>` →
-  `on_change` (env: `PIN_SERVICE`/`PIN_OLD_IMAGE`/`PIN_NEW_IMAGE`, so hooks
-  can commit per service) → per-service ntfy notification
+  `on_change` (env: `PIN_SERVICE`, `PIN_OLD_IMAGE`/`PIN_NEW_IMAGE`,
+  `PIN_OLD_TAG`/`PIN_NEW_TAG`, `PIN_OLD_DIGEST`/`PIN_NEW_DIGEST` via
+  `tagAndDigest`, so hooks can commit per service) → per-service ntfy notification
   (`notifyUpgraded`/`notifyFailed`). A failed `compose up` rolls back only
   that service's pin (restore pre-txn bytes + re-up) — other services proceed
   and the upgrade retries next run; a failed `on_change` is non-fatal (warn +
