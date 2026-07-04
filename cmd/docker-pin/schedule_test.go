@@ -290,6 +290,63 @@ func TestScheduleRun_TagConstraintUpToDate(t *testing.T) {
 	}
 }
 
+func TestScheduleRun_ComposeUpFailureRollsBack(t *testing.T) {
+	dir := chdirTemp(t, twoServices, "schedule: \"0 6 * * 1\"\nservices:\n  - caddy\non_change: ./hook.sh\n")
+	composeFile := filepath.Join(dir, "docker-compose.yml")
+	original, _ := os.ReadFile(composeFile)
+
+	d := dockerFuncs{
+		getDigest: func(ref string) (string, error) { return "sha256:new1", nil },
+		pull:      func(ref string) error { return nil },
+		resolve:   noResolve,
+	}
+	sys := fakeSys("linux", 1000)
+	composeUps := 0
+	sys.composeUp = func(file string) error {
+		composeUps++
+		if composeUps == 1 {
+			return fmt.Errorf("service caddy failed to start")
+		}
+		// Rollback re-up must see the ORIGINAL file content back in place.
+		data, _ := os.ReadFile(file)
+		if !strings.Contains(string(data), "caddy:2.7.6@sha256:old1") {
+			t.Errorf("rollback re-up ran against non-restored file:\n%s", data)
+		}
+		return nil
+	}
+	sys.shell = func(dir, command string) error { t.Error("on_change must not run after rollback"); return nil }
+
+	err := scheduleRun(d, sys)
+	if err == nil || !strings.Contains(err.Error(), "rolled back") {
+		t.Fatalf("want rolled-back error, got %v", err)
+	}
+	if composeUps != 2 {
+		t.Errorf("composeUp ran %d times, want 2 (failed up + rollback up)", composeUps)
+	}
+	restored, _ := os.ReadFile(composeFile)
+	if string(restored) != string(original) {
+		t.Errorf("compose file not restored to original:\n%s", restored)
+	}
+}
+
+func TestScheduleRun_OnChangeFailureIsNonFatal(t *testing.T) {
+	chdirTemp(t, twoServices, "schedule: \"0 6 * * 1\"\nservices:\n  - caddy\non_change: git push\n")
+
+	d := dockerFuncs{
+		getDigest: func(ref string) (string, error) { return "sha256:new1", nil },
+		pull:      func(ref string) error { return nil },
+		resolve:   noResolve,
+	}
+	sys := fakeSys("linux", 1000)
+	sys.shell = func(dir, command string) error { return fmt.Errorf("push rejected") }
+
+	// A failed push must not fail the run: the upgrade is live and committed
+	// locally; the next push carries it.
+	if err := scheduleRun(d, sys); err != nil {
+		t.Fatalf("on_change failure should be non-fatal, got %v", err)
+	}
+}
+
 func TestScheduleRun_CollectsFailures(t *testing.T) {
 	chdirTemp(t, twoServices, "schedule: \"0 6 * * 1\"\n")
 

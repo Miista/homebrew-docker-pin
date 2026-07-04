@@ -189,7 +189,12 @@ timestamp on GHCR and other OCI registries; at most 10 candidate dates are
 checked per service per run). With `notify.ntfy` configured, every run
 that upgraded or failed anything posts a summary (failures at high priority);
 the token is read from the environment or a `KEY=VALUE` file, never from
-`pin.yaml`. Restricting both day-of-month and day-of-week in the cron
+`pin.yaml`. Runs never leave the system in a bad state: if `docker compose up
+-d` fails, the compose file is rolled back to its pre-run pins and `up -d`
+re-run to re-assert the last working state (the upgrade retries next run), and
+a failed `on_change` (e.g. a rejected `git push`) is non-fatal — the local
+commit rides along with the next push. Restricting both day-of-month and
+day-of-week in the cron
 expression is rejected (cron ORs them, systemd ANDs them). Requires Linux with
 systemd.
 

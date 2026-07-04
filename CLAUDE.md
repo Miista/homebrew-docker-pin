@@ -95,7 +95,11 @@ Resolves which *version* tag (e.g. `1.2.3`) corresponds to a digest, so a
   cores; suffixed builds rank below the bare release), all in
   `internal/registry/tags.go`. Constrained services are skipped — never
   falling back to a moving tag — when nothing qualifies. `exclude`/`delay`
-  require `tags`.
+  require `tags`. `run` is self-healing: a failed `compose up -d` rolls the
+  compose file back to its pre-run bytes and re-runs `up -d` to re-assert the
+  last working pins (upgrade retries next run); a failed `on_change` is
+  non-fatal (warn + notification note — a stranded commit rides with the next
+  push).
   `notify.ntfy` (url + topic; token via `token_env`, default `NTFY_TOKEN`,
   optionally sourced from a `token_file` KEY=VALUE file so no secret sits in
   pin.yaml) makes `run` post a summary when anything upgraded or failed

@@ -130,10 +130,14 @@ each service listed in pin.yaml (or all of them), like
 `+"`"+`docker pin upgrade`+"`"+`. A service with a tags regex is upgraded to the
 newest matching registry tag only, and left alone when nothing newer
 matches. If the compose file changed, runs `+"`"+`docker compose up -d`+"`"+`
-followed by the on_change command. With notify.ntfy configured, each
-run that upgraded or failed anything is reported (failures at high
-priority). A single failed upgrade does not abort the others; the exit
-code is non-zero if anything failed.`},
+followed by the on_change command. When compose up fails, the compose
+file is rolled back to its pre-run pins and compose up is re-run to
+re-assert the last working state; the upgrade is retried next run. A
+failed on_change is non-fatal (a stranded commit rides along with the
+next push). With notify.ntfy configured, each run that upgraded or
+failed anything is reported (failures at high priority). A single
+failed upgrade does not abort the others; the exit code is non-zero if
+anything failed.`},
 
 	{"version", `docker pin version — print the version
 

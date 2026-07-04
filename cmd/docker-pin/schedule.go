@@ -405,24 +405,40 @@ func scheduleRun(d dockerFuncs, sys sysFuncs) error {
 		return err
 	}
 
+	var notes []string
 	if !bytes.Equal(before, after) {
 		fmt.Printf("Compose file changed, running docker compose up -d ...\n")
 		if err := sys.composeUp(composeFile); err != nil {
-			notifyRun(cfg, upgraded, append(failed, "docker compose up -d failed"))
-			return fmt.Errorf("docker compose up -d failed: %w", err)
+			// Never leave the system on pins that don't come up: restore the
+			// pre-run compose file and re-assert the last working state. The
+			// upgrade is retried from scratch on the next scheduled run.
+			fmt.Fprintf(os.Stderr, "docker compose up -d failed: %v\nRolling back %s to its previous pins ...\n", err, composeFile)
+			if werr := os.WriteFile(composeFile, before, 0o644); werr != nil {
+				notifyRun(cfg, nil, append(failed, "compose up failed AND rollback write failed — manual intervention needed"), nil)
+				return fmt.Errorf("compose up failed (%v) and rollback write failed: %w", err, werr)
+			}
+			if rerr := sys.composeUp(composeFile); rerr != nil {
+				notifyRun(cfg, nil, append(failed, "compose up failed; rollback compose up ALSO failed — containers may be down"), nil)
+				return fmt.Errorf("compose up failed (%v); rollback compose up also failed: %w", err, rerr)
+			}
+			notifyRun(cfg, nil, append(failed, "compose up failed; rolled back to previous pins (retrying next run)"), nil)
+			return fmt.Errorf("docker compose up -d failed, rolled back: %w", err)
 		}
 		if cfg.OnChange != "" {
 			fmt.Printf("Running on_change: %s\n", cfg.OnChange)
 			if err := sys.shell(filepath.Dir(composeFile), cfg.OnChange); err != nil {
-				notifyRun(cfg, upgraded, append(failed, "on_change command failed"))
-				return fmt.Errorf("on_change command failed: %w", err)
+				// Non-fatal: the upgrade itself succeeded and is running. A
+				// failed commit/push just means the change stays local until
+				// the next push (or the next run's on_change) carries it.
+				fmt.Fprintf(os.Stderr, "Warning: on_change command failed: %v (compose file change remains local)\n", err)
+				notes = append(notes, "note: on_change failed — change not pushed yet")
 			}
 		}
 	} else {
 		fmt.Println("All services already up to date; compose file unchanged.")
 	}
 
-	notifyRun(cfg, upgraded, failed)
+	notifyRun(cfg, upgraded, failed, notes)
 	if len(failed) > 0 {
 		return fmt.Errorf("failed to upgrade: %s", strings.Join(failed, ", "))
 	}
@@ -490,8 +506,9 @@ func constrainedTarget(composeFile string, service schedule.Service, d dockerFun
 
 // notifyRun reports the outcome of a schedule run via the configured ntfy
 // target. Notification failures only warn: losing a message must not turn a
-// successful upgrade run into a failed one.
-func notifyRun(cfg *schedule.Config, upgraded, failed []string) {
+// successful upgrade run into a failed one. notes are informational lines
+// appended to the body without raising the priority.
+func notifyRun(cfg *schedule.Config, upgraded, failed, notes []string) {
 	if cfg.Notify == nil || cfg.Notify.Ntfy == nil {
 		return
 	}
@@ -514,6 +531,7 @@ func notifyRun(cfg *schedule.Config, upgraded, failed []string) {
 		priority = notify.PriorityHigh
 		body = append(body, "failed: "+strings.Join(failed, ", "))
 	}
+	body = append(body, notes...)
 	if err := n.Send(title, strings.Join(body, "\n"), priority); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: notification failed: %v\n", err)
 	}
