@@ -77,6 +77,20 @@ Resolves which *version* tag (e.g. `1.2.3`) corresponds to a digest, so a
   image/tag/digest/pin-status (compose parse only — no docker/network calls).
   `--missing` shows only unpinned services and exits 1 if any exist (CI gate);
   `-q` prints bare service names for piping.
+- **`docker pin schedule <apply|status|remove|run>`**: declarative scheduled
+  upgrades driven by a `pin.yaml` (or `.yml`) next to the compose file
+  (`schedule:` cron expr, optional `services:` list, optional `on_change:`
+  hook). `apply`/`remove` install/remove a system-level systemd timer+service
+  pair (`docker-pin-<slug>.*` in /etc/systemd/system; slug = compose-dir
+  basename + path-hash; root + Linux required); `apply` is idempotent.
+  `status` shows config, install/drift state and next fire time. `run` is what
+  the service ExecStart calls: upgrades each configured service (collecting
+  failures), and if the compose file changed runs `docker compose up -d` then
+  `on_change` via `sh -c` in the compose dir. Cron→OnCalendar translation
+  lives in `internal/croncal` (rejects restricting both day-of-month and
+  day-of-week: cron ORs, systemd ANDs); config/unit generation in
+  `internal/schedule` (pure, tested on any OS); systemctl/exec calls are
+  seamed via `sysFuncs` in `cmd/docker-pin/schedule.go`.
 - **`docker unpin <service>`**: strips the `@sha256:...` digest, keeping `base:tag`;
   no-op if not pinned.
 - `--all` is supported by all commands.

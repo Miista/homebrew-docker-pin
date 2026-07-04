@@ -142,6 +142,37 @@ when any exist, so a single step enforces "everything in this repo is pinned":
 
 Read-only — parses the compose file, never touches Docker or the network.
 
+### Scheduled upgrades (systemd)
+
+Declare a schedule in a git-tracked `pin.yaml` (also accepts `pin.yml`) next
+to the compose file:
+
+```yaml
+schedule: "0 6 * * 1"        # 5-field cron expression, required
+services:                     # optional; omitted = every service
+  - caddy
+  - cloudflared
+on_change: ./pin-upgraded.sh  # optional; run in the compose dir after
+                              # upgrades changed the compose file
+```
+
+```bash
+sudo docker pin schedule apply    # install/update the systemd timer (idempotent)
+docker pin schedule status        # config, install/drift state, next fire time
+sudo docker pin schedule remove   # disable + delete the units; pin.yaml stays
+docker pin schedule run           # one scheduled run in the foreground
+```
+
+`apply` translates the cron expression to a systemd `OnCalendar` and writes a
+`docker-pin-<dir>-<hash>.service`/`.timer` pair into `/etc/systemd/system`.
+Each run upgrades the configured services like `docker pin upgrade`; when the
+compose file changed it runs `docker compose up -d` and then the `on_change`
+command. Restricting both day-of-month and day-of-week in the cron expression
+is rejected (cron ORs them, systemd ANDs them). Requires Linux with systemd.
+
+Because the schedule lives in `pin.yaml`, restoring a host from backup is
+just: clone the repo, `sudo docker pin schedule apply`.
+
 ### Unpin a service
 
 ```bash

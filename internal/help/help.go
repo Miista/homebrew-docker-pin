@@ -16,6 +16,7 @@ Usage: docker pin <service>
        docker pin upgrade <service> [version]
        docker pin upgrade --all
        docker pin list [--missing] [-q]
+       docker pin schedule <apply|status|remove|run>
        docker pin version
        docker pin help [<command>]
 
@@ -62,6 +63,63 @@ Flags:
   -m, --missing   Only show unpinned services, and exit non-zero if any
                   exist — usable directly as a CI gate.
   -q, --quiet     Print service names only (for scripting).`},
+
+	{"schedule", `docker pin schedule — declarative scheduled upgrades via systemd timers
+
+Usage: docker pin schedule apply
+       docker pin schedule status
+       docker pin schedule remove
+       docker pin schedule run
+
+Reads a git-trackable pin.yaml (or pin.yml) next to the compose file:
+
+  schedule: "0 6 * * 1"        # 5-field cron expression, required
+  services:                    # optional; omitted = every service
+    - caddy
+    - cloudflared
+  on_change: ./pin-upgraded.sh # optional; run after upgrades changed
+                               # the compose file (sh -c, compose dir)
+
+The cron expression is translated to a systemd OnCalendar expression.
+Names (MON-SUN, JAN-DEC), steps (*/6), ranges (1-5) and lists (1,3,5)
+are supported. Restricting both day-of-month and day-of-week is
+rejected: cron ORs them, systemd ANDs them.`},
+
+	{"schedule apply", `docker pin schedule apply — install or update the systemd timer
+
+Usage: sudo docker pin schedule apply
+
+Validates pin.yaml against the compose file, then writes
+docker-pin-<slug>.service/.timer into /etc/systemd/system and enables
+the timer. Idempotent: unchanged pin.yaml is a no-op; a changed one
+rewrites the units and reloads systemd. Requires root and Linux.`},
+
+	{"schedule status", `docker pin schedule status — show schedule config and unit state
+
+Usage: docker pin schedule status
+
+Prints the pin.yaml settings, whether the units are installed, whether
+they match what pin.yaml would generate (drift check), and the next
+fire time. Does not require root.`},
+
+	{"schedule remove", `docker pin schedule remove — disable and remove the systemd units
+
+Usage: sudo docker pin schedule remove
+
+Disables the timer and deletes both unit files. pin.yaml itself is
+left untouched, so `+"`"+`schedule apply`+"`"+` restores everything. Requires
+root and Linux.`},
+
+	{"schedule run", `docker pin schedule run — execute one scheduled run in the foreground
+
+Usage: docker pin schedule run
+
+What the systemd service calls; also usable by hand to test. Upgrades
+each service listed in pin.yaml (or all of them), like
+`+"`"+`docker pin upgrade`+"`"+`. If the compose file changed, runs
+`+"`"+`docker compose up -d`+"`"+` followed by the on_change command. A single
+failed upgrade does not abort the others; the exit code is non-zero if
+anything failed.`},
 
 	{"version", `docker pin version — print the version
 
