@@ -26,12 +26,14 @@ type dockerFuncs struct {
 	getDigest func(ref string) (string, error)
 	pull      func(ref string) error
 	resolve   func(baseImage, pullTag, digest, service string) string
+	listTags  func(baseImage string) ([]string, error)
 }
 
 var realDocker = dockerFuncs{
 	getDigest: docker.GetDigest,
 	pull:      docker.Pull,
 	resolve:   registry.ResolveOrWarn,
+	listTags:  registry.ListTags,
 }
 
 func main() {

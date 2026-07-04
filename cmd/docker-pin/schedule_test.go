@@ -96,8 +96,8 @@ func TestValidateSchedule(t *testing.T) {
 		errPart string
 	}{
 		{"ok all services", schedule.Config{Schedule: "0 6 * * 1"}, ""},
-		{"ok listed", schedule.Config{Schedule: "0 6 * * 1", Services: []string{"caddy"}}, ""},
-		{"unknown service", schedule.Config{Schedule: "0 6 * * 1", Services: []string{"nope"}}, `service "nope"`},
+		{"ok listed", schedule.Config{Schedule: "0 6 * * 1", Services: []schedule.Service{{Name: "caddy"}}}, ""},
+		{"unknown service", schedule.Config{Schedule: "0 6 * * 1", Services: []schedule.Service{{Name: "nope"}}}, `service "nope"`},
 		{"bad cron", schedule.Config{Schedule: "0 6 1 * 1"}, "day-of-month and day-of-week"},
 	}
 	for _, tt := range tests {
@@ -170,6 +170,57 @@ func TestScheduleRun_NoChangeSkipsHooks(t *testing.T) {
 	sys := fakeSys("linux", 1000)
 	sys.composeUp = func(file string) error { t.Error("composeUp should not run"); return nil }
 	sys.shell = func(dir, command string) error { t.Error("on_change should not run"); return nil }
+
+	if err := scheduleRun(d, sys); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestScheduleRun_TagConstraint(t *testing.T) {
+	dir := chdirTemp(t, twoServices,
+		"schedule: \"0 6 * * 1\"\nservices:\n  - name: caddy\n    tags: '^2\\.\\d+\\.\\d+$'\n")
+
+	var pulled []string
+	d := dockerFuncs{
+		getDigest: func(ref string) (string, error) { return "sha256:new1", nil },
+		pull:      func(ref string) error { pulled = append(pulled, ref); return nil },
+		resolve:   noResolve,
+		listTags: func(baseImage string) ([]string, error) {
+			return []string{"latest", "2.7.6", "2.8.4", "3.0.0", "2.8.4-beta.1"}, nil
+		},
+	}
+	sys := fakeSys("linux", 1000)
+
+	if err := scheduleRun(d, sys); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Newest tag matching the regex, NOT 3.0.0 and NOT the beta.
+	if len(pulled) != 1 || pulled[0] != "caddy:2.8.4" {
+		t.Errorf("pulled %v, want [caddy:2.8.4]", pulled)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "docker-compose.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "caddy:2.8.4@sha256:new1") {
+		t.Errorf("compose file not pinned to 2.8.4:\n%s", data)
+	}
+}
+
+func TestScheduleRun_TagConstraintUpToDate(t *testing.T) {
+	chdirTemp(t, twoServices,
+		"schedule: \"0 6 * * 1\"\nservices:\n  - name: caddy\n    tags: '^2\\.\\d+\\.\\d+$'\n")
+
+	d := dockerFuncs{
+		getDigest: func(ref string) (string, error) { t.Error("getDigest should not run"); return "", nil },
+		pull:      func(ref string) error { t.Error("pull should not run"); return nil },
+		resolve:   noResolve,
+		listTags: func(baseImage string) ([]string, error) {
+			return []string{"2.7.6", "2.6.0"}, nil // current 2.7.6 is already newest
+		},
+	}
+	sys := fakeSys("linux", 1000)
+	sys.composeUp = func(file string) error { t.Error("composeUp should not run"); return nil }
 
 	if err := scheduleRun(d, sys); err != nil {
 		t.Fatalf("unexpected error: %v", err)

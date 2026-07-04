@@ -76,9 +76,17 @@ Reads a git-trackable pin.yaml (or pin.yml) next to the compose file:
   schedule: "0 6 * * 1"        # 5-field cron expression, required
   services:                    # optional; omitted = every service
     - caddy
-    - cloudflared
+    - name: paperless-db       # constrained: upgrade only to registry
+      tags: '^17\.\d+-alpine$' # tags matching this regex (never escapes
+                               # to e.g. 18.x; skipped if none is newer)
   on_change: ./pin-upgraded.sh # optional; run after upgrades changed
                                # the compose file (sh -c, compose dir)
+  notify:                      # optional; report each run via ntfy
+    ntfy:
+      url: https://ntfy.example.net
+      topic: docker-pin
+      token_env: NTFY_TOKEN    # env var holding the token (this default)
+      token_file: /etc/ntfy.env # optional KEY=VALUE file to read it from
 
 The cron expression is translated to a systemd OnCalendar expression.
 Names (MON-SUN, JAN-DEC), steps (*/6), ranges (1-5) and lists (1,3,5)
@@ -116,10 +124,13 @@ Usage: docker pin schedule run
 
 What the systemd service calls; also usable by hand to test. Upgrades
 each service listed in pin.yaml (or all of them), like
-`+"`"+`docker pin upgrade`+"`"+`. If the compose file changed, runs
-`+"`"+`docker compose up -d`+"`"+` followed by the on_change command. A single
-failed upgrade does not abort the others; the exit code is non-zero if
-anything failed.`},
+`+"`"+`docker pin upgrade`+"`"+`. A service with a tags regex is upgraded to the
+newest matching registry tag only, and left alone when nothing newer
+matches. If the compose file changed, runs `+"`"+`docker compose up -d`+"`"+`
+followed by the on_change command. With notify.ntfy configured, each
+run that upgraded or failed anything is reported (failures at high
+priority). A single failed upgrade does not abort the others; the exit
+code is non-zero if anything failed.`},
 
 	{"version", `docker pin version — print the version
 

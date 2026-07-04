@@ -1,6 +1,7 @@
 package schedule
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -62,12 +63,32 @@ func TestLoad(t *testing.T) {
 		{
 			name:    "full",
 			content: "schedule: \"0 6 * * 1\"\nservices:\n  - caddy\n  - cloudflared\non_change: ./pin-upgraded.sh\n",
-			want:    Config{Schedule: "0 6 * * 1", Services: []string{"caddy", "cloudflared"}, OnChange: "./pin-upgraded.sh"},
+			want:    Config{Schedule: "0 6 * * 1", Services: []Service{{Name: "caddy"}, {Name: "cloudflared"}}, OnChange: "./pin-upgraded.sh"},
 		},
 		{
 			name:    "minimal",
 			content: "schedule: \"30 4 * * *\"\n",
 			want:    Config{Schedule: "30 4 * * *"},
+		},
+		{
+			name:    "tag constraint",
+			content: "schedule: \"0 6 * * 1\"\nservices:\n  - caddy\n  - name: paperless-db\n    tags: '^17\\.\\d+-alpine$'\n",
+			want:    Config{Schedule: "0 6 * * 1", Services: []Service{{Name: "caddy"}, {Name: "paperless-db", Tags: `^17\.\d+-alpine$`}}},
+		},
+		{
+			name:    "invalid tags regex",
+			content: "schedule: \"0 6 * * 1\"\nservices:\n  - name: caddy\n    tags: '['\n",
+			errPart: "invalid tags regex",
+		},
+		{
+			name:    "notify ntfy",
+			content: "schedule: \"0 6 * * 1\"\nnotify:\n  ntfy:\n    url: https://ntfy.example\n    topic: pins\n",
+			want:    Config{Schedule: "0 6 * * 1"},
+		},
+		{
+			name:    "notify ntfy missing topic",
+			content: "schedule: \"0 6 * * 1\"\nnotify:\n  ntfy:\n    url: https://ntfy.example\n",
+			errPart: "requires both 'url' and 'topic'",
 		},
 		{
 			name:    "missing schedule",
@@ -94,7 +115,7 @@ func TestLoad(t *testing.T) {
 				t.Fatal(err)
 			}
 			if cfg.Schedule != tt.want.Schedule || cfg.OnChange != tt.want.OnChange ||
-				strings.Join(cfg.Services, ",") != strings.Join(tt.want.Services, ",") {
+				fmt.Sprintf("%v", cfg.Services) != fmt.Sprintf("%v", tt.want.Services) {
 				t.Errorf("got %+v, want %+v", *cfg, tt.want)
 			}
 		})

@@ -6,11 +6,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 
 	"github.com/Miista/homebrew-docker-pin/internal/compose"
 	"github.com/Miista/homebrew-docker-pin/internal/croncal"
+	"github.com/Miista/homebrew-docker-pin/internal/notify"
+	"github.com/Miista/homebrew-docker-pin/internal/registry"
 	"github.com/Miista/homebrew-docker-pin/internal/schedule"
 )
 
@@ -119,8 +122,8 @@ func validateSchedule(cfg *schedule.Config, composeFile string) error {
 		known[s] = true
 	}
 	for _, s := range cfg.Services {
-		if !known[s] {
-			return fmt.Errorf("service %q in pin.yaml not found in %s", s, composeFile)
+		if !known[s.Name] {
+			return fmt.Errorf("service %q in pin.yaml not found in %s", s.Name, composeFile)
 		}
 	}
 	if cfg.OnChange != "" {
@@ -229,10 +232,21 @@ func scheduleStatus(sys sysFuncs) error {
 	if len(cfg.Services) == 0 {
 		fmt.Println("Services:    all services in the compose file")
 	} else {
-		fmt.Printf("Services:    %s\n", strings.Join(cfg.Services, ", "))
+		var parts []string
+		for _, s := range cfg.Services {
+			if s.Tags != "" {
+				parts = append(parts, fmt.Sprintf("%s (tags %s)", s.Name, s.Tags))
+			} else {
+				parts = append(parts, s.Name)
+			}
+		}
+		fmt.Printf("Services:    %s\n", strings.Join(parts, ", "))
 	}
 	if cfg.OnChange != "" {
 		fmt.Printf("On change:   %s\n", cfg.OnChange)
+	}
+	if cfg.Notify != nil && cfg.Notify.Ntfy != nil {
+		fmt.Printf("Notify:      ntfy %s topic %s\n", cfg.Notify.Ntfy.URL, cfg.Notify.Ntfy.Topic)
 	}
 
 	if err := requireSystemd(sys); err != nil {
@@ -335,9 +349,12 @@ func scheduleRun(d dockerFuncs, sys sysFuncs) error {
 
 	services := cfg.Services
 	if len(services) == 0 {
-		services, err = compose.ListServices(composeFile)
+		names, err := compose.ListServices(composeFile)
 		if err != nil {
 			return err
+		}
+		for _, n := range names {
+			services = append(services, schedule.Service{Name: n})
 		}
 	}
 
@@ -346,11 +363,29 @@ func scheduleRun(d dockerFuncs, sys sysFuncs) error {
 		return err
 	}
 
-	var failed []string
+	var failed, upgraded []string
 	for _, service := range services {
-		if err := upgradeInFile(composeFile, service, "", d); err != nil {
-			fmt.Fprintf(os.Stderr, "Error upgrading %s: %v\n", service, err)
-			failed = append(failed, service)
+		target := ""
+		if service.Tags != "" {
+			target, err = constrainedTarget(composeFile, service, d)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error upgrading %s: %v\n", service.Name, err)
+				failed = append(failed, service.Name)
+				continue
+			}
+			if target == "" {
+				fmt.Printf("%s: no newer tag matching %s; leaving as is\n", service.Name, service.Tags)
+				continue
+			}
+		}
+		oldRaw, _ := compose.RawImage(composeFile, service.Name)
+		if err := upgradeInFile(composeFile, service.Name, target, d); err != nil {
+			fmt.Fprintf(os.Stderr, "Error upgrading %s: %v\n", service.Name, err)
+			failed = append(failed, service.Name)
+			continue
+		}
+		if newRaw, _ := compose.RawImage(composeFile, service.Name); newRaw != oldRaw {
+			upgraded = append(upgraded, fmt.Sprintf("%s: %s -> %s", service.Name, oldRaw, newRaw))
 		}
 	}
 
@@ -362,11 +397,13 @@ func scheduleRun(d dockerFuncs, sys sysFuncs) error {
 	if !bytes.Equal(before, after) {
 		fmt.Printf("Compose file changed, running docker compose up -d ...\n")
 		if err := sys.composeUp(composeFile); err != nil {
+			notifyRun(cfg, upgraded, append(failed, "docker compose up -d failed"))
 			return fmt.Errorf("docker compose up -d failed: %w", err)
 		}
 		if cfg.OnChange != "" {
 			fmt.Printf("Running on_change: %s\n", cfg.OnChange)
 			if err := sys.shell(filepath.Dir(composeFile), cfg.OnChange); err != nil {
+				notifyRun(cfg, upgraded, append(failed, "on_change command failed"))
 				return fmt.Errorf("on_change command failed: %w", err)
 			}
 		}
@@ -374,8 +411,61 @@ func scheduleRun(d dockerFuncs, sys sysFuncs) error {
 		fmt.Println("All services already up to date; compose file unchanged.")
 	}
 
+	notifyRun(cfg, upgraded, failed)
 	if len(failed) > 0 {
 		return fmt.Errorf("failed to upgrade: %s", strings.Join(failed, ", "))
 	}
 	return nil
+}
+
+// constrainedTarget picks the upgrade target for a service with a tags regex:
+// the newest registry tag matching the regex that is newer than the current
+// tag. Returns "" when the service is already on the newest matching tag.
+// Unlike the unconstrained flow it never falls back to a moving tag, so the
+// constraint can't be silently escaped.
+func constrainedTarget(composeFile string, service schedule.Service, d dockerFuncs) (string, error) {
+	baseImage, currentTag, err := compose.ParseImage(composeFile, service.Name)
+	if err != nil {
+		return "", err
+	}
+	include, err := regexp.Compile(service.Tags)
+	if err != nil {
+		return "", err
+	}
+	tags, err := d.listTags(baseImage)
+	if err != nil {
+		return "", fmt.Errorf("listing tags for %s: %w", baseImage, err)
+	}
+	return registry.NewestMatching(tags, include, currentTag), nil
+}
+
+// notifyRun reports the outcome of a schedule run via the configured ntfy
+// target. Notification failures only warn: losing a message must not turn a
+// successful upgrade run into a failed one.
+func notifyRun(cfg *schedule.Config, upgraded, failed []string) {
+	if cfg.Notify == nil || cfg.Notify.Ntfy == nil {
+		return
+	}
+	if len(upgraded) == 0 && len(failed) == 0 {
+		return
+	}
+	token, err := cfg.Notify.Ntfy.Token()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
+		return
+	}
+	n := notify.Ntfy{URL: cfg.Notify.Ntfy.URL, Topic: cfg.Notify.Ntfy.Topic, Token: token}
+
+	title := fmt.Sprintf("docker pin: %d service(s) upgraded", len(upgraded))
+	priority := notify.PriorityDefault
+	var body []string
+	body = append(body, upgraded...)
+	if len(failed) > 0 {
+		title = fmt.Sprintf("docker pin: %d upgraded, %d FAILED", len(upgraded), len(failed))
+		priority = notify.PriorityHigh
+		body = append(body, "failed: "+strings.Join(failed, ", "))
+	}
+	if err := n.Send(title, strings.Join(body, "\n"), priority); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: notification failed: %v\n", err)
+	}
 }

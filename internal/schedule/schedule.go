@@ -22,10 +22,94 @@ type Config struct {
 	// Schedule is a 5-field cron expression. Required.
 	Schedule string `yaml:"schedule"`
 	// Services to upgrade; empty means every service in the compose file.
-	Services []string `yaml:"services"`
+	Services []Service `yaml:"services"`
 	// OnChange is run via `sh -c` in the compose dir after upgrades
 	// changed the compose file. Optional.
 	OnChange string `yaml:"on_change"`
+	// Notify configures where `schedule run` reports applied upgrades
+	// and failures. Optional.
+	Notify *Notify `yaml:"notify"`
+}
+
+// Service is one entry under `services:` — either a bare name or a mapping
+// with a tag constraint:
+//
+//	services:
+//	  - cloudflared              # unconstrained (variant-safe moving tag)
+//	  - name: paperless-db
+//	    tags: '^17\.\d+-alpine$' # only tags matching this regex
+type Service struct {
+	Name string `yaml:"name"`
+	// Tags restricts upgrades to registry tags matching this regex. The
+	// newest matching tag (numeric version order) newer than the current
+	// one is chosen; when nothing matches, the service is left untouched
+	// rather than falling back to a moving tag.
+	Tags string `yaml:"tags"`
+}
+
+// UnmarshalYAML accepts both `- name` and `- {name: ..., tags: ...}` forms.
+func (s *Service) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind == yaml.ScalarNode {
+		s.Name = value.Value
+		return nil
+	}
+	type plain Service
+	var p plain
+	if err := value.Decode(&p); err != nil {
+		return err
+	}
+	*s = Service(p)
+	return nil
+}
+
+// ServiceNames returns just the names of the configured services.
+func (c *Config) ServiceNames() []string {
+	names := make([]string, len(c.Services))
+	for i, s := range c.Services {
+		names[i] = s.Name
+	}
+	return names
+}
+
+// Notify is the `notify:` block of pin.yaml.
+type Notify struct {
+	Ntfy *Ntfy `yaml:"ntfy"`
+}
+
+// Ntfy describes an ntfy.sh-compatible notification target. The access token
+// is never stored in pin.yaml: it is read from the environment variable named
+// by token_env (default NTFY_TOKEN), optionally sourced from a KEY=VALUE file
+// named by token_file first.
+type Ntfy struct {
+	URL      string `yaml:"url"`
+	Topic    string `yaml:"topic"`
+	TokenEnv string `yaml:"token_env"`
+	// TokenFile is a KEY=VALUE file (e.g. an env_file) to read the token
+	// from; the key looked up is TokenEnv. Optional — without it the
+	// process environment is used.
+	TokenFile string `yaml:"token_file"`
+}
+
+// Token resolves the ntfy access token. An empty return means unauthenticated.
+func (n *Ntfy) Token() (string, error) {
+	key := n.TokenEnv
+	if key == "" {
+		key = "NTFY_TOKEN"
+	}
+	if n.TokenFile != "" {
+		data, err := os.ReadFile(n.TokenFile)
+		if err != nil {
+			return "", fmt.Errorf("notify token_file: %w", err)
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, key+"=") {
+				return strings.TrimPrefix(line, key+"="), nil
+			}
+		}
+		return "", fmt.Errorf("notify token_file %s has no %s= line", n.TokenFile, key)
+	}
+	return os.Getenv(key), nil
 }
 
 // FindFile returns the pin.yaml (or pin.yml) sitting next to composeFile.
@@ -52,6 +136,22 @@ func Load(path string) (*Config, error) {
 	}
 	if strings.TrimSpace(cfg.Schedule) == "" {
 		return nil, fmt.Errorf("%s: 'schedule' is required", path)
+	}
+	for _, s := range cfg.Services {
+		if strings.TrimSpace(s.Name) == "" {
+			return nil, fmt.Errorf("%s: service entry with empty name", path)
+		}
+		if s.Tags != "" {
+			if _, err := regexp.Compile(s.Tags); err != nil {
+				return nil, fmt.Errorf("%s: service %s: invalid tags regex: %v", path, s.Name, err)
+			}
+		}
+	}
+	if cfg.Notify != nil && cfg.Notify.Ntfy != nil {
+		n := cfg.Notify.Ntfy
+		if strings.TrimSpace(n.URL) == "" || strings.TrimSpace(n.Topic) == "" {
+			return nil, fmt.Errorf("%s: notify.ntfy requires both 'url' and 'topic'", path)
+		}
 	}
 	return &cfg, nil
 }

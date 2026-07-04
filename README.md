@@ -151,9 +151,16 @@ to the compose file:
 schedule: "0 6 * * 1"        # 5-field cron expression, required
 services:                     # optional; omitted = every service
   - caddy
-  - cloudflared
+  - name: paperless-db        # constrained: upgrade only to registry tags
+    tags: '^17\.\d+-alpine$'  # matching this regex — majors stay pinned
 on_change: ./pin-upgraded.sh  # optional; run in the compose dir after
                               # upgrades changed the compose file
+notify:                       # optional; report each run via ntfy
+  ntfy:
+    url: https://ntfy.example.net
+    topic: docker-pin
+    token_env: NTFY_TOKEN     # env var holding the token (this is the default)
+    token_file: /etc/ntfy.env # optional KEY=VALUE file to read it from
 ```
 
 ```bash
@@ -167,8 +174,16 @@ docker pin schedule run           # one scheduled run in the foreground
 `docker-pin-<dir>-<hash>.service`/`.timer` pair into `/etc/systemd/system`.
 Each run upgrades the configured services like `docker pin upgrade`; when the
 compose file changed it runs `docker compose up -d` and then the `on_change`
-command. Restricting both day-of-month and day-of-week in the cron expression
-is rejected (cron ORs them, systemd ANDs them). Requires Linux with systemd.
+command. A service with a `tags` regex only ever moves to the newest registry
+tag matching that regex (numeric version order, prerelease/build suffixes rank
+below the bare release) and is left untouched when nothing newer matches — it
+never falls back to a moving tag, so e.g. a database can track `17.x-alpine`
+patches while never jumping to 18. With `notify.ntfy` configured, every run
+that upgraded or failed anything posts a summary (failures at high priority);
+the token is read from the environment or a `KEY=VALUE` file, never from
+`pin.yaml`. Restricting both day-of-month and day-of-week in the cron
+expression is rejected (cron ORs them, systemd ANDs them). Requires Linux with
+systemd.
 
 Because the schedule lives in `pin.yaml`, restoring a host from backup is
 just: clone the repo, `sudo docker pin schedule apply`.

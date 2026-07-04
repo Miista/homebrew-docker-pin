@@ -80,7 +80,18 @@ Resolves which *version* tag (e.g. `1.2.3`) corresponds to a digest, so a
 - **`docker pin schedule <apply|status|remove|run>`**: declarative scheduled
   upgrades driven by a `pin.yaml` (or `.yml`) next to the compose file
   (`schedule:` cron expr, optional `services:` list, optional `on_change:`
-  hook). `apply`/`remove` install/remove a system-level systemd timer+service
+  hook, optional `notify.ntfy:` target). A `services:` entry is either a bare
+  name or `{name, tags}` where `tags` is a regex constraining which registry
+  tags qualify (custom `Service.UnmarshalYAML`); constrained services upgrade
+  to the newest matching tag per `registry.CompareVersions` (numeric dotted
+  cores; suffixed builds rank below the bare release) via
+  `registry.ListTags`/`NewestMatching` (`internal/registry/tags.go`), and are
+  skipped — never falling back to a moving tag — when nothing newer matches.
+  `notify.ntfy` (url + topic; token via `token_env`, default `NTFY_TOKEN`,
+  optionally sourced from a `token_file` KEY=VALUE file so no secret sits in
+  pin.yaml) makes `run` post a summary when anything upgraded or failed
+  (failures at priority 4, via `internal/notify`); notification failures only
+  warn. `apply`/`remove` install/remove a system-level systemd timer+service
   pair (`docker-pin-<slug>.*` in /etc/systemd/system; slug = compose-dir
   basename + path-hash; root + Linux required); `apply` is idempotent.
   `status` shows config, install/drift state and next fire time. `run` is what
