@@ -45,6 +45,10 @@ func main() {
 			vendor, version, shortDesc)
 		return
 	}
+	if len(os.Args) > 1 && (os.Args[1] == "__complete" || os.Args[1] == "__completeNoDesc") {
+		runComplete(os.Args[2:])
+		return
+	}
 
 	args := os.Args[1:]
 	if len(args) > 0 && args[0] == pluginName {

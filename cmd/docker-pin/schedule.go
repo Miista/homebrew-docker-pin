@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"text/tabwriter"
 	"time"
 
 	"github.com/Miista/homebrew-docker-pin/internal/compose"
@@ -241,40 +242,36 @@ func scheduleStatus(sys sysFuncs) error {
 		return err
 	}
 
-	fmt.Printf("Config:      %s\n", pinFile)
-	fmt.Printf("Schedule:    %s  (OnCalendar=%s)\n", cfg.Schedule, onCal)
-	if len(cfg.Services) == 0 {
-		fmt.Println("Services:    all services in the compose file")
-	} else {
-		var parts []string
-		for _, s := range cfg.Services {
-			var opts []string
-			if s.Tags != "" {
-				opts = append(opts, "tags "+s.Tags)
-			}
-			if s.Exclude != "" {
-				opts = append(opts, "exclude "+s.Exclude)
-			}
-			if s.Delay != "" {
-				opts = append(opts, "delay "+s.Delay)
-			}
-			if len(opts) > 0 {
-				parts = append(parts, fmt.Sprintf("%s (%s)", s.Name, strings.Join(opts, ", ")))
-			} else {
-				parts = append(parts, s.Name)
-			}
-		}
-		fmt.Printf("Services:    %s\n", strings.Join(parts, ", "))
-	}
+	fmt.Printf("Config:        %s\n", pinFile)
+	fmt.Printf("Schedule:      %s  (systemd OnCalendar: %s)\n", cfg.Schedule, onCal)
 	if cfg.OnChange != "" {
-		fmt.Printf("On change:   %s\n", cfg.OnChange)
+		fmt.Printf("On change:     %s\n", cfg.OnChange)
 	}
 	if cfg.Notify != nil && cfg.Notify.Ntfy != nil {
-		fmt.Printf("Notify:      ntfy %s topic %s\n", cfg.Notify.Ntfy.URL, cfg.Notify.Ntfy.Topic)
+		fmt.Printf("Notify:        ntfy %s, topic %q\n", cfg.Notify.Ntfy.URL, cfg.Notify.Ntfy.Topic)
 	}
 
+	fmt.Println("\nServices:")
+	if len(cfg.Services) == 0 {
+		fmt.Println("  (all services in the compose file, unconstrained)")
+	} else {
+		w := tabwriter.NewWriter(os.Stdout, 2, 8, 2, ' ', 0)
+		fmt.Fprintln(w, "  SERVICE\tTAGS\tEXCLUDE\tDELAY")
+		for _, s := range cfg.Services {
+			dash := func(v string) string {
+				if v == "" {
+					return "-"
+				}
+				return v
+			}
+			fmt.Fprintf(w, "  %s\t%s\t%s\t%s\n", s.Name, dash(s.Tags), dash(s.Exclude), dash(s.Delay))
+		}
+		w.Flush()
+	}
+	fmt.Println()
+
 	if err := requireSystemd(sys); err != nil {
-		fmt.Printf("Units:       not checked — %v\n", err)
+		fmt.Printf("Systemd timer: not checked — %v\n", err)
 		return nil
 	}
 
@@ -286,7 +283,7 @@ func scheduleStatus(sys sysFuncs) error {
 	_, svcErr := os.Stat(svcPath)
 	_, tmrErr := os.Stat(tmrPath)
 	if svcErr != nil || tmrErr != nil {
-		fmt.Printf("Units:       not installed (run `sudo docker pin schedule apply`)\n")
+		fmt.Printf("Systemd timer: NOT INSTALLED — nothing runs on a schedule yet; run `sudo docker pin schedule apply`\n")
 		return nil
 	}
 
@@ -299,15 +296,15 @@ func scheduleStatus(sys sysFuncs) error {
 		return err
 	}
 	if unitFileMatches(svcPath, svcContent) && unitFileMatches(tmrPath, tmrContent) {
-		fmt.Printf("Units:       installed, in sync (%s)\n", tmrName)
+		fmt.Printf("Systemd timer: installed and in sync with pin.yaml (%s)\n", tmrName)
 	} else {
-		fmt.Printf("Units:       installed, but DRIFTED from pin.yaml — run `sudo docker pin schedule apply`\n")
+		fmt.Printf("Systemd timer: installed but OUT OF SYNC with pin.yaml — run `sudo docker pin schedule apply`\n")
 	}
 
 	if out, err := sys.analyze("calendar", onCal); err == nil {
 		for _, line := range strings.Split(out, "\n") {
 			if strings.Contains(line, "Next elapse") {
-				fmt.Printf("Next run:    %s\n", strings.TrimSpace(strings.SplitN(line, ":", 2)[1]))
+				fmt.Printf("Next run:      %s\n", strings.TrimSpace(strings.SplitN(line, ":", 2)[1]))
 			}
 		}
 	} else if out, err := sys.systemctl("list-timers", "--no-pager", tmrName); err == nil {

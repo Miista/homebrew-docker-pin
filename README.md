@@ -215,6 +215,19 @@ systemd.
 Because the schedule lives in `pin.yaml`, restoring a host from backup is
 just: clone the repo, `sudo docker pin schedule apply`.
 
+### Shell completion
+
+Both plugins implement the completion protocol the Docker CLI (v25+) uses to
+delegate `docker pin <TAB>` to plugins: subcommands, flags, and the service
+names from the nearest compose file all complete. It requires docker's own
+completion v2 to be installed for your shell, e.g. for zsh:
+
+```sh
+mkdir -p ~/.docker/completions
+docker completion zsh > ~/.docker/completions/_docker
+# ensure fpath includes ~/.docker/completions before compinit in ~/.zshrc
+```
+
 ### Unpin a service
 
 ```bash
