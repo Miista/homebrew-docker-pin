@@ -25,8 +25,7 @@ func ListTags(baseImage string) ([]string, error) {
 		return ghcrListTags(client, token, path)
 	}
 
-	first := strings.SplitN(baseImage, "/", 2)[0]
-	if !strings.Contains(first, ".") || strings.HasPrefix(baseImage, "docker.io/") {
+	if isDockerHub(baseImage) {
 		namespace, repo := splitDockerHubImage(baseImage)
 		url := fmt.Sprintf(
 			"https://hub.docker.com/v2/repositories/%s/%s/tags?page_size=100&ordering=last_updated",
@@ -110,7 +109,43 @@ func CompareVersions(a, b string) int {
 	case mb[2] == "":
 		return -1
 	default:
-		return strings.Compare(ma[2], mb[2])
+		return compareSuffixes(ma[2], mb[2])
+	}
+}
+
+var suffixRunRe = regexp.MustCompile(`\d+|\D+`)
+
+// compareSuffixes orders version suffixes like rpm/dpkg do: split into
+// alternating numeric and non-numeric runs, comparing numeric runs
+// numerically — so -ls100 > -ls99 and -r10 > -r2, where a plain lexical
+// compare would invert them.
+func compareSuffixes(a, b string) int {
+	ra, rb := suffixRunRe.FindAllString(a, -1), suffixRunRe.FindAllString(b, -1)
+	for i := 0; i < len(ra) && i < len(rb); i++ {
+		na, ea := strconv.Atoi(ra[i])
+		nb, eb := strconv.Atoi(rb[i])
+		switch {
+		case ea == nil && eb == nil:
+			if na != nb {
+				if na < nb {
+					return -1
+				}
+				return 1
+			}
+		default:
+			if c := strings.Compare(ra[i], rb[i]); c != 0 {
+				return c
+			}
+		}
+	}
+	// Equal prefix runs: the longer suffix ranks higher (more specific build).
+	switch {
+	case len(ra) == len(rb):
+		return 0
+	case len(ra) < len(rb):
+		return -1
+	default:
+		return 1
 	}
 }
 
@@ -148,8 +183,7 @@ func MatchingCandidates(tags []string, include, exclude *regexp.Regexp, current 
 // "created" timestamp (the build time) is used, which for CI-published images
 // is effectively the release time.
 func TagCreated(baseImage, tag string) (time.Time, error) {
-	first := strings.SplitN(baseImage, "/", 2)[0]
-	if !strings.Contains(first, ".") || strings.HasPrefix(baseImage, "docker.io/") {
+	if isDockerHub(baseImage) {
 		return dockerHubTagCreated(baseImage, tag)
 	}
 	host, repo := splitRegistryRepo(baseImage)

@@ -248,6 +248,16 @@ services:
 			wantLine: "    image: nginx:1.25@sha256:abc",
 		},
 		{
+			name: "inline comment on the image line is preserved",
+			compose: `services:
+  web:
+    image: nginx:1.25  # renovate: keep on 1.x
+`,
+			service:  "web",
+			pinned:   "nginx:1.26@sha256:abc",
+			wantLine: "    image: nginx:1.26@sha256:abc  # renovate: keep on 1.x",
+		},
+		{
 			name: "comments and blank lines inside blocks are neutral",
 			compose: `services:
   web:

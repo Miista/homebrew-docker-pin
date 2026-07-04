@@ -24,14 +24,24 @@ func ResolveVersionTag(baseImage, digest string) (Result, error) {
 		return resolveGHCR(baseImage, digest)
 	}
 
-	// Docker Hub: no dots in the first path component (or explicit docker.io/ prefix)
-	first := strings.SplitN(baseImage, "/", 2)[0]
-	if !strings.Contains(first, ".") || strings.HasPrefix(baseImage, "docker.io/") {
+	if isDockerHub(baseImage) {
 		return resolveDockerHub(baseImage, digest)
 	}
 
 	// Any other registry: attempt a generic OCI Distribution lookup.
 	return resolveOCI(baseImage, digest)
+}
+
+// isDockerHub reports whether an image reference resolves to Docker Hub.
+// Docker's rule: the first path segment names a registry host only when it
+// contains a dot or a port colon, or is exactly "localhost" — otherwise it is
+// a Hub namespace.
+func isDockerHub(baseImage string) bool {
+	if strings.HasPrefix(baseImage, "docker.io/") {
+		return true
+	}
+	first := strings.SplitN(baseImage, "/", 2)[0]
+	return !strings.ContainsAny(first, ".:") && first != "localhost"
 }
 
 // registryKind returns a human-readable name for the registry an image lives in,
@@ -40,11 +50,10 @@ func registryKind(baseImage string) string {
 	if strings.HasPrefix(baseImage, "ghcr.io/") {
 		return "GitHub Container Registry"
 	}
-	first := strings.SplitN(baseImage, "/", 2)[0]
-	if !strings.Contains(first, ".") || strings.HasPrefix(baseImage, "docker.io/") {
+	if isDockerHub(baseImage) {
 		return "Docker Hub"
 	}
-	return fmt.Sprintf("the OCI registry API at %s", first)
+	return fmt.Sprintf("the OCI registry API at %s", strings.SplitN(baseImage, "/", 2)[0])
 }
 
 // ResolveOrWarn resolves the version tag for an image pulled by pullTag, printing

@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-var versionRe = regexp.MustCompile(`^\d+(\.\d+)+([.\-][a-zA-Z0-9]+)*$`)
+var versionRe = regexp.MustCompile(`^v?\d+(\.\d+)+([.\-][a-zA-Z0-9]+)*$`)
 
 func isVersionTag(tag string) bool {
 	return versionRe.MatchString(tag)
@@ -43,18 +43,20 @@ func resolveDockerHubFromURL(digest, url string) (Result, error) {
 
 	var matches []string
 	versionTagsSeen := 0
-	for url != "" {
+	for page := 0; url != "" && page < hubMaxTagPages; page++ {
 		resp, err := client.Get(url)
 		if err != nil {
 			return Result{}, err
 		}
-		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
 			return Result{}, fmt.Errorf("docker hub API: HTTP %d", resp.StatusCode)
 		}
 
 		var data hubTagsResponse
-		if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		err = json.NewDecoder(resp.Body).Decode(&data)
+		resp.Body.Close()
+		if err != nil {
 			return Result{}, err
 		}
 		for _, tag := range data.Results {

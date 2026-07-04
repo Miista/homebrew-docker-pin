@@ -114,14 +114,24 @@ func (n *Ntfy) Token() (string, error) {
 			return "", fmt.Errorf("notify token_file: %w", err)
 		}
 		for _, line := range strings.Split(string(data), "\n") {
-			line = strings.TrimSpace(line)
+			line = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "export "))
 			if strings.HasPrefix(line, key+"=") {
-				return strings.TrimPrefix(line, key+"="), nil
+				return unquoteEnvValue(strings.TrimPrefix(line, key+"=")), nil
 			}
 		}
 		return "", fmt.Errorf("notify token_file %s has no %s= line", n.TokenFile, key)
 	}
 	return os.Getenv(key), nil
+}
+
+// unquoteEnvValue strips matching surrounding quotes, mirroring how systemd
+// EnvironmentFile and dotenv loaders read KEY="value" lines.
+func unquoteEnvValue(v string) string {
+	v = strings.TrimSpace(v)
+	if len(v) >= 2 && (v[0] == '"' || v[0] == '\'') && v[len(v)-1] == v[0] {
+		return v[1 : len(v)-1]
+	}
+	return v
 }
 
 // FindFile returns the pin.yaml (or pin.yml) sitting next to composeFile.

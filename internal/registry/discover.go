@@ -19,8 +19,7 @@ func registryEndpoint(baseImage string) (baseURL, repo string) {
 	if strings.HasPrefix(baseImage, "ghcr.io/") {
 		return "https://ghcr.io", strings.TrimPrefix(baseImage, "ghcr.io/")
 	}
-	first := strings.SplitN(baseImage, "/", 2)[0]
-	if !strings.Contains(first, ".") || strings.HasPrefix(baseImage, "docker.io/") {
+	if isDockerHub(baseImage) {
 		img := strings.TrimPrefix(baseImage, "docker.io/")
 		if !strings.Contains(img, "/") {
 			img = "library/" + img // official images live under library/
@@ -56,7 +55,16 @@ func tagExists(client *http.Client, baseURL, repo, tag string) (bool, error) {
 // resolved unambiguously, so an upgrade never silently switches image flavor
 // (e.g. alpine -> debian).
 func MovingPullTag(baseImage, currentTag string) (string, error) {
-	if currentTag == "latest" || pureVersionRe.MatchString(currentTag) {
+	if currentTag == "latest" {
+		return "latest", nil
+	}
+	if pureVersionRe.MatchString(currentTag) {
+		// A single-segment version like "15" or "20" is itself the moving tag
+		// for that major line (postgres:15, node:20). Sending it to `latest`
+		// would silently cross major versions — stay on the line instead.
+		if !strings.Contains(currentTag, ".") {
+			return currentTag, nil
+		}
 		return "latest", nil
 	}
 	if m := versionVariantRe.FindStringSubmatch(currentTag); m != nil {

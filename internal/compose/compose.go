@@ -117,7 +117,12 @@ func PinImage(file, serviceName, pinnedImage string) error {
 	if err != nil {
 		return fmt.Errorf("%w in %s", err, file)
 	}
-	lines[idx] = prefix + pinnedImage
+	// Keep any inline comment after the value (image refs cannot contain '#').
+	comment := ""
+	if m := regexp.MustCompile(`\s+#.*$`).FindString(lines[idx]); m != "" {
+		comment = m
+	}
+	lines[idx] = prefix + pinnedImage + comment
 	return os.WriteFile(file, []byte(strings.Join(lines, "\n")), 0o644)
 }
 

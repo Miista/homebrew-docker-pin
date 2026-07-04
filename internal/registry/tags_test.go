@@ -28,6 +28,40 @@ func TestCompareVersions(t *testing.T) {
 	}
 }
 
+func TestIsDockerHub(t *testing.T) {
+	hub := []string{"caddy", "library/postgres", "docker.io/library/redis", "miista/foo"}
+	notHub := []string{"localhost:5000/app", "localhost/app", "myregistry:5000/app", "ghcr.io/x/y", "registry.example.com/app"}
+	for _, img := range hub {
+		if !isDockerHub(img) {
+			t.Errorf("isDockerHub(%q) = false, want true", img)
+		}
+	}
+	for _, img := range notHub {
+		if isDockerHub(img) {
+			t.Errorf("isDockerHub(%q) = true, want false", img)
+		}
+	}
+}
+
+func TestCompareVersions_NumericSuffixRuns(t *testing.T) {
+	tests := []struct {
+		a, b string
+		want int
+	}{
+		{"1.32.8-ls100", "1.32.8-ls99", 1},  // lexical compare would say -1
+		{"3.18.4-r10", "3.18.4-r2", 1},
+		{"16-3.10", "16-3.9", 1},
+		{"1.0.0-rc10", "1.0.0-rc9", 1},
+		{"1.0.0-rc2", "1.0.0-rc10", -1},
+		{"1.0.0-alpha", "1.0.0-beta", -1},
+	}
+	for _, tt := range tests {
+		if got := CompareVersions(tt.a, tt.b); got != tt.want {
+			t.Errorf("CompareVersions(%q, %q) = %d, want %d", tt.a, tt.b, got, tt.want)
+		}
+	}
+}
+
 func TestNewestMatching(t *testing.T) {
 	tags := []string{"latest", "18.1-alpine", "17.4-alpine", "17.5-alpine", "17.5", "dev"}
 	alpine17 := regexp.MustCompile(`^17\.\d+-alpine$`)

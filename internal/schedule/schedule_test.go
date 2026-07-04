@@ -54,6 +54,27 @@ func TestFindFile(t *testing.T) {
 	}
 }
 
+func TestNtfyToken_File(t *testing.T) {
+	dir := t.TempDir()
+	p := writeFile(t, dir, "tokens.env", "# comment\nOTHER=x\nexport NTFY_TOKEN=\"tk_quoted\"\n")
+	n := &Ntfy{TokenFile: p}
+	got, err := n.Token()
+	if err != nil || got != "tk_quoted" {
+		t.Errorf("Token() = %q, %v; want tk_quoted (quotes and export stripped)", got, err)
+	}
+
+	p2 := writeFile(t, dir, "plain.env", "NTFY_TOKEN=tk_plain\n")
+	n2 := &Ntfy{TokenFile: p2}
+	if got, _ := n2.Token(); got != "tk_plain" {
+		t.Errorf("Token() = %q, want tk_plain", got)
+	}
+
+	n3 := &Ntfy{TokenFile: p2, TokenEnv: "MISSING"}
+	if _, err := n3.Token(); err == nil {
+		t.Error("want error for missing key in token_file")
+	}
+}
+
 func TestLoad(t *testing.T) {
 	tests := []struct {
 		name    string

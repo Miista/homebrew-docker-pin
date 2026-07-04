@@ -14,9 +14,10 @@ import (
 func TestIsVersionTag(t *testing.T) {
 	valid := []string{
 		"1.0", "1.2.3", "2024.6.1", "1.0.0-beta1", "1.0.0.rc1", "3.12.4",
+		"v1.2.3", // v-prefixed releases are the norm on GHCR
 	}
 	invalid := []string{
-		"latest", "stable", "main", "edge", "", "v1.2.3", "sha256:abc",
+		"latest", "stable", "main", "edge", "", "sha256:abc", "version1.2",
 	}
 	for _, tag := range valid {
 		if !isVersionTag(tag) {

@@ -75,7 +75,10 @@ func TestMovingPullTag_NonNetwork(t *testing.T) {
 	}{
 		{"latest", "latest", false},
 		{"2.11.4", "latest", false},
-		{"2", "latest", false},
+		// A single-segment version IS the moving tag for its major line;
+		// jumping to latest would cross majors (postgres:15 -> 17).
+		{"2", "2", false},
+		{"15", "15", false},
 		{"alpine", "alpine", false}, // bare non-version tag is already moving
 		{"stable", "stable", false},
 	}
