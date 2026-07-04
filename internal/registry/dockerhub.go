@@ -44,7 +44,7 @@ func resolveDockerHubFromURL(digest, url string) (Result, error) {
 	var matches []string
 	versionTagsSeen := 0
 	for page := 0; url != "" && page < hubMaxTagPages; page++ {
-		resp, err := client.Get(url)
+		resp, err := getWithRetry(client, url)
 		if err != nil {
 			return Result{}, err
 		}

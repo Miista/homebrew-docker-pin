@@ -49,7 +49,7 @@ func listDockerHubTags(url string) ([]string, error) {
 	client := &http.Client{Timeout: 15 * time.Second}
 	var tags []string
 	for page := 0; url != "" && page < hubMaxTagPages; page++ {
-		resp, err := client.Get(url)
+		resp, err := getWithRetry(client, url)
 		if err != nil {
 			return nil, err
 		}
@@ -198,7 +198,7 @@ func dockerHubTagCreated(baseImage, tag string) (time.Time, error) {
 	namespace, repo := splitDockerHubImage(baseImage)
 	url := fmt.Sprintf("https://hub.docker.com/v2/repositories/%s/%s/tags/%s", namespace, repo, tag)
 	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Get(url)
+	resp, err := getWithRetry(client, url)
 	if err != nil {
 		return time.Time{}, err
 	}

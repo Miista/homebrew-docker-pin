@@ -68,7 +68,7 @@ func ghcrToken(client *http.Client, path string) (string, error) {
 
 func ghcrTokenFromBase(client *http.Client, path, baseURL string) (string, error) {
 	url := fmt.Sprintf("%s/token?scope=repository:%s:pull&service=ghcr.io", baseURL, path)
-	resp, err := client.Get(url)
+	resp, err := getWithRetry(client, url)
 	if err != nil {
 		return "", err
 	}
@@ -96,7 +96,7 @@ func ghcrListTagsFromBase(client *http.Client, token, path, baseURL string) ([]s
 	req, _ := http.NewRequest("GET", fmt.Sprintf("%s/v2/%s/tags/list", baseURL, path), nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 
-	resp, err := client.Do(req)
+	resp, err := doWithRetry(func() (*http.Response, error) { return client.Do(req) })
 	if err != nil {
 		return nil, err
 	}
@@ -128,7 +128,7 @@ func ghcrManifestDigestFromBase(client *http.Client, token, path, tag, baseURL s
 		"application/vnd.docker.distribution.manifest.v2+json",
 	}, ","))
 
-	resp, err := client.Do(req)
+	resp, err := doWithRetry(func() (*http.Response, error) { return client.Do(req) })
 	if err != nil {
 		return "", err
 	}

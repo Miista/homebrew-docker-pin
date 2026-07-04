@@ -89,7 +89,7 @@ func ociDo(client *http.Client, req *http.Request, accept string) (*http.Respons
 	if accept != "" {
 		req.Header.Set("Accept", accept)
 	}
-	resp, err := client.Do(req)
+	resp, err := doWithRetry(func() (*http.Response, error) { return client.Do(req) })
 	if err != nil {
 		return nil, err
 	}
@@ -125,7 +125,7 @@ func ociDo(client *http.Client, req *http.Request, accept string) (*http.Respons
 		req2.Header.Set("Accept", accept)
 	}
 	req2.Header.Set("Authorization", "Bearer "+token)
-	return client.Do(req2)
+	return doWithRetry(func() (*http.Response, error) { return client.Do(req2) })
 }
 
 func ociFetchToken(client *http.Client, realm, service, scope string) (string, error) {
@@ -142,7 +142,7 @@ func ociFetchToken(client *http.Client, realm, service, scope string) (string, e
 	}
 	u.RawQuery = q.Encode()
 
-	resp, err := client.Get(u.String())
+	resp, err := getWithRetry(client, u.String())
 	if err != nil {
 		return "", err
 	}
