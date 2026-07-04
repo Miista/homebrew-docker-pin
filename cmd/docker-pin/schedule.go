@@ -597,7 +597,7 @@ func notifyUpgraded(cfg *schedule.Config, name, oldRaw, newRaw, note string) {
 	if note != "" {
 		body += "\n" + note
 	}
-	sendNotification(cfg, fmt.Sprintf("docker pin: %s upgraded", name), body, notify.PriorityDefault)
+	sendNotification(cfg, fmt.Sprintf("docker pin@%s: %s upgraded", shortHostname(), name), body, notify.PriorityDefault)
 }
 
 // notifyFailed reports one service's failed upgrade at high priority.
@@ -606,7 +606,17 @@ func notifyFailed(cfg *schedule.Config, name, oldRaw, newRaw, reason string) {
 	if oldRaw != "" {
 		body = fmt.Sprintf("%s -> %s\n%s", oldRaw, newRaw, reason)
 	}
-	sendNotification(cfg, fmt.Sprintf("docker pin: %s FAILED", name), body, notify.PriorityHigh)
+	sendNotification(cfg, fmt.Sprintf("docker pin@%s: %s FAILED", shortHostname(), name), body, notify.PriorityHigh)
+}
+
+// shortHostname identifies this box in notifications, so several hosts can
+// share one ntfy topic.
+func shortHostname() string {
+	h, err := os.Hostname()
+	if err != nil || h == "" {
+		return "unknown-host"
+	}
+	return strings.SplitN(h, ".", 2)[0]
 }
 
 // sendNotification publishes to the configured ntfy target, if any.
