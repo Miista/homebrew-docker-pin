@@ -203,6 +203,63 @@ func TestPinImage(t *testing.T) {
 			pinned:   "nginx:1.25@sha256:xyz",
 			wantLine: "    image: nginx:1.25@sha256:xyz",
 		},
+		{
+			// The Pi's dnscrypt-proxy shape: an earlier service references the
+			// target service in depends_on (same-named key!), and the target's
+			// image line comes after labels.
+			name: "depends_on key must not shadow the service",
+			compose: `services:
+  web:
+    image: nginx:1.25
+    depends_on:
+      dns:
+        condition: service_healthy
+  dns:
+    labels:
+      diun.include_tags: '^\d+$'
+    image: dnscrypt:2.1.15
+`,
+			service:  "dns",
+			pinned:   "dnscrypt:2.1.15@sha256:abc",
+			wantLine: "    image: dnscrypt:2.1.15@sha256:abc",
+		},
+		{
+			name: "image-like key under labels is not rewritten",
+			compose: `services:
+  web:
+    labels:
+      image: not-an-image
+    image: nginx:1.25
+`,
+			service:  "web",
+			pinned:   "nginx:1.25@sha256:abc",
+			wantLine: "    image: nginx:1.25@sha256:abc",
+		},
+		{
+			name: "top-level key matching service name is ignored",
+			compose: `volumes:
+  web:
+services:
+  web:
+    image: nginx:1.25
+`,
+			service:  "web",
+			pinned:   "nginx:1.25@sha256:abc",
+			wantLine: "    image: nginx:1.25@sha256:abc",
+		},
+		{
+			name: "comments and blank lines inside blocks are neutral",
+			compose: `services:
+  web:
+    # pinned by docker-pin
+    restart: unless-stopped
+
+    image: nginx:1.25
+`,
+			service:  "web",
+			pinned:   "nginx:1.25@sha256:abc",
+			wantLine: "    image: nginx:1.25@sha256:abc",
+		},
 	}
 
 	for _, tt := range tests {

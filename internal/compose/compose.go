@@ -113,39 +113,83 @@ func PinImage(file, serviceName, pinnedImage string) error {
 	}
 
 	lines := strings.Split(string(data), "\n")
-	serviceRe := regexp.MustCompile(`^(\s*)` + regexp.QuoteMeta(serviceName) + `\s*:\s*$`)
-	imageRe := regexp.MustCompile(`^(\s*image:\s*)(.+)$`)
+	idx, prefix, err := findImageLine(lines, serviceName)
+	if err != nil {
+		return fmt.Errorf("%w in %s", err, file)
+	}
+	lines[idx] = prefix + pinnedImage
+	return os.WriteFile(file, []byte(strings.Join(lines, "\n")), 0o644)
+}
 
-	inService := false
-	serviceIndent := -1
-	updated := false
+// findImageLine locates the `image:` line of a service, anchored on the
+// top-level `services:` section so that same-named keys elsewhere (e.g. a
+// depends_on entry, a network name) can never be mistaken for the service.
+// The service key must sit at the services section's direct-child indent, and
+// the image key at the service's direct-child indent — so an `image:` label
+// nested deeper (e.g. under labels:) is never rewritten. Returns the line
+// index and the line's prefix up to the value.
+func findImageLine(lines []string, serviceName string) (idx int, prefix string, err error) {
+	servicesRe := regexp.MustCompile(`^services\s*:\s*(#.*)?$`)
+	serviceRe := regexp.MustCompile(`^(\s*)(["']?)` + regexp.QuoteMeta(serviceName) + `(["']?)\s*:\s*(#.*)?$`)
+	imageRe := regexp.MustCompile(`^(\s*image\s*:\s*)(.+)$`)
+
+	const (
+		beforeServices = iota
+		inServices
+		inService
+	)
+	state := beforeServices
+	serviceKeyIndent := -1 // indent of the services section's direct children
+	serviceIndent := -1    // indent of the matched service key
+	childIndent := -1      // indent of the matched service's direct children
 
 	for i, line := range lines {
-		if !inService {
-			if m := serviceRe.FindStringSubmatch(line); m != nil {
-				inService = true
-				serviceIndent = len(m[1])
-			}
-			continue
-		}
-
 		trimmed := strings.TrimLeft(line, " \t")
-		if trimmed != "" {
-			indent := len(line) - len(trimmed)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue // blanks and comments are neutral: neither keys nor boundaries
+		}
+		indent := len(line) - len(trimmed)
+
+		switch state {
+		case beforeServices:
+			if servicesRe.MatchString(line) {
+				state = inServices
+			}
+		case inServices:
+			if indent == 0 {
+				return 0, "", fmt.Errorf("service %q not found under services:", serviceName)
+			}
+			if serviceKeyIndent == -1 {
+				serviceKeyIndent = indent // first key under services: sets the level
+			}
+			if indent != serviceKeyIndent {
+				continue // inside some other service's block
+			}
+			if m := serviceRe.FindStringSubmatch(line); m != nil && m[2] == m[3] {
+				state = inService
+				serviceIndent = indent
+			}
+		case inService:
 			if indent <= serviceIndent {
-				break
+				return 0, "", fmt.Errorf("image field not found for service %q", serviceName)
+			}
+			if childIndent == -1 {
+				childIndent = indent // first key inside the service sets the level
+			}
+			if indent != childIndent {
+				continue // nested content (labels, depends_on children, ...)
+			}
+			if m := imageRe.FindStringSubmatch(line); m != nil {
+				return i, m[1], nil
 			}
 		}
-
-		if m := imageRe.FindStringSubmatch(line); m != nil {
-			lines[i] = m[1] + pinnedImage
-			updated = true
-			break
-		}
 	}
-
-	if !updated {
-		return fmt.Errorf("image field not found for service %q in %s", serviceName, file)
+	switch state {
+	case beforeServices:
+		return 0, "", fmt.Errorf("no top-level services: section found")
+	case inServices:
+		return 0, "", fmt.Errorf("service %q not found under services:", serviceName)
+	default:
+		return 0, "", fmt.Errorf("image field not found for service %q", serviceName)
 	}
-	return os.WriteFile(file, []byte(strings.Join(lines, "\n")), 0o644)
 }
