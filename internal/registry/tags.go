@@ -3,8 +3,10 @@ package registry
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -115,17 +117,146 @@ func CompareVersions(a, b string) int {
 // NewestMatching returns the highest tag (per CompareVersions) that matches
 // include and is strictly newer than current, or "" when no tag qualifies.
 func NewestMatching(tags []string, include *regexp.Regexp, current string) string {
-	best := ""
+	if c := MatchingCandidates(tags, include, nil, current); len(c) > 0 {
+		return c[0]
+	}
+	return ""
+}
+
+// MatchingCandidates returns every tag matching include (and not matching the
+// optional exclude) that is strictly newer than current, sorted newest first.
+func MatchingCandidates(tags []string, include, exclude *regexp.Regexp, current string) []string {
+	var out []string
 	for _, t := range tags {
 		if !include.MatchString(t) {
+			continue
+		}
+		if exclude != nil && exclude.MatchString(t) {
 			continue
 		}
 		if CompareVersions(t, current) <= 0 {
 			continue
 		}
-		if best == "" || CompareVersions(t, best) > 0 {
-			best = t
+		out = append(out, t)
+	}
+	sort.Slice(out, func(i, j int) bool { return CompareVersions(out[i], out[j]) > 0 })
+	return out
+}
+
+// TagCreated returns when a tag's image was published. Docker Hub reports the
+// push time directly; for every other registry the image config blob's
+// "created" timestamp (the build time) is used, which for CI-published images
+// is effectively the release time.
+func TagCreated(baseImage, tag string) (time.Time, error) {
+	first := strings.SplitN(baseImage, "/", 2)[0]
+	if !strings.Contains(first, ".") || strings.HasPrefix(baseImage, "docker.io/") {
+		return dockerHubTagCreated(baseImage, tag)
+	}
+	host, repo := splitRegistryRepo(baseImage)
+	if host == "" {
+		return time.Time{}, fmt.Errorf("could not determine registry host from %q", baseImage)
+	}
+	client := &http.Client{Timeout: 15 * time.Second}
+	return ociTagCreated(client, "https://"+host, repo, tag)
+}
+
+func dockerHubTagCreated(baseImage, tag string) (time.Time, error) {
+	namespace, repo := splitDockerHubImage(baseImage)
+	url := fmt.Sprintf("https://hub.docker.com/v2/repositories/%s/%s/tags/%s", namespace, repo, tag)
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return time.Time{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return time.Time{}, fmt.Errorf("docker hub tag API: HTTP %d", resp.StatusCode)
+	}
+	var data struct {
+		TagLastPushed time.Time `json:"tag_last_pushed"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return time.Time{}, err
+	}
+	if data.TagLastPushed.IsZero() {
+		return time.Time{}, fmt.Errorf("docker hub reports no push time for %s:%s", baseImage, tag)
+	}
+	return data.TagLastPushed, nil
+}
+
+// ociTagCreated walks manifest (or index -> first sub-manifest) -> config
+// blob -> "created" for any OCI Distribution registry, including GHCR.
+func ociTagCreated(client *http.Client, baseURL, repo, tag string) (time.Time, error) {
+	manifest, err := ociGetJSON(client, fmt.Sprintf("%s/v2/%s/manifests/%s", baseURL, repo, tag), manifestAccept)
+	if err != nil {
+		return time.Time{}, err
+	}
+	var m struct {
+		MediaType string `json:"mediaType"`
+		Manifests []struct {
+			Digest   string `json:"digest"`
+			Platform struct {
+				OS string `json:"os"`
+			} `json:"platform"`
+		} `json:"manifests"`
+		Config struct {
+			Digest string `json:"digest"`
+		} `json:"config"`
+	}
+	if err := json.Unmarshal(manifest, &m); err != nil {
+		return time.Time{}, err
+	}
+	if m.Config.Digest == "" {
+		// Multi-arch index: descend into the first real (non-attestation) manifest.
+		sub := ""
+		for _, mm := range m.Manifests {
+			if mm.Platform.OS != "unknown" && mm.Digest != "" {
+				sub = mm.Digest
+				break
+			}
+		}
+		if sub == "" {
+			return time.Time{}, fmt.Errorf("manifest for %s has no config and no sub-manifests", tag)
+		}
+		manifest, err = ociGetJSON(client, fmt.Sprintf("%s/v2/%s/manifests/%s", baseURL, repo, sub), manifestAccept)
+		if err != nil {
+			return time.Time{}, err
+		}
+		if err := json.Unmarshal(manifest, &m); err != nil {
+			return time.Time{}, err
+		}
+		if m.Config.Digest == "" {
+			return time.Time{}, fmt.Errorf("sub-manifest for %s has no config", tag)
 		}
 	}
-	return best
+	blob, err := ociGetJSON(client, fmt.Sprintf("%s/v2/%s/blobs/%s", baseURL, repo, m.Config.Digest), "")
+	if err != nil {
+		return time.Time{}, err
+	}
+	var cfg struct {
+		Created time.Time `json:"created"`
+	}
+	if err := json.Unmarshal(blob, &cfg); err != nil {
+		return time.Time{}, err
+	}
+	if cfg.Created.IsZero() {
+		return time.Time{}, fmt.Errorf("image config for %s:%s carries no created timestamp", repo, tag)
+	}
+	return cfg.Created, nil
+}
+
+func ociGetJSON(client *http.Client, url, accept string) ([]byte, error) {
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := ociDo(client, req, accept)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("GET %s: HTTP %d", url, resp.StatusCode)
+	}
+	return io.ReadAll(resp.Body)
 }

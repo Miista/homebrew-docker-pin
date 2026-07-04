@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Miista/homebrew-docker-pin/internal/schedule"
 )
@@ -204,6 +205,68 @@ func TestScheduleRun_TagConstraint(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "caddy:2.8.4@sha256:new1") {
 		t.Errorf("compose file not pinned to 2.8.4:\n%s", data)
+	}
+}
+
+func TestScheduleRun_ExcludeAndDelay(t *testing.T) {
+	dir := chdirTemp(t, twoServices,
+		"schedule: \"0 6 * * 1\"\nservices:\n"+
+			"  - name: caddy\n    tags: '^2\\.\\d+\\.\\d+$'\n    exclude: 'beta'\n    delay: 7d\n")
+
+	now := time.Now()
+	created := map[string]time.Time{
+		"2.9.0": now.Add(-24 * time.Hour),      // too fresh
+		"2.8.4": now.Add(-30 * 24 * time.Hour), // aged
+	}
+	var pulled []string
+	d := dockerFuncs{
+		getDigest: func(ref string) (string, error) { return "sha256:new1", nil },
+		pull:      func(ref string) error { pulled = append(pulled, ref); return nil },
+		resolve:   noResolve,
+		listTags: func(baseImage string) ([]string, error) {
+			return []string{"2.9.0", "2.9.0-beta.2", "2.8.4", "2.7.6"}, nil
+		},
+		tagCreated: func(baseImage, tag string) (time.Time, error) {
+			c, ok := created[tag]
+			if !ok {
+				t.Errorf("unexpected tagCreated(%q) — beta should have been excluded", tag)
+			}
+			return c, nil
+		},
+	}
+	sys := fakeSys("linux", 1000)
+
+	if err := scheduleRun(d, sys); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// 2.9.0 matches but is 1 day old; 2.9.0-beta.2 is excluded; 2.8.4 is aged.
+	if len(pulled) != 1 || pulled[0] != "caddy:2.8.4" {
+		t.Errorf("pulled %v, want [caddy:2.8.4]", pulled)
+	}
+	data, _ := os.ReadFile(filepath.Join(dir, "docker-compose.yml"))
+	if !strings.Contains(string(data), "caddy:2.8.4@sha256:new1") {
+		t.Errorf("compose file not pinned to 2.8.4:\n%s", data)
+	}
+}
+
+func TestScheduleRun_DelayAllTooFresh(t *testing.T) {
+	chdirTemp(t, twoServices,
+		"schedule: \"0 6 * * 1\"\nservices:\n  - name: caddy\n    tags: '^2\\.\\d+\\.\\d+$'\n    delay: 7d\n")
+
+	d := dockerFuncs{
+		getDigest: func(ref string) (string, error) { t.Error("getDigest should not run"); return "", nil },
+		pull:      func(ref string) error { t.Error("pull should not run"); return nil },
+		resolve:   noResolve,
+		listTags:  func(baseImage string) ([]string, error) { return []string{"2.9.0", "2.8.4"}, nil },
+		tagCreated: func(baseImage, tag string) (time.Time, error) {
+			return time.Now().Add(-time.Hour), nil // everything published an hour ago
+		},
+	}
+	sys := fakeSys("linux", 1000)
+	sys.composeUp = func(file string) error { t.Error("composeUp should not run"); return nil }
+
+	if err := scheduleRun(d, sys); err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

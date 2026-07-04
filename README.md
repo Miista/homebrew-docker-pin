@@ -153,6 +153,9 @@ services:                     # optional; omitted = every service
   - caddy
   - name: paperless-db        # constrained: upgrade only to registry tags
     tags: '^17\.\d+-alpine$'  # matching this regex — majors stay pinned
+    exclude: '(alpha|beta|rc)' # optional; drop matching candidates
+    delay: 7d                 # optional; only adopt tags published at least
+                              # this long ago ("48h", "7d", "2w")
 on_change: ./pin-upgraded.sh  # optional; run in the compose dir after
                               # upgrades changed the compose file
 notify:                       # optional; report each run via ntfy
@@ -178,7 +181,12 @@ command. A service with a `tags` regex only ever moves to the newest registry
 tag matching that regex (numeric version order, prerelease/build suffixes rank
 below the bare release) and is left untouched when nothing newer matches — it
 never falls back to a moving tag, so e.g. a database can track `17.x-alpine`
-patches while never jumping to 18. With `notify.ntfy` configured, every run
+patches while never jumping to 18. `exclude` drops candidates matching a
+second regex. `delay` adds a soak period: the newest candidate published at
+least that long ago wins, so a release gets time in the wild before you adopt
+it (publish time from the Docker Hub tag API, or the image config's `created`
+timestamp on GHCR and other OCI registries; at most 10 candidate dates are
+checked per service per run). With `notify.ntfy` configured, every run
 that upgraded or failed anything posts a summary (failures at high priority);
 the token is read from the environment or a `KEY=VALUE` file, never from
 `pin.yaml`. Restricting both day-of-month and day-of-week in the cron

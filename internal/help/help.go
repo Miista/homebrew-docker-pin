@@ -79,6 +79,9 @@ Reads a git-trackable pin.yaml (or pin.yml) next to the compose file:
     - name: paperless-db       # constrained: upgrade only to registry
       tags: '^17\.\d+-alpine$' # tags matching this regex (never escapes
                                # to e.g. 18.x; skipped if none is newer)
+      exclude: '(alpha|beta|rc)' # optional; drop matching candidates
+      delay: 7d                # optional; only adopt a tag published at
+                               # least this long ago ("48h", "7d", "2w")
   on_change: ./pin-upgraded.sh # optional; run after upgrades changed
                                # the compose file (sh -c, compose dir)
   notify:                      # optional; report each run via ntfy

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func writeFile(t *testing.T, dir, name, content string) string {
@@ -91,6 +92,26 @@ func TestLoad(t *testing.T) {
 			errPart: "requires both 'url' and 'topic'",
 		},
 		{
+			name:    "exclude and delay",
+			content: "schedule: \"0 6 * * 1\"\nservices:\n  - name: caddy\n    tags: '^2\\.'\n    exclude: 'beta'\n    delay: 7d\n",
+			want:    Config{Schedule: "0 6 * * 1", Services: []Service{{Name: "caddy", Tags: `^2\.`, Exclude: "beta", Delay: "7d"}}},
+		},
+		{
+			name:    "exclude requires tags",
+			content: "schedule: \"0 6 * * 1\"\nservices:\n  - name: caddy\n    exclude: 'beta'\n",
+			errPart: "'exclude' requires 'tags'",
+		},
+		{
+			name:    "delay requires tags",
+			content: "schedule: \"0 6 * * 1\"\nservices:\n  - name: caddy\n    delay: 7d\n",
+			errPart: "'delay' requires 'tags'",
+		},
+		{
+			name:    "invalid delay",
+			content: "schedule: \"0 6 * * 1\"\nservices:\n  - name: caddy\n    tags: '^2\\.'\n    delay: fortnight\n",
+			errPart: "invalid delay",
+		},
+		{
 			name:    "missing schedule",
 			content: "services:\n  - caddy\n",
 			errPart: "'schedule' is required",
@@ -119,6 +140,33 @@ func TestLoad(t *testing.T) {
 				t.Errorf("got %+v, want %+v", *cfg, tt.want)
 			}
 		})
+	}
+}
+
+func TestParseDelay(t *testing.T) {
+	tests := []struct {
+		in      string
+		want    time.Duration
+		wantErr bool
+	}{
+		{"48h", 48 * time.Hour, false},
+		{"7d", 7 * 24 * time.Hour, false},
+		{"2w", 14 * 24 * time.Hour, false},
+		{"7", 0, true},
+		{"1.5d", 0, true},
+		{"", 0, true},
+	}
+	for _, tt := range tests {
+		got, err := ParseDelay(tt.in)
+		if tt.wantErr {
+			if err == nil {
+				t.Errorf("ParseDelay(%q): want error, got %v", tt.in, got)
+			}
+			continue
+		}
+		if err != nil || got != tt.want {
+			t.Errorf("ParseDelay(%q) = %v, %v; want %v", tt.in, got, err, tt.want)
+		}
 	}
 }
 

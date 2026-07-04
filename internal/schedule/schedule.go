@@ -10,7 +10,9 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -45,6 +47,13 @@ type Service struct {
 	// one is chosen; when nothing matches, the service is left untouched
 	// rather than falling back to a moving tag.
 	Tags string `yaml:"tags"`
+	// Exclude drops tags matching this regex from the candidates (e.g.
+	// '(alpha|beta|rc)'). Requires Tags.
+	Exclude string `yaml:"exclude"`
+	// Delay only upgrades to a tag that has been published for at least
+	// this long ("48h", "7d", "2w"), skipping fresher candidates in favor
+	// of the newest sufficiently aged one. Requires Tags.
+	Delay string `yaml:"delay"`
 }
 
 // UnmarshalYAML accepts both `- name` and `- {name: ..., tags: ...}` forms.
@@ -146,6 +155,22 @@ func Load(path string) (*Config, error) {
 				return nil, fmt.Errorf("%s: service %s: invalid tags regex: %v", path, s.Name, err)
 			}
 		}
+		if s.Exclude != "" {
+			if s.Tags == "" {
+				return nil, fmt.Errorf("%s: service %s: 'exclude' requires 'tags'", path, s.Name)
+			}
+			if _, err := regexp.Compile(s.Exclude); err != nil {
+				return nil, fmt.Errorf("%s: service %s: invalid exclude regex: %v", path, s.Name, err)
+			}
+		}
+		if s.Delay != "" {
+			if s.Tags == "" {
+				return nil, fmt.Errorf("%s: service %s: 'delay' requires 'tags'", path, s.Name)
+			}
+			if _, err := ParseDelay(s.Delay); err != nil {
+				return nil, fmt.Errorf("%s: service %s: %v", path, s.Name, err)
+			}
+		}
 	}
 	if cfg.Notify != nil && cfg.Notify.Ntfy != nil {
 		n := cfg.Notify.Ntfy
@@ -154,6 +179,28 @@ func Load(path string) (*Config, error) {
 		}
 	}
 	return &cfg, nil
+}
+
+var delayRe = regexp.MustCompile(`^(\d+)(h|d|w)$`)
+
+// ParseDelay parses a release-age delay: "48h", "7d" or "2w".
+func ParseDelay(s string) (time.Duration, error) {
+	m := delayRe.FindStringSubmatch(strings.TrimSpace(s))
+	if m == nil {
+		return 0, fmt.Errorf("invalid delay %q (use e.g. \"48h\", \"7d\", \"2w\")", s)
+	}
+	n, err := strconv.Atoi(m[1])
+	if err != nil {
+		return 0, err
+	}
+	unit := time.Hour
+	switch m[2] {
+	case "d":
+		unit = 24 * time.Hour
+	case "w":
+		unit = 7 * 24 * time.Hour
+	}
+	return time.Duration(n) * unit, nil
 }
 
 var slugCleanRe = regexp.MustCompile(`[^a-z0-9]+`)

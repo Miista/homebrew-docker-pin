@@ -49,3 +49,22 @@ func TestNewestMatching(t *testing.T) {
 		t.Errorf("got %q, want empty", got)
 	}
 }
+
+func TestMatchingCandidates(t *testing.T) {
+	tags := []string{"2.9.0", "2.9.0-beta.2", "2.8.4", "2.7.6", "latest", "3.0.0"}
+	include := regexp.MustCompile(`^2\.\d+\.\d+`)
+	exclude := regexp.MustCompile(`beta`)
+
+	got := MatchingCandidates(tags, include, exclude, "2.7.6")
+	want := []string{"2.9.0", "2.8.4"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("got %v, want %v", got, want)
+	}
+
+	// Without exclude the beta is a candidate, ranked below the release.
+	got = MatchingCandidates(tags, include, nil, "2.8.4")
+	want = []string{"2.9.0", "2.9.0-beta.2"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}

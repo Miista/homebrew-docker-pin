@@ -81,12 +81,21 @@ Resolves which *version* tag (e.g. `1.2.3`) corresponds to a digest, so a
   upgrades driven by a `pin.yaml` (or `.yml`) next to the compose file
   (`schedule:` cron expr, optional `services:` list, optional `on_change:`
   hook, optional `notify.ntfy:` target). A `services:` entry is either a bare
-  name or `{name, tags}` where `tags` is a regex constraining which registry
-  tags qualify (custom `Service.UnmarshalYAML`); constrained services upgrade
-  to the newest matching tag per `registry.CompareVersions` (numeric dotted
-  cores; suffixed builds rank below the bare release) via
-  `registry.ListTags`/`NewestMatching` (`internal/registry/tags.go`), and are
-  skipped — never falling back to a moving tag — when nothing newer matches.
+  name or `{name, tags, exclude, delay}` (custom `Service.UnmarshalYAML`):
+  `tags` is a regex constraining which registry tags qualify, `exclude` drops
+  matching candidates, and `delay` ("48h"/"7d"/"2w", `schedule.ParseDelay`)
+  requires a candidate to have been published at least that long ago —
+  `constrainedTarget` walks the candidates newest-first (capped at
+  `maxDelayChecks`=10 date lookups) and picks the newest sufficiently aged
+  one. Publish time comes from `registry.TagCreated`: the Docker Hub tag API's
+  `tag_last_pushed`, or manifest→config-blob `created` for GHCR/any OCI
+  registry (multi-arch indexes descend into the first non-attestation
+  sub-manifest). Candidate selection is `registry.ListTags` +
+  `MatchingCandidates` sorted by `registry.CompareVersions` (numeric dotted
+  cores; suffixed builds rank below the bare release), all in
+  `internal/registry/tags.go`. Constrained services are skipped — never
+  falling back to a moving tag — when nothing qualifies. `exclude`/`delay`
+  require `tags`.
   `notify.ntfy` (url + topic; token via `token_env`, default `NTFY_TOKEN`,
   optionally sourced from a `token_file` KEY=VALUE file so no secret sits in
   pin.yaml) makes `run` post a summary when anything upgraded or failed

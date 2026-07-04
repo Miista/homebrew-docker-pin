@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/Miista/homebrew-docker-pin/internal/compose"
 	"github.com/Miista/homebrew-docker-pin/internal/docker"
@@ -25,15 +26,17 @@ var version = "dev"
 type dockerFuncs struct {
 	getDigest func(ref string) (string, error)
 	pull      func(ref string) error
-	resolve   func(baseImage, pullTag, digest, service string) string
-	listTags  func(baseImage string) ([]string, error)
+	resolve    func(baseImage, pullTag, digest, service string) string
+	listTags   func(baseImage string) ([]string, error)
+	tagCreated func(baseImage, tag string) (time.Time, error)
 }
 
 var realDocker = dockerFuncs{
-	getDigest: docker.GetDigest,
-	pull:      docker.Pull,
-	resolve:   registry.ResolveOrWarn,
-	listTags:  registry.ListTags,
+	getDigest:  docker.GetDigest,
+	pull:       docker.Pull,
+	resolve:    registry.ResolveOrWarn,
+	listTags:   registry.ListTags,
+	tagCreated: registry.TagCreated,
 }
 
 func main() {

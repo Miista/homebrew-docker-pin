@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/Miista/homebrew-docker-pin/internal/compose"
 	"github.com/Miista/homebrew-docker-pin/internal/croncal"
@@ -234,8 +235,18 @@ func scheduleStatus(sys sysFuncs) error {
 	} else {
 		var parts []string
 		for _, s := range cfg.Services {
+			var opts []string
 			if s.Tags != "" {
-				parts = append(parts, fmt.Sprintf("%s (tags %s)", s.Name, s.Tags))
+				opts = append(opts, "tags "+s.Tags)
+			}
+			if s.Exclude != "" {
+				opts = append(opts, "exclude "+s.Exclude)
+			}
+			if s.Delay != "" {
+				opts = append(opts, "delay "+s.Delay)
+			}
+			if len(opts) > 0 {
+				parts = append(parts, fmt.Sprintf("%s (%s)", s.Name, strings.Join(opts, ", ")))
 			} else {
 				parts = append(parts, s.Name)
 			}
@@ -418,11 +429,16 @@ func scheduleRun(d dockerFuncs, sys sysFuncs) error {
 	return nil
 }
 
+// maxDelayChecks bounds how many candidate publish dates one service may
+// query per run when walking past too-fresh releases.
+const maxDelayChecks = 10
+
 // constrainedTarget picks the upgrade target for a service with a tags regex:
-// the newest registry tag matching the regex that is newer than the current
-// tag. Returns "" when the service is already on the newest matching tag.
-// Unlike the unconstrained flow it never falls back to a moving tag, so the
-// constraint can't be silently escaped.
+// the newest registry tag matching the regex (and not matching the optional
+// exclude) that is newer than the current tag — and, with a delay configured,
+// the newest such tag that has been published for at least that long. Returns
+// "" when nothing qualifies. Unlike the unconstrained flow it never falls
+// back to a moving tag, so the constraint can't be silently escaped.
 func constrainedTarget(composeFile string, service schedule.Service, d dockerFuncs) (string, error) {
 	baseImage, currentTag, err := compose.ParseImage(composeFile, service.Name)
 	if err != nil {
@@ -432,11 +448,44 @@ func constrainedTarget(composeFile string, service schedule.Service, d dockerFun
 	if err != nil {
 		return "", err
 	}
+	var exclude *regexp.Regexp
+	if service.Exclude != "" {
+		if exclude, err = regexp.Compile(service.Exclude); err != nil {
+			return "", err
+		}
+	}
 	tags, err := d.listTags(baseImage)
 	if err != nil {
 		return "", fmt.Errorf("listing tags for %s: %w", baseImage, err)
 	}
-	return registry.NewestMatching(tags, include, currentTag), nil
+	candidates := registry.MatchingCandidates(tags, include, exclude, currentTag)
+	if len(candidates) == 0 {
+		return "", nil
+	}
+	if service.Delay == "" {
+		return candidates[0], nil
+	}
+
+	delay, err := schedule.ParseDelay(service.Delay)
+	if err != nil {
+		return "", err
+	}
+	if len(candidates) > maxDelayChecks {
+		candidates = candidates[:maxDelayChecks]
+	}
+	for _, tag := range candidates {
+		created, err := d.tagCreated(baseImage, tag)
+		if err != nil {
+			return "", fmt.Errorf("publish date for %s:%s: %w", baseImage, tag, err)
+		}
+		age := time.Since(created)
+		if age >= delay {
+			return tag, nil
+		}
+		fmt.Printf("%s: %s is only %s old (delay %s); skipping\n",
+			service.Name, tag, age.Round(time.Hour), service.Delay)
+	}
+	return "", nil
 }
 
 // notifyRun reports the outcome of a schedule run via the configured ntfy
