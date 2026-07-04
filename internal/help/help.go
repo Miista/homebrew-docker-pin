@@ -43,8 +43,15 @@ Usage: docker pin upgrade <service> [version]
 Flags:
   -a, --all   Upgrade every service (cannot be combined with a version).
 
-With a version, pulls exactly that tag and pins to it. Without one, follows
-the image's moving tag (e.g. latest) and re-pins to what it resolves to now.
+With a version, pulls exactly that tag and pins to it.
+
+Without one, the current pinned tag decides which moving tag is followed:
+a plain version (2.11.4) follows 'latest'; a version-variant (2.11.4-alpine)
+follows the variant's moving tag discovered in the registry (alpine,
+latest-alpine or alpine-latest — errors if none or several exist); any other
+tag (alpine, stable, v1.2.3-ls45) is treated as moving already and re-pulled
+as-is, so it only picks up digest changes. The pulled digest is then resolved
+back to a concrete version tag where the registry allows it.
 Already-up-to-date services are left untouched.`},
 
 	{"list", `docker pin list — show every service's image, tag, and pin status
