@@ -32,7 +32,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # Rebuild the shared apt repo (docker-pin + splitdns, latest release of each)
+  # Rebuild the shared apt repo (docker-pin + splitdns + restic-coverage,
+  # latest release of each)
   # and deploy it to Cloudflare Pages (apt.guldmund.dk). Stateless: the GitHub
   # releases are the source of truth; each publish is a full fresh tree.
   # The same job exists in Miista/homebrew-splitdns — keep them in sync.
@@ -55,6 +56,7 @@ jobs:
         run: |
           gh release download --repo Miista/homebrew-docker-pin --pattern '*.deb' --dir /tmp/debs
           gh release download --repo Miista/homebrew-splitdns --pattern '*.deb' --dir /tmp/debs
+          gh release download --repo Miista/homebrew-restic-coverage --pattern '*.deb' --dir /tmp/debs
 
       - name: Build apt repository
         run: |
@@ -83,7 +85,7 @@ jobs:
           curl -fsSL https://apt.guldmund.dk/guldmund-archive-keyring.asc -o /etc/apt/keyrings/guldmund-archive-keyring.asc
           echo "deb [signed-by=/etc/apt/keyrings/guldmund-archive-keyring.asc] https://apt.guldmund.dk stable main" > /etc/apt/sources.list.d/guldmund.list
           apt-get update -q
-          echo "guldmund repository added. Install with: sudo apt install docker-pin splitdns"
+          echo "guldmund repository added. Install with: sudo apt install docker-pin splitdns restic-coverage"
           EOF
           cat > site/index.html <<'EOF'
           <!doctype html>
@@ -95,17 +97,18 @@ jobs:
           <ul>
           <li><a href="https://github.com/Miista/homebrew-docker-pin">docker-pin</a> — pin Docker Compose images to tag + digest</li>
           <li><a href="https://github.com/Miista/homebrew-splitdns">splitdns</a> — split-horizon DNS + Caddy config from services.yaml</li>
+          <li><a href="https://github.com/Miista/homebrew-restic-coverage">restic-coverage</a> — audit that all data is deliberately backed up, excluded, or ignored</li>
           </ul>
           <h2>Install (Debian/Ubuntu)</h2>
           <pre>curl -fsSL https://apt.guldmund.dk/setup.sh | sudo sh
-          sudo apt install docker-pin splitdns</pre>
+          sudo apt install docker-pin splitdns restic-coverage</pre>
           <p>Or do the repo setup explicitly:</p>
           <pre>sudo install -d /etc/apt/keyrings
           curl -fsSL https://apt.guldmund.dk/guldmund-archive-keyring.asc \
             | sudo tee /etc/apt/keyrings/guldmund-archive-keyring.asc > /dev/null
           echo "deb [signed-by=/etc/apt/keyrings/guldmund-archive-keyring.asc] https://apt.guldmund.dk stable main" \
             | sudo tee /etc/apt/sources.list.d/guldmund.list
-          sudo apt update &amp;&amp; sudo apt install docker-pin splitdns</pre>
+          sudo apt update &amp;&amp; sudo apt install docker-pin splitdns restic-coverage</pre>
           </body></html>
           EOF
           # apt metadata (InRelease + Packages) must always come from the same
