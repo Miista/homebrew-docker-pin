@@ -53,7 +53,12 @@ latest-alpine or alpine-latest — errors if none or several exist); any other
 tag (alpine, stable, v1.2.3-ls45) is treated as moving already and re-pulled
 as-is, so it only picks up digest changes. The pulled digest is then resolved
 back to a concrete version tag where the registry allows it.
-Already-up-to-date services are left untouched.`},
+Already-up-to-date services are left untouched.
+
+This is also how you follow a tag that moved upstream: run upgrade to
+re-pull and re-pin to the new digest. No need to 'docker pull' by hand
+first — upgrade pulls for you, and a pinned service never picks up a moved
+tag on its own (compose up fetches strictly by the pinned digest).`},
 
 	{"list", `docker pin list — show every service's image, tag, and pin status
 

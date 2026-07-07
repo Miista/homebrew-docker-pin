@@ -118,6 +118,8 @@ docker pin upgrade db 17
 
 `--all` cannot be combined with an explicit version.
 
+This is also the command to run when a tag moved upstream and you want to follow it — `upgrade` re-pulls the tag and re-pins to the new digest. There's no need to `docker pull` by hand first (upgrade pulls for you), and a pinned service never drifts to a moved tag on its own: `docker compose up` fetches strictly by the pinned digest.
+
 ### List services and their pin status
 
 ```bash
