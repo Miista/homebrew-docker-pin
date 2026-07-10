@@ -37,22 +37,20 @@ Replace `/opt/homebrew` with your `HOMEBREW_PREFIX` (`brew --prefix`). On Intel 
 
 ### Debian / Ubuntu (apt)
 
-```bash
-curl -fsSL https://apt.guldmund.dk/setup.sh | sudo sh
-sudo apt install docker-pin
-```
-
-Or, if you'd rather not pipe scripts into a root shell, do the repo setup
-explicitly (one-time):
+The tools are published to a signed [Cloudsmith](https://cloudsmith.io) apt
+repository (`guldmund/stable`). One-time setup:
 
 ```bash
-sudo install -d /etc/apt/keyrings
-curl -fsSL https://apt.guldmund.dk/guldmund-archive-keyring.asc \
-  | sudo tee /etc/apt/keyrings/guldmund-archive-keyring.asc > /dev/null
-echo "deb [signed-by=/etc/apt/keyrings/guldmund-archive-keyring.asc] https://apt.guldmund.dk stable main" \
-  | sudo tee /etc/apt/sources.list.d/guldmund.list
+sudo install -d /usr/share/keyrings
+curl -1sLf https://dl.cloudsmith.io/public/guldmund/stable/gpg.key \
+  | sudo gpg --dearmor -o /usr/share/keyrings/guldmund-stable-archive-keyring.gpg
+echo "deb [signed-by=/usr/share/keyrings/guldmund-stable-archive-keyring.gpg] https://dl.cloudsmith.io/public/guldmund/stable/deb/debian any-version main" \
+  | sudo tee /etc/apt/sources.list.d/guldmund-stable.list
 sudo apt update && sudo apt install docker-pin
 ```
+
+The repo is distro-agnostic (`debian any-version`), so the same line works on
+any Debian/Raspberry Pi OS/Ubuntu release.
 
 The plugins are installed into `/usr/libexec/docker/cli-plugins`, which Docker
 scans by default — no extra configuration needed.
@@ -277,10 +275,9 @@ This repo is the Homebrew tap. Pushing a `vX.Y.Z` tag triggers a GoReleaser work
 1. Builds `docker-pin` and `docker-unpin` for `linux/darwin` × `amd64/arm64`
 2. Creates a GitHub release with archives, `.deb` packages, and a checksum file
 3. Commits an updated `Formula/docker-pin.rb` back to this repo
-4. Rebuilds the shared apt repository (docker-pin + splitdns, latest release
-   of each), signs it with the GPG key in the `APT_GPG_PRIVATE_KEY` repo
-   secret, and deploys it to Cloudflare Pages at https://apt.guldmund.dk
-   (only latest versions served via apt; older `.deb`s stay on the releases)
+4. Publishes the `.deb`s to the shared [Cloudsmith](https://cloudsmith.io) apt
+   repository (`guldmund/stable`), which indexes and signs them server-side.
+   Each tool pushes only its own artifacts — there is no shared build step.
 
 ## License
 
