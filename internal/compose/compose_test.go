@@ -67,7 +67,7 @@ func TestFindFile_NotFound(t *testing.T) {
 	}
 }
 
-func TestFindFile_PreferNearest(t *testing.T) {
+func TestFindFile_PreferTopmost(t *testing.T) {
 	root := t.TempDir()
 	sub := filepath.Join(root, "project")
 	if err := os.MkdirAll(sub, 0o755); err != nil {
@@ -86,8 +86,35 @@ func TestFindFile_PreferNearest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if got != parentCompose {
+		t.Errorf("FindFile should return topmost file of the contiguous run, got %q, want %q", got, parentCompose)
+	}
+}
+
+func TestFindFile_StopsAtGap(t *testing.T) {
+	// root has a compose file, then a directory with none, then sub does.
+	// The gap should stop the upward climb, so sub's own file wins.
+	root := t.TempDir()
+	gap := filepath.Join(root, "gap")
+	sub := filepath.Join(gap, "project")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	rootCompose := filepath.Join(root, "docker-compose.yml")
+	subCompose := filepath.Join(sub, "docker-compose.yml")
+	for _, f := range []string{rootCompose, subCompose} {
+		if err := os.WriteFile(f, []byte("services: {}"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := FindFile(sub)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if got != subCompose {
-		t.Errorf("FindFile should return nearest file, got %q, want %q", got, subCompose)
+		t.Errorf("FindFile should stop at the gap, got %q, want %q", got, subCompose)
 	}
 }
 

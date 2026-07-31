@@ -19,16 +19,32 @@ func Locate() (string, error) {
 	return FindFile(wd)
 }
 
-// FindFile traverses up from dir looking for a compose file.
+var composeNames = []string{"docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"}
+
+// composeFileIn returns the compose file directly inside dir, if any,
+// preferring names earlier in composeNames.
+func composeFileIn(dir string) (string, bool) {
+	for _, name := range composeNames {
+		p := filepath.Join(dir, name)
+		if _, err := os.Stat(p); err == nil {
+			return p, true
+		}
+	}
+	return "", false
+}
+
+// FindFile traverses up from dir looking for the nearest compose file, then
+// keeps climbing through the contiguous run of ancestor directories that
+// also have one, returning the topmost of that run. This finds a project's
+// root compose file even when invoked from a nested directory that has its
+// own (e.g. one pulled in via a parent's `include:`).
 func FindFile(dir string) (string, error) {
-	names := []string{"docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"}
 	current := dir
+	var nearest string
 	for {
-		for _, name := range names {
-			p := filepath.Join(current, name)
-			if _, err := os.Stat(p); err == nil {
-				return p, nil
-			}
+		if f, ok := composeFileIn(current); ok {
+			nearest = f
+			break
 		}
 		parent := filepath.Dir(current)
 		if parent == current {
@@ -36,6 +52,21 @@ func FindFile(dir string) (string, error) {
 		}
 		current = parent
 	}
+
+	topmost := nearest
+	for {
+		parent := filepath.Dir(current)
+		if parent == current {
+			break
+		}
+		f, ok := composeFileIn(parent)
+		if !ok {
+			break
+		}
+		topmost = f
+		current = parent
+	}
+	return topmost, nil
 }
 
 type composeFile struct {
