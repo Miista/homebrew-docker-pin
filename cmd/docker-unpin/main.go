@@ -70,11 +70,7 @@ func main() {
 }
 
 func runAll() error {
-	wd, err := os.Getwd()
-	if err != nil {
-		return err
-	}
-	composeFile, err := compose.FindFile(wd)
+	composeFile, err := compose.Locate()
 	if err != nil {
 		return err
 	}
@@ -96,11 +92,7 @@ func runAll() error {
 }
 
 func run(service string) error {
-	wd, err := os.Getwd()
-	if err != nil {
-		return err
-	}
-	composeFile, err := compose.FindFile(wd)
+	composeFile, err := compose.Locate()
 	if err != nil {
 		return err
 	}

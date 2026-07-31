@@ -102,11 +102,7 @@ func runSchedule(args []string, d dockerFuncs, sys sysFuncs) error {
 // loadScheduleConfig locates the compose file from the working directory,
 // then the pin.yaml next to it, and parses it.
 func loadScheduleConfig() (cfg *schedule.Config, composeFile, pinFile string, err error) {
-	wd, err := os.Getwd()
-	if err != nil {
-		return nil, "", "", err
-	}
-	composeFile, err = compose.FindFile(wd)
+	composeFile, err = compose.Locate()
 	if err != nil {
 		return nil, "", "", err
 	}
@@ -322,11 +318,7 @@ func scheduleRemove(sys sysFuncs) error {
 	if sys.euid() != 0 {
 		return fmt.Errorf("removing units from %s requires root; re-run with sudo", unitDir)
 	}
-	wd, err := os.Getwd()
-	if err != nil {
-		return err
-	}
-	composeFile, err := compose.FindFile(wd)
+	composeFile, err := compose.Locate()
 	if err != nil {
 		return err
 	}

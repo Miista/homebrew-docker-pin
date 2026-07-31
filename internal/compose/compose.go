@@ -10,6 +10,15 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// Locate finds the compose file for the current working directory.
+func Locate() (string, error) {
+	wd, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	return FindFile(wd)
+}
+
 // FindFile traverses up from dir looking for a compose file.
 func FindFile(dir string) (string, error) {
 	names := []string{"docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"}

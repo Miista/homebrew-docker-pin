@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/Miista/homebrew-docker-pin/internal/compose"
@@ -51,11 +50,7 @@ func runComplete(args []string) {
 // composeServices returns the services of the compose file in (or above) the
 // working directory — best effort, empty on any error.
 func composeServices() []string {
-	wd, err := os.Getwd()
-	if err != nil {
-		return nil
-	}
-	composeFile, err := compose.FindFile(wd)
+	composeFile, err := compose.Locate()
 	if err != nil {
 		return nil
 	}
