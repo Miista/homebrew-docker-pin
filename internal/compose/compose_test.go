@@ -91,6 +91,131 @@ func TestFindFile_PreferNearest(t *testing.T) {
 	}
 }
 
+// --- ListServices ---
+
+func TestListServices(t *testing.T) {
+	file := writeTempCompose(t, sampleCompose)
+
+	services, err := ListServices(file)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	want := map[string]bool{"web": true, "db": true, "cache": true}
+	if len(services) != len(want) {
+		t.Fatalf("ListServices() = %v, want %d services", services, len(want))
+	}
+	for _, s := range services {
+		if !want[s] {
+			t.Errorf("ListServices() returned unexpected service %q", s)
+		}
+	}
+}
+
+func TestListServices_Empty(t *testing.T) {
+	file := writeTempCompose(t, "services: {}\n")
+
+	services, err := ListServices(file)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(services) != 0 {
+		t.Errorf("ListServices() = %v, want empty", services)
+	}
+}
+
+// --- RawImage ---
+
+func TestRawImage(t *testing.T) {
+	file := writeTempCompose(t, sampleCompose)
+
+	tests := []struct {
+		service string
+		want    string
+	}{
+		{"web", "nginx:1.25"},
+		{"db", "postgres:16.2@sha256:abc123"},
+		{"cache", "redis"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.service, func(t *testing.T) {
+			got, err := RawImage(file, tt.service)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("RawImage(%q) = %q, want %q", tt.service, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRawImage_UnknownService(t *testing.T) {
+	file := writeTempCompose(t, sampleCompose)
+	if _, err := RawImage(file, "nonexistent"); err == nil {
+		t.Error("expected error for unknown service")
+	}
+}
+
+// --- Locate ---
+
+func TestLocate(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub := filepath.Join(root, "a", "b")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	composeFile := filepath.Join(root, "docker-compose.yml")
+	if err := os.WriteFile(composeFile, []byte("services: {}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := os.Chdir(wd); err != nil {
+			t.Fatal(err)
+		}
+	}()
+	if err := os.Chdir(sub); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := Locate()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != composeFile {
+		t.Errorf("Locate() = %q, want %q", got, composeFile)
+	}
+}
+
+func TestLocate_NotFound(t *testing.T) {
+	root := t.TempDir()
+
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := os.Chdir(wd); err != nil {
+			t.Fatal(err)
+		}
+	}()
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Locate(); err == nil {
+		t.Error("expected error when no compose file exists")
+	}
+}
+
 // --- ParseImage ---
 
 const sampleCompose = `services:

@@ -158,11 +158,7 @@ func runPin(args []string, d dockerFuncs) error {
 }
 
 func pinAll(d dockerFuncs) error {
-	wd, err := os.Getwd()
-	if err != nil {
-		return err
-	}
-	composeFile, err := compose.FindFile(wd)
+	composeFile, err := compose.Locate()
 	if err != nil {
 		return err
 	}
@@ -184,11 +180,7 @@ func pinAll(d dockerFuncs) error {
 }
 
 func pin(service string, d dockerFuncs) error {
-	wd, err := os.Getwd()
-	if err != nil {
-		return err
-	}
-	composeFile, err := compose.FindFile(wd)
+	composeFile, err := compose.Locate()
 	if err != nil {
 		return err
 	}
@@ -258,11 +250,7 @@ func runList(args []string) error {
 			os.Exit(1)
 		}
 	}
-	wd, err := os.Getwd()
-	if err != nil {
-		return err
-	}
-	composeFile, err := compose.FindFile(wd)
+	composeFile, err := compose.Locate()
 	if err != nil {
 		return err
 	}
@@ -370,11 +358,7 @@ func runUpgrade(args []string, d dockerFuncs) error {
 }
 
 func upgradeAll(d dockerFuncs) error {
-	wd, err := os.Getwd()
-	if err != nil {
-		return err
-	}
-	composeFile, err := compose.FindFile(wd)
+	composeFile, err := compose.Locate()
 	if err != nil {
 		return err
 	}
@@ -396,11 +380,7 @@ func upgradeAll(d dockerFuncs) error {
 }
 
 func upgrade(service, targetVersion string, d dockerFuncs) error {
-	wd, err := os.Getwd()
-	if err != nil {
-		return err
-	}
-	composeFile, err := compose.FindFile(wd)
+	composeFile, err := compose.Locate()
 	if err != nil {
 		return err
 	}
