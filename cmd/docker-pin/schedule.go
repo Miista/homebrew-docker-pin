@@ -406,15 +406,24 @@ func scheduleRun(d dockerFuncs, sys sysFuncs, dryRun bool) error {
 }
 
 // upgradeServiceTxn upgrades one service end to end: pin rewrite, compose up
-// of that service only, on_change hook, notification. On a failed compose up
-// the service's previous pin is restored and re-asserted, leaving the system
-// exactly as before; the upgrade retries on the next scheduled run. The
-// returned verdict is a one-line human summary of what happened.
-func upgradeServiceTxn(cfg *schedule.Config, composeFile string, service schedule.Service, d dockerFuncs, sys sysFuncs, dryRun bool) (verdict string, err error) {
+// of that service only, on_change hook, notification. The pin itself is
+// read/written in whichever file actually declares the service (which may
+// differ from rootFile via include:), but compose up and on_change always
+// run against rootFile — the whole project, not just the declaring file, is
+// needed to bring the service up in the right project/network. On a failed
+// compose up the service's previous pin is restored and re-asserted, leaving
+// the system exactly as before; the upgrade retries on the next scheduled
+// run. The returned verdict is a one-line human summary of what happened.
+func upgradeServiceTxn(cfg *schedule.Config, rootFile string, service schedule.Service, d dockerFuncs, sys sysFuncs, dryRun bool) (verdict string, err error) {
+	serviceFile, err := compose.ResolveServiceIn(rootFile, service.Name)
+	if err != nil {
+		return "", err
+	}
+
 	target := ""
 	if service.Tags != "" {
 		var hold string
-		target, hold, err = constrainedTarget(composeFile, service, d)
+		target, hold, err = constrainedTarget(serviceFile, service, d)
 		if err != nil {
 			if !dryRun {
 				notifyFailed(cfg, service.Name, "", "", err.Error())
@@ -431,7 +440,7 @@ func upgradeServiceTxn(cfg *schedule.Config, composeFile string, service schedul
 	if dryRun {
 		// Full discovery (including the pull, which digest comparison needs),
 		// no side effects beyond the local image cache.
-		outcome, err := upgradeInFile(composeFile, service.Name, target, d, true)
+		outcome, err := upgradeInFile(serviceFile, service.Name, target, d, true)
 		switch {
 		case err != nil:
 			return "", err
@@ -444,12 +453,12 @@ func upgradeServiceTxn(cfg *schedule.Config, composeFile string, service schedul
 		}
 	}
 
-	before, err := os.ReadFile(composeFile)
+	before, err := os.ReadFile(serviceFile)
 	if err != nil {
 		return "", err
 	}
 
-	outcome, err := upgradeInFile(composeFile, service.Name, target, d, false)
+	outcome, err := upgradeInFile(serviceFile, service.Name, target, d, false)
 	if err != nil {
 		notifyFailed(cfg, service.Name, "", "", err.Error())
 		return "", err
@@ -462,13 +471,13 @@ func upgradeServiceTxn(cfg *schedule.Config, composeFile string, service schedul
 	newTag, _ := tagAndDigest(newRaw)
 
 	fmt.Printf("Running docker compose up -d %s ...\n", service.Name)
-	if err := sys.composeUp(composeFile, service.Name); err != nil {
+	if err := sys.composeUp(rootFile, service.Name); err != nil {
 		fmt.Fprintf(os.Stderr, "compose up %s failed: %v\nRolling back to %s ...\n", service.Name, err, oldRaw)
-		if werr := os.WriteFile(composeFile, before, 0o644); werr != nil {
+		if werr := os.WriteFile(serviceFile, before, 0o644); werr != nil {
 			notifyFailed(cfg, service.Name, oldRaw, newRaw, "compose up failed AND rollback write failed — manual intervention needed")
 			return "FAILED — compose up failed and rollback write failed", fmt.Errorf("compose up failed (%v) and rollback write failed: %w", err, werr)
 		}
-		if rerr := sys.composeUp(composeFile, service.Name); rerr != nil {
+		if rerr := sys.composeUp(rootFile, service.Name); rerr != nil {
 			notifyFailed(cfg, service.Name, oldRaw, newRaw, "compose up failed; rollback compose up ALSO failed — container may be down")
 			return "FAILED — compose up failed; rollback also failed", fmt.Errorf("compose up failed (%v); rollback compose up also failed: %w", err, rerr)
 		}
@@ -490,7 +499,7 @@ func upgradeServiceTxn(cfg *schedule.Config, composeFile string, service schedul
 			"PIN_NEW_TAG=" + newTag,
 			"PIN_NEW_DIGEST=" + newDigest,
 		}
-		if err := sys.shell(filepath.Dir(composeFile), cfg.OnChange, env); err != nil {
+		if err := sys.shell(filepath.Dir(rootFile), cfg.OnChange, env); err != nil {
 			// Non-fatal: the upgrade is live. A failed commit/push just means
 			// the change stays local until the next push carries it.
 			fmt.Fprintf(os.Stderr, "Warning: on_change for %s failed: %v (change remains local)\n", service.Name, err)

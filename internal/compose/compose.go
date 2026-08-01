@@ -73,23 +73,133 @@ type composeFile struct {
 	Services map[string]struct {
 		Image string `yaml:"image"`
 	} `yaml:"services"`
+	Include []includeEntry `yaml:"include"`
 }
 
-// ListServices returns all service names in the compose file.
-func ListServices(file string) ([]string, error) {
+// includeEntry accepts both forms an `include:` list element can take: a
+// bare path string, or a mapping with a `path` key (itself a string or a
+// list of strings, for a base+override pair within one logical include).
+type includeEntry struct {
+	Paths []string
+}
+
+func (e *includeEntry) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind == yaml.ScalarNode {
+		e.Paths = []string{value.Value}
+		return nil
+	}
+	var m struct {
+		Path yaml.Node `yaml:"path"`
+	}
+	if err := value.Decode(&m); err != nil {
+		return err
+	}
+	if m.Path.Kind == yaml.ScalarNode {
+		e.Paths = []string{m.Path.Value}
+		return nil
+	}
+	return m.Path.Decode(&e.Paths)
+}
+
+// ResolveService locates the project's root compose file, then finds the
+// file that directly declares serviceName's services: entry — recursing
+// into the root's include: tree (root's own services: take precedence;
+// among includes, earlier entries win, matching Compose's own merge order)
+// only if the service isn't declared directly.
+func ResolveService(serviceName string) (string, error) {
+	root, err := Locate()
+	if err != nil {
+		return "", err
+	}
+	return ResolveServiceIn(root, serviceName)
+}
+
+// ResolveServiceIn is ResolveService against an already-known root file,
+// for callers that resolve many services against one root they've already
+// located (e.g. listing every service) rather than the working directory.
+func ResolveServiceIn(root, serviceName string) (string, error) {
+	found, err := resolveServiceIn(root, serviceName)
+	if err != nil {
+		return "", err
+	}
+	if found == "" {
+		return "", fmt.Errorf("service %q not found in %s or any included file", serviceName, root)
+	}
+	return found, nil
+}
+
+func resolveServiceIn(file, serviceName string) (string, error) {
 	data, err := os.ReadFile(file)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	var cf composeFile
 	if err := yaml.Unmarshal(data, &cf); err != nil {
-		return nil, fmt.Errorf("parsing %s: %w", file, err)
+		return "", fmt.Errorf("parsing %s: %w", file, err)
 	}
-	services := make([]string, 0, len(cf.Services))
-	for name := range cf.Services {
+	if _, ok := cf.Services[serviceName]; ok {
+		return file, nil
+	}
+	dir := filepath.Dir(file)
+	for _, entry := range cf.Include {
+		for _, p := range entry.Paths {
+			included := p
+			if !filepath.IsAbs(included) {
+				included = filepath.Join(dir, included)
+			}
+			found, err := resolveServiceIn(included, serviceName)
+			if err != nil {
+				return "", err
+			}
+			if found != "" {
+				return found, nil
+			}
+		}
+	}
+	return "", nil
+}
+
+// ListServices returns the names of every service reachable from file,
+// recursing into its include: tree. A name defined in more than one place
+// (root shadowing an include, or an earlier include shadowing a later one)
+// is only reported once.
+func ListServices(file string) ([]string, error) {
+	seen := map[string]bool{}
+	if err := collectServices(file, seen); err != nil {
+		return nil, err
+	}
+	services := make([]string, 0, len(seen))
+	for name := range seen {
 		services = append(services, name)
 	}
 	return services, nil
+}
+
+func collectServices(file string, seen map[string]bool) error {
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return err
+	}
+	var cf composeFile
+	if err := yaml.Unmarshal(data, &cf); err != nil {
+		return fmt.Errorf("parsing %s: %w", file, err)
+	}
+	for name := range cf.Services {
+		seen[name] = true
+	}
+	dir := filepath.Dir(file)
+	for _, entry := range cf.Include {
+		for _, p := range entry.Paths {
+			included := p
+			if !filepath.IsAbs(included) {
+				included = filepath.Join(dir, included)
+			}
+			if err := collectServices(included, seen); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // RawImage returns the image string exactly as written in the compose file.
