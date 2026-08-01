@@ -92,7 +92,7 @@ func runAll() error {
 }
 
 func run(service string) error {
-	composeFile, err := compose.Locate()
+	composeFile, err := compose.ResolveService(service)
 	if err != nil {
 		return err
 	}

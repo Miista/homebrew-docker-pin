@@ -180,7 +180,7 @@ func pinAll(d dockerFuncs) error {
 }
 
 func pin(service string, d dockerFuncs) error {
-	composeFile, err := compose.Locate()
+	composeFile, err := compose.ResolveService(service)
 	if err != nil {
 		return err
 	}
@@ -279,11 +279,15 @@ func listInFile(composeFile string, missing, quiet bool, out io.Writer) (unpinne
 	}
 	var rows []row
 	for _, service := range services {
-		raw, err := compose.RawImage(composeFile, service)
+		serviceFile, err := compose.ResolveServiceIn(composeFile, service)
 		if err != nil {
 			return 0, err
 		}
-		base, tag, err := compose.ParseImage(composeFile, service)
+		raw, err := compose.RawImage(serviceFile, service)
+		if err != nil {
+			return 0, err
+		}
+		base, tag, err := compose.ParseImage(serviceFile, service)
 		if err != nil {
 			return 0, err
 		}
@@ -380,7 +384,7 @@ func upgradeAll(d dockerFuncs) error {
 }
 
 func upgrade(service, targetVersion string, d dockerFuncs) error {
-	composeFile, err := compose.Locate()
+	composeFile, err := compose.ResolveService(service)
 	if err != nil {
 		return err
 	}

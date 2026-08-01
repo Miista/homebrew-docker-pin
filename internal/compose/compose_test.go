@@ -151,6 +151,44 @@ func TestListServices_Empty(t *testing.T) {
 	}
 }
 
+func TestListServices_Includes(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "compose.yml")
+	included := filepath.Join(dir, "sub", "other.yml")
+	writeFile(t, root, "include:\n  - sub/other.yml\nservices:\n  web:\n    image: nginx:latest\n")
+	writeFile(t, included, "services:\n  db:\n    image: postgres:16\n")
+
+	services, err := ListServices(root)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := map[string]bool{"web": true, "db": true}
+	if len(services) != len(want) {
+		t.Fatalf("ListServices() = %v, want %d services", services, len(want))
+	}
+	for _, s := range services {
+		if !want[s] {
+			t.Errorf("ListServices() returned unexpected service %q", s)
+		}
+	}
+}
+
+func TestListServices_ShadowedNameCountedOnce(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "compose.yml")
+	included := filepath.Join(dir, "sub", "other.yml")
+	writeFile(t, root, "include:\n  - sub/other.yml\nservices:\n  db:\n    image: mysql:8\n")
+	writeFile(t, included, "services:\n  db:\n    image: postgres:16\n")
+
+	services, err := ListServices(root)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(services) != 1 || services[0] != "db" {
+		t.Errorf("ListServices() = %v, want [db] (shadowed name counted once)", services)
+	}
+}
+
 // --- RawImage ---
 
 func TestRawImage(t *testing.T) {
@@ -186,6 +224,24 @@ func TestRawImage_UnknownService(t *testing.T) {
 
 // --- Locate ---
 
+// chdir switches the process working directory to dir for the duration of
+// the test, restoring it afterward.
+func chdir(t *testing.T, dir string) {
+	t.Helper()
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(wd); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestLocate(t *testing.T) {
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
@@ -200,18 +256,7 @@ func TestLocate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	wd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		if err := os.Chdir(wd); err != nil {
-			t.Fatal(err)
-		}
-	}()
-	if err := os.Chdir(sub); err != nil {
-		t.Fatal(err)
-	}
+	chdir(t, sub)
 
 	got, err := Locate()
 	if err != nil {
@@ -224,22 +269,158 @@ func TestLocate(t *testing.T) {
 
 func TestLocate_NotFound(t *testing.T) {
 	root := t.TempDir()
-
-	wd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		if err := os.Chdir(wd); err != nil {
-			t.Fatal(err)
-		}
-	}()
-	if err := os.Chdir(root); err != nil {
-		t.Fatal(err)
-	}
+	chdir(t, root)
 
 	if _, err := Locate(); err == nil {
 		t.Error("expected error when no compose file exists")
+	}
+}
+
+// --- ResolveService ---
+
+func writeFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestResolveService_Direct(t *testing.T) {
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(dir, "compose.yml")
+	writeFile(t, root, sampleCompose)
+	chdir(t, dir)
+
+	got, err := ResolveService("web")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != root {
+		t.Errorf("ResolveService() = %q, want %q", got, root)
+	}
+}
+
+func TestResolveService_BareStringInclude(t *testing.T) {
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(dir, "compose.yml")
+	included := filepath.Join(dir, "sub", "other.yml")
+	writeFile(t, root, "include:\n  - sub/other.yml\nservices:\n  web:\n    image: nginx:latest\n")
+	writeFile(t, included, "services:\n  db:\n    image: postgres:16\n")
+	chdir(t, dir)
+
+	got, err := ResolveService("db")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != included {
+		t.Errorf("ResolveService() = %q, want %q", got, included)
+	}
+}
+
+func TestResolveService_PathMapInclude(t *testing.T) {
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(dir, "compose.yml")
+	included := filepath.Join(dir, "sub", "other.yml")
+	writeFile(t, root, "include:\n  - path: sub/other.yml\nservices:\n  web:\n    image: nginx:latest\n")
+	writeFile(t, included, "services:\n  db:\n    image: postgres:16\n")
+	chdir(t, dir)
+
+	got, err := ResolveService("db")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != included {
+		t.Errorf("ResolveService() = %q, want %q", got, included)
+	}
+}
+
+func TestResolveService_RootTakesPrecedenceOverInclude(t *testing.T) {
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(dir, "compose.yml")
+	included := filepath.Join(dir, "sub", "other.yml")
+	writeFile(t, root, "include:\n  - sub/other.yml\nservices:\n  db:\n    image: mysql:8\n")
+	writeFile(t, included, "services:\n  db:\n    image: postgres:16\n")
+	chdir(t, dir)
+
+	got, err := ResolveService("db")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != root {
+		t.Errorf("ResolveService() = %q, want root %q (root should shadow include)", got, root)
+	}
+}
+
+func TestResolveService_FirstIncludeWins(t *testing.T) {
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(dir, "compose.yml")
+	a := filepath.Join(dir, "a.yml")
+	b := filepath.Join(dir, "b.yml")
+	writeFile(t, root, "include:\n  - a.yml\n  - b.yml\n")
+	writeFile(t, a, "services:\n  x:\n    image: aaa:1\n")
+	writeFile(t, b, "services:\n  x:\n    image: bbb:2\n")
+	chdir(t, dir)
+
+	got, err := ResolveService("x")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != a {
+		t.Errorf("ResolveService() = %q, want %q (first include should win)", got, a)
+	}
+}
+
+func TestResolveService_NestedInclude(t *testing.T) {
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(dir, "compose.yml")
+	mid := filepath.Join(dir, "sub", "other.yml")
+	leaf := filepath.Join(dir, "sub", "deeper", "thing.yml")
+	writeFile(t, root, "include:\n  - sub/other.yml\n")
+	writeFile(t, mid, "include:\n  - deeper/thing.yml\nservices:\n  db:\n    image: postgres:16\n")
+	writeFile(t, leaf, "services:\n  cache:\n    image: redis:7\n")
+	chdir(t, dir)
+
+	got, err := ResolveService("cache")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != leaf {
+		t.Errorf("ResolveService() = %q, want %q", got, leaf)
+	}
+}
+
+func TestResolveService_NotFound(t *testing.T) {
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(dir, "compose.yml")
+	writeFile(t, root, sampleCompose)
+	chdir(t, dir)
+
+	if _, err := ResolveService("nonexistent"); err == nil {
+		t.Error("expected error for service not found anywhere in the tree")
 	}
 }
 
