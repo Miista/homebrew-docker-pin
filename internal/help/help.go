@@ -26,11 +26,14 @@ Works on the compose file found in the current directory or any parent.`
 var PinTopics = []Topic{
 	{"pin", `docker pin — pin a service image to its current tag and SHA digest
 
-Usage: docker pin <service>
-       docker pin --all
+Usage: docker pin <service> [--dry-run]
+       docker pin --all [--dry-run]
 
 Flags:
-  -a, --all   Pin every service in the compose file.
+  -a, --all       Pin every service in the compose file.
+  -n, --dry-run   Do everything (including the pull, since digest discovery
+                  needs it) except rewrite the compose file: prints
+                  "Would pin ..." instead.
 
 Rewrites the service's image to <image>:<tag>@sha256:<digest>, pulling the
 image first if it is not available locally. A moving tag like 'latest' is
@@ -158,12 +161,14 @@ Usage: docker pin version   (aliases: --version, -v)`},
 
 const UnpinUsage = `docker-unpin — remove the SHA digest pin from service images
 
-Usage: docker unpin <service>
-       docker unpin --all
+Usage: docker unpin <service> [--dry-run]
+       docker unpin --all [--dry-run]
        docker unpin version
 
 Flags:
-  -a, --all   Unpin every service in the compose file.
+  -a, --all       Unpin every service in the compose file.
+  -n, --dry-run   Don't rewrite the compose file: prints "Would unpin ..."
+                  instead.
 
 Restores the service's image to <image>:<tag>, keeping the tag. The reverse
 of 'docker pin'.`
