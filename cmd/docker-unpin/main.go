@@ -107,9 +107,16 @@ func runAll(dryRun bool) error {
 }
 
 func run(service string, dryRun bool) error {
-	composeFile, err := compose.ResolveService(service)
+	root, err := compose.Locate()
 	if err != nil {
 		return err
+	}
+	composeFile, err := compose.ResolveServiceIn(root, service)
+	if err != nil {
+		return err
+	}
+	if composeFile != root {
+		fmt.Printf("%s is declared in %s (via include:)\n", service, composeFile)
 	}
 
 	base, tag, err := compose.ParseImage(composeFile, service)

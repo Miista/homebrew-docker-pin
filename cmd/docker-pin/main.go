@@ -196,9 +196,16 @@ func pinAll(d dockerFuncs, dryRun bool) error {
 }
 
 func pin(service string, d dockerFuncs, dryRun bool) error {
-	composeFile, err := compose.ResolveService(service)
+	root, err := compose.Locate()
 	if err != nil {
 		return err
+	}
+	composeFile, err := compose.ResolveServiceIn(root, service)
+	if err != nil {
+		return err
+	}
+	if composeFile != root {
+		fmt.Printf("%s is declared in %s (via include:)\n", service, composeFile)
 	}
 	return pinInFile(composeFile, service, d, dryRun)
 }
@@ -404,9 +411,16 @@ func upgradeAll(d dockerFuncs) error {
 }
 
 func upgrade(service, targetVersion string, d dockerFuncs) error {
-	composeFile, err := compose.ResolveService(service)
+	root, err := compose.Locate()
 	if err != nil {
 		return err
+	}
+	composeFile, err := compose.ResolveServiceIn(root, service)
+	if err != nil {
+		return err
+	}
+	if composeFile != root {
+		fmt.Printf("%s is declared in %s (via include:)\n", service, composeFile)
 	}
 	_, err = upgradeInFile(composeFile, service, targetVersion, d, false)
 	return err
