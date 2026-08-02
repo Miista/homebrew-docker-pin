@@ -50,8 +50,23 @@ func main() {
 		return
 	}
 
+	dryRun := false
+	filtered := args[:0:0]
+	for _, a := range args {
+		if a == "--dry-run" || a == "-n" {
+			dryRun = true
+			continue
+		}
+		filtered = append(filtered, a)
+	}
+	args = filtered
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, help.UnpinUsage)
+		os.Exit(1)
+	}
+
 	if args[0] == "--all" || args[0] == "-a" {
-		if err := runAll(); err != nil {
+		if err := runAll(dryRun); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
@@ -63,13 +78,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := run(args[0]); err != nil {
+	if err := run(args[0], dryRun); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func runAll() error {
+func runAll(dryRun bool) error {
 	composeFile, err := compose.Locate()
 	if err != nil {
 		return err
@@ -80,7 +95,7 @@ func runAll() error {
 	}
 	var failed []string
 	for _, service := range services {
-		if err := run(service); err != nil {
+		if err := run(service, dryRun); err != nil {
 			fmt.Fprintf(os.Stderr, "Error unpinning %s: %v\n", service, err)
 			failed = append(failed, service)
 		}
@@ -91,7 +106,7 @@ func runAll() error {
 	return nil
 }
 
-func run(service string) error {
+func run(service string, dryRun bool) error {
 	composeFile, err := compose.ResolveService(service)
 	if err != nil {
 		return err
@@ -112,6 +127,10 @@ func run(service string) error {
 	}
 
 	unpinned := base + ":" + tag
+	if dryRun {
+		fmt.Printf("Would unpin %s: %s -> %s\n", service, rawImage, unpinned)
+		return nil
+	}
 	if err := compose.PinImage(composeFile, service, unpinned); err != nil {
 		return err
 	}

@@ -146,18 +146,34 @@ func maybeHelp(args []string) bool {
 // pin
 
 func runPin(args []string, d dockerFuncs) error {
+	dryRun := false
+	filtered := args[:0:0]
+	for _, a := range args {
+		if a == "--dry-run" || a == "-n" {
+			dryRun = true
+			continue
+		}
+		filtered = append(filtered, a)
+	}
+	args = filtered
+
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "Usage: docker pin <service>")
+		fmt.Fprintln(os.Stderr, "       docker pin --all")
+		os.Exit(1)
+	}
 	if args[0] == "--all" || args[0] == "-a" {
-		return pinAll(d)
+		return pinAll(d, dryRun)
 	}
 	if len(args) != 1 {
 		fmt.Fprintln(os.Stderr, "Usage: docker pin <service>")
 		fmt.Fprintln(os.Stderr, "       docker pin --all")
 		os.Exit(1)
 	}
-	return pin(args[0], d)
+	return pin(args[0], d, dryRun)
 }
 
-func pinAll(d dockerFuncs) error {
+func pinAll(d dockerFuncs, dryRun bool) error {
 	composeFile, err := compose.Locate()
 	if err != nil {
 		return err
@@ -168,7 +184,7 @@ func pinAll(d dockerFuncs) error {
 	}
 	var failed []string
 	for _, service := range services {
-		if err := pin(service, d); err != nil {
+		if err := pin(service, d, dryRun); err != nil {
 			fmt.Fprintf(os.Stderr, "Error pinning %s: %v\n", service, err)
 			failed = append(failed, service)
 		}
@@ -179,15 +195,15 @@ func pinAll(d dockerFuncs) error {
 	return nil
 }
 
-func pin(service string, d dockerFuncs) error {
+func pin(service string, d dockerFuncs, dryRun bool) error {
 	composeFile, err := compose.ResolveService(service)
 	if err != nil {
 		return err
 	}
-	return pinInFile(composeFile, service, d)
+	return pinInFile(composeFile, service, d, dryRun)
 }
 
-func pinInFile(composeFile, service string, d dockerFuncs) error {
+func pinInFile(composeFile, service string, d dockerFuncs, dryRun bool) error {
 	baseImage, tag, err := compose.ParseImage(composeFile, service)
 	if err != nil {
 		return err
@@ -228,6 +244,10 @@ func pinInFile(composeFile, service string, d dockerFuncs) error {
 	}
 
 	pinned := fmt.Sprintf("%s:%s@%s", baseImage, pinnedTag, digest)
+	if dryRun {
+		fmt.Printf("Would pin %s: %s -> %s\n", service, raw, pinned)
+		return nil
+	}
 	if err := compose.PinImage(composeFile, service, pinned); err != nil {
 		return err
 	}
