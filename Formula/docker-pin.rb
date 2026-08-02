@@ -5,12 +5,12 @@
 class DockerPin < Formula
   desc "Docker CLI plugins to pin and upgrade container images by tag and SHA digest"
   homepage "https://github.com/Miista/homebrew-docker-pin"
-  version "0.13.13"
+  version "0.13.14"
 
   on_macos do
     if Hardware::CPU.intel?
-      url "https://github.com/Miista/homebrew-docker-pin/releases/download/v0.13.13/homebrew-docker-pin_0.13.13_darwin_amd64.tar.gz"
-      sha256 "3b124f1ad1261ee8506a4f0ef980dab7875665cd2b247228588ac3b75101d905"
+      url "https://github.com/Miista/homebrew-docker-pin/releases/download/v0.13.14/homebrew-docker-pin_0.13.14_darwin_amd64.tar.gz"
+      sha256 "59f4080c435a5fa5f1f9cf03367da93d46e1b985e6c64444bb329f8a8bd254d1"
 
       define_method(:install) do
         (lib/"docker/cli-plugins").install "docker-pin", "docker-unpin"
@@ -18,8 +18,8 @@ class DockerPin < Formula
       end
     end
     if Hardware::CPU.arm?
-      url "https://github.com/Miista/homebrew-docker-pin/releases/download/v0.13.13/homebrew-docker-pin_0.13.13_darwin_arm64.tar.gz"
-      sha256 "2a7c727dc526e892901d1a4b7744837b2bc2a426eed6b46e77ace42ba72a2fba"
+      url "https://github.com/Miista/homebrew-docker-pin/releases/download/v0.13.14/homebrew-docker-pin_0.13.14_darwin_arm64.tar.gz"
+      sha256 "327bebae450f3357c281bd6043a938e0bbfa6d3bc4ed5d86b3f8f15303c5ea78"
 
       define_method(:install) do
         (lib/"docker/cli-plugins").install "docker-pin", "docker-unpin"
@@ -30,16 +30,16 @@ class DockerPin < Formula
 
   on_linux do
     if Hardware::CPU.intel? && Hardware::CPU.is_64_bit?
-      url "https://github.com/Miista/homebrew-docker-pin/releases/download/v0.13.13/homebrew-docker-pin_0.13.13_linux_amd64.tar.gz"
-      sha256 "7bd1f8062161f66216a486b2c9071dc3cc03415e0b57f225885577d09f501d3d"
+      url "https://github.com/Miista/homebrew-docker-pin/releases/download/v0.13.14/homebrew-docker-pin_0.13.14_linux_amd64.tar.gz"
+      sha256 "065bf82f874840163aa44c9e3ef4422238c7081f57012f53326158d648730e8d"
       define_method(:install) do
         (lib/"docker/cli-plugins").install "docker-pin", "docker-unpin"
         man1.install "man/docker-pin.1.gz", "man/docker-unpin.1.gz"
       end
     end
     if Hardware::CPU.arm? && Hardware::CPU.is_64_bit?
-      url "https://github.com/Miista/homebrew-docker-pin/releases/download/v0.13.13/homebrew-docker-pin_0.13.13_linux_arm64.tar.gz"
-      sha256 "f85dc4111fc11580d59bdc9da698411a90cf488e435a0a339611c5e06a55344c"
+      url "https://github.com/Miista/homebrew-docker-pin/releases/download/v0.13.14/homebrew-docker-pin_0.13.14_linux_arm64.tar.gz"
+      sha256 "130e572573245967d1d599515b780b34d8abd6c4d58c0ce2801cd37e195f24f3"
       define_method(:install) do
         (lib/"docker/cli-plugins").install "docker-pin", "docker-unpin"
         man1.install "man/docker-pin.1.gz", "man/docker-unpin.1.gz"
