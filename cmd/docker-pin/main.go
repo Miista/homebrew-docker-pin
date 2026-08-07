@@ -362,6 +362,17 @@ func shortDigest(digest string) string {
 // upgrade
 
 func runUpgrade(args []string, d dockerFuncs) error {
+	dryRun := false
+	filtered := args[:0:0]
+	for _, a := range args {
+		if a == "--dry-run" || a == "-n" {
+			dryRun = true
+			continue
+		}
+		filtered = append(filtered, a)
+	}
+	args = filtered
+
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, "Usage: docker pin upgrade <service> [version]")
 		fmt.Fprintln(os.Stderr, "       docker pin upgrade --all")
@@ -373,7 +384,7 @@ func runUpgrade(args []string, d dockerFuncs) error {
 			fmt.Fprintln(os.Stderr, "Error: --all cannot be combined with a version")
 			os.Exit(1)
 		}
-		return upgradeAll(d)
+		return upgradeAll(d, dryRun)
 	}
 
 	if len(args) > 2 {
@@ -387,10 +398,10 @@ func runUpgrade(args []string, d dockerFuncs) error {
 	if len(args) == 2 {
 		targetVersion = args[1]
 	}
-	return upgrade(service, targetVersion, d)
+	return upgrade(service, targetVersion, d, dryRun)
 }
 
-func upgradeAll(d dockerFuncs) error {
+func upgradeAll(d dockerFuncs, dryRun bool) error {
 	composeFile, err := compose.Locate()
 	if err != nil {
 		return err
@@ -401,7 +412,7 @@ func upgradeAll(d dockerFuncs) error {
 	}
 	var failed []string
 	for _, service := range services {
-		if err := upgrade(service, "", d); err != nil {
+		if err := upgrade(service, "", d, dryRun); err != nil {
 			fmt.Fprintf(os.Stderr, "Error upgrading %s: %v\n", service, err)
 			failed = append(failed, service)
 		}
@@ -412,7 +423,7 @@ func upgradeAll(d dockerFuncs) error {
 	return nil
 }
 
-func upgrade(service, targetVersion string, d dockerFuncs) error {
+func upgrade(service, targetVersion string, d dockerFuncs, dryRun bool) error {
 	root, err := compose.Locate()
 	if err != nil {
 		return err
@@ -424,7 +435,7 @@ func upgrade(service, targetVersion string, d dockerFuncs) error {
 	if composeFile != root {
 		fmt.Printf("%s is declared in %s (via include:)\n", service, composeFile)
 	}
-	_, err = upgradeInFile(composeFile, service, targetVersion, d, false)
+	_, err = upgradeInFile(composeFile, service, targetVersion, d, dryRun)
 	return err
 }
 
