@@ -13,8 +13,8 @@ const PinUsage = `docker-pin — pin compose service images to tag + SHA digest
 
 Usage: docker pin <service>
        docker pin --all
-       docker pin upgrade <service> [version]
-       docker pin upgrade --all
+       docker pin upgrade <service> [version] [--dry-run]
+       docker pin upgrade --all [--dry-run]
        docker pin list [--missing] [-q]
        docker pin schedule <apply|status|remove|run>
        docker pin version
@@ -41,11 +41,13 @@ resolved to the concrete version tag when the registry allows it.`},
 
 	{"upgrade", `docker pin upgrade — move a pinned service to a newer version and re-pin
 
-Usage: docker pin upgrade <service> [version]
-       docker pin upgrade --all
+Usage: docker pin upgrade <service> [version] [--dry-run]
+       docker pin upgrade --all [--dry-run]
 
 Flags:
-  -a, --all   Upgrade every service (cannot be combined with a version).
+  -a, --all       Upgrade every service (cannot be combined with a version).
+  -n, --dry-run   Do everything (including the pull) except rewrite the
+                  compose file: prints "Would upgrade ..." instead.
 
 With a version, pulls exactly that tag and pins to it.
 
