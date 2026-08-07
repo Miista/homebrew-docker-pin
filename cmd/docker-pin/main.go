@@ -398,7 +398,8 @@ func runUpgrade(args []string, d dockerFuncs) error {
 	if len(args) == 2 {
 		targetVersion = args[1]
 	}
-	return upgrade(service, targetVersion, d, dryRun)
+	_, err := upgrade(service, targetVersion, d, dryRun)
+	return err
 }
 
 func upgradeAll(d dockerFuncs, dryRun bool) error {
@@ -411,32 +412,57 @@ func upgradeAll(d dockerFuncs, dryRun bool) error {
 		return err
 	}
 	var failed []string
+	type result struct {
+		service string
+		outcome upgradeOutcome
+	}
+	var results []result
 	for _, service := range services {
-		if err := upgrade(service, "", d, dryRun); err != nil {
+		outcome, err := upgrade(service, "", d, dryRun)
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error upgrading %s: %v\n", service, err)
 			failed = append(failed, service)
+			continue
+		}
+		results = append(results, result{service, outcome})
+	}
+
+	fmt.Println()
+	fmt.Println("Summary:")
+	verb := "Upgraded"
+	if dryRun {
+		verb = "Would upgrade"
+	}
+	for _, r := range results {
+		if r.outcome.Changed {
+			fmt.Printf("  %s %s: %s -> %s\n", verb, r.service, r.outcome.OldRaw, r.outcome.NewRaw)
+		} else {
+			fmt.Printf("  %s: up to date\n", r.service)
 		}
 	}
+	for _, service := range failed {
+		fmt.Printf("  %s: FAILED\n", service)
+	}
+
 	if len(failed) > 0 {
 		return fmt.Errorf("failed to upgrade: %s", strings.Join(failed, ", "))
 	}
 	return nil
 }
 
-func upgrade(service, targetVersion string, d dockerFuncs, dryRun bool) error {
+func upgrade(service, targetVersion string, d dockerFuncs, dryRun bool) (upgradeOutcome, error) {
 	root, err := compose.Locate()
 	if err != nil {
-		return err
+		return upgradeOutcome{}, err
 	}
 	composeFile, err := compose.ResolveServiceIn(root, service)
 	if err != nil {
-		return err
+		return upgradeOutcome{}, err
 	}
 	if composeFile != root {
 		fmt.Printf("%s is declared in %s (via include:)\n", service, composeFile)
 	}
-	_, err = upgradeInFile(composeFile, service, targetVersion, d, dryRun)
-	return err
+	return upgradeInFile(composeFile, service, targetVersion, d, dryRun)
 }
 
 // upgradeOutcome describes what an upgradeInFile call did (or, in dry-run
