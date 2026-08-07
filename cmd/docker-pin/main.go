@@ -131,8 +131,10 @@ func maybeHelp(args []string) bool {
 			}
 		case "help":
 			// bare `help`: fall through to full usage
+		case "-h", "--help":
+			// bare `docker pin --help` / `-h`: fall through to full usage
 		default:
-			topic = "pin" // `docker pin <service> --help` / `docker pin --help`
+			topic = "pin" // `docker pin <service> --help`
 		}
 	}
 	if text, ok := help.For(help.PinTopics, topic); ok {
