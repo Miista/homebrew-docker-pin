@@ -52,6 +52,10 @@ func fakeReg(tags []string) regFuncs {
 	return regFuncs{listTags: func(baseImage string) ([]string, error) { return tags, nil }}
 }
 
+func fakeDigestReg(digest string) regFuncs {
+	return regFuncs{remoteDigest: func(baseImage, tag string) (string, error) { return digest, nil }}
+}
+
 func TestCheckServiceFindsNewerTag(t *testing.T) {
 	dir := chdirTemp(t, oneService, pinConfig)
 	cfg, composeFile, err := loadConfig()
@@ -59,7 +63,7 @@ func TestCheckServiceFindsNewerTag(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = dir
-	candidate, err := checkService(composeFile, cfg.Services[0], fakeReg([]string{"1.2.0", "1.3.0", "1.2.1"}))
+	candidate, err := checkService(composeFile, cfg.Services[0], fakeReg([]string{"1.2.0", "1.3.0", "1.2.1"}), map[string]string{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +78,7 @@ func TestCheckServiceNoNewerTag(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	candidate, err := checkService(composeFile, cfg.Services[0], fakeReg([]string{"1.2.0", "1.1.0"}))
+	candidate, err := checkService(composeFile, cfg.Services[0], fakeReg([]string{"1.2.0", "1.1.0"}), map[string]string{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +87,7 @@ func TestCheckServiceNoNewerTag(t *testing.T) {
 	}
 }
 
-func TestCheckServiceSkipsUnconstrained(t *testing.T) {
+func TestCheckServiceMovingTag_FirstCheckRecordsBaselineWithoutNotifying(t *testing.T) {
 	chdirTemp(t, oneService, `
 schedule: "0 0 * * *"
 services:
@@ -93,12 +97,56 @@ services:
 	if err != nil {
 		t.Fatal(err)
 	}
-	candidate, err := checkService(composeFile, cfg.Services[0], fakeReg([]string{"1.9.9"}))
+	st := map[string]string{}
+	candidate, err := checkService(composeFile, cfg.Services[0], fakeDigestReg("sha256:aaa"), st)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if candidate != "" {
-		t.Fatalf("candidate = %q, want empty (unconstrained services are skipped)", candidate)
+		t.Fatalf("candidate = %q, want empty on first check (baseline recorded, not notified)", candidate)
+	}
+	if st["qui"] != "sha256:aaa" {
+		t.Fatalf("st[qui] = %q, want sha256:aaa recorded as baseline", st["qui"])
+	}
+}
+
+func TestCheckServiceMovingTag_DigestChangeIsReported(t *testing.T) {
+	chdirTemp(t, oneService, `
+schedule: "0 0 * * *"
+services:
+  - qui
+`)
+	cfg, composeFile, err := loadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := map[string]string{"qui": "sha256:aaa"}
+	candidate, err := checkService(composeFile, cfg.Services[0], fakeDigestReg("sha256:bbb"), st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if candidate != "sha256:bbb" {
+		t.Fatalf("candidate = %q, want sha256:bbb", candidate)
+	}
+}
+
+func TestCheckServiceMovingTag_SameDigestNotReported(t *testing.T) {
+	chdirTemp(t, oneService, `
+schedule: "0 0 * * *"
+services:
+  - qui
+`)
+	cfg, composeFile, err := loadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := map[string]string{"qui": "sha256:aaa"}
+	candidate, err := checkService(composeFile, cfg.Services[0], fakeDigestReg("sha256:aaa"), st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if candidate != "" {
+		t.Fatalf("candidate = %q, want empty (digest unchanged)", candidate)
 	}
 }
 
@@ -132,6 +180,39 @@ func TestRunOnceNotifiesOnceThenDedupes(t *testing.T) {
 	second := out.String()
 	if !bytes.Contains([]byte(second), []byte("already notified")) {
 		t.Fatalf("second run output = %q, want it to note already notified (no repeat notification)", second)
+	}
+}
+
+func TestRunOnceMovingTagBaselineThenNotifiesOnChange(t *testing.T) {
+	chdirTemp(t, oneService, `
+schedule: "0 0 * * *"
+services:
+  - qui
+`)
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	t.Setenv("TAGWATCH_STATE_FILE", statePath)
+
+	var out bytes.Buffer
+	if err := runOnce(fakeDigestReg("sha256:aaa"), &out); err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(out.Bytes(), []byte("available\n")) {
+		t.Fatalf("first run output = %q, want no notification on initial baseline", out.String())
+	}
+	st, err := loadState(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st["qui"] != "sha256:aaa" {
+		t.Fatalf("state[qui] = %q, want sha256:aaa baseline recorded", st["qui"])
+	}
+
+	out.Reset()
+	if err := runOnce(fakeDigestReg("sha256:bbb"), &out); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(out.Bytes(), []byte("sha256:bbb available\n")) {
+		t.Fatalf("second run output = %q, want it to report the changed digest", out.String())
 	}
 }
 

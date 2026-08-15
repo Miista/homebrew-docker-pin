@@ -110,5 +110,62 @@ notif_count2=$(wc -l < "$NTFY_LOG" | tr -d ' ')
 still_one=0; [ "$notif_count2" = 1 ] && still_one=1
 check "no repeat notification (still exactly one)" "$still_one"
 
+# --- moving-tag scenario: unconstrained service (no tags: regex) ---
+# tagwatch has no local baseline for a moving tag (nothing is pulled), so the
+# first check must record the remote digest silently, then only notify once
+# a later check sees a different digest.
+echo "== moving-tag scenario: unconstrained service, no baseline yet"
+MROOT="$ROOT-moving"
+rm -rf "$MROOT" && mkdir -p "$MROOT/work" "$MROOT/data"
+cat > "$MROOT/work/docker-compose.yml" <<EOF
+services:
+  redis:
+    image: redis:alpine
+EOF
+MNTFY_PORT=8934
+cat > "$MROOT/work/pin.yaml" <<EOF
+schedule: "0 0 * * *"
+services:
+  - redis
+notify:
+  ntfy:
+    url: http://host.docker.internal:$MNTFY_PORT
+    topic: e2e
+EOF
+
+MNTFY_LOG="$MROOT/ntfy-requests.log"
+: > "$MNTFY_LOG"
+python3 - "$MNTFY_PORT" "$MNTFY_LOG" >"$MROOT/ntfy-server.log" 2>&1 <<'PYEOF' &
+import http.server, sys
+
+port, log_path = int(sys.argv[1]), sys.argv[2]
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(length).decode(errors="replace")
+        with open(log_path, "a") as f:
+            f.write(self.headers.get("Title", "") + "|" + body + "\n")
+        self.send_response(200)
+        self.end_headers()
+    def log_message(self, *a):
+        pass
+
+http.server.HTTPServer(("0.0.0.0", port), Handler).serve_forever()
+PYEOF
+MNTFY_PID=$!
+trap 'kill $NTFY_PID $MNTFY_PID 2>/dev/null || true; wait $NTFY_PID $MNTFY_PID 2>/dev/null || true; rm -rf "$ROOT" "$MROOT"' EXIT
+sleep 0.5
+
+docker run --rm --add-host=host.docker.internal:host-gateway \
+  -v "$MROOT/work:/work" -w /work -v "$MROOT/data:/data" \
+  "$IMAGE" run 2>&1 | sed 's/^/   | /'
+
+no_notif_yet=0; [ "$(wc -l < "$MNTFY_LOG" | tr -d ' ')" = 0 ] && no_notif_yet=1
+check "moving tag: no notification on first check (no baseline yet)" "$no_notif_yet"
+
+baseline_written=0; grep -q '"redis"' "$MROOT/data/tagwatch.json" 2>/dev/null && baseline_written=1
+check "moving tag: baseline digest recorded" "$baseline_written"
+
 echo "== e2e: $pass passed, $fail failed"
 exit $((fail > 0))

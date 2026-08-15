@@ -26,10 +26,11 @@ var version = "dev"
 // regFuncs seams out registry access so run/serve can be tested without
 // network calls, mirroring docker-pin's dockerFuncs pattern.
 type regFuncs struct {
-	listTags func(baseImage string) ([]string, error)
+	listTags     func(baseImage string) ([]string, error)
+	remoteDigest func(baseImage, tag string) (string, error)
 }
 
-var realReg = regFuncs{listTags: registry.ListTags}
+var realReg = regFuncs{listTags: registry.ListTags, remoteDigest: registry.RemoteDigest}
 
 func main() {
 	if len(os.Args) < 2 {
@@ -103,10 +104,14 @@ func runOnce(reg regFuncs, out io.Writer) error {
 
 	changed := false
 	for _, svc := range services {
-		candidate, err := checkService(composeFile, svc, reg)
+		before := st[svc.Name]
+		candidate, err := checkService(composeFile, svc, reg, st)
 		if err != nil {
 			fmt.Fprintf(out, "%s: error: %v\n", svc.Name, err)
 			continue
+		}
+		if st[svc.Name] != before {
+			changed = true // checkService recorded a moving-tag baseline
 		}
 		if candidate == "" {
 			fmt.Fprintf(out, "%s: up to date\n", svc.Name)
@@ -130,16 +135,17 @@ func runOnce(reg regFuncs, out io.Writer) error {
 	return nil
 }
 
-// checkService returns the newest registry tag for svc that is newer than
-// the tag currently pinned in the compose file, honoring the same
-// tags/exclude/delay constraints docker-pin schedule uses. An empty result
-// means nothing newer qualifies. A service with no tags constraint is
-// skipped entirely: without a version pattern there is no way to tell a
-// newer immutable tag from the currently running one (e.g. "latest").
-func checkService(rootFile string, svc schedule.Service, reg regFuncs) (string, error) {
-	if svc.Tags == "" {
-		return "", nil
-	}
+// checkService returns what's newly available for svc: for a service with a
+// tags constraint, the newest matching registry tag newer than the one
+// currently pinned; for an unconstrained service (moving tag such as
+// "latest"), the remote manifest digest once it differs from st[svc.Name].
+// An empty result means nothing new to report. For a moving-tag service,
+// checkService may update st[svc.Name] itself even when it returns no
+// candidate: the very first check has no baseline to compare the digest
+// against, so it records one silently rather than notifying (otherwise
+// every newly-watched service would fire once on day one regardless of
+// whether anything actually changed).
+func checkService(rootFile string, svc schedule.Service, reg regFuncs, st map[string]string) (string, error) {
 	serviceFile, err := compose.ResolveServiceIn(rootFile, svc.Name)
 	if err != nil {
 		return "", err
@@ -148,6 +154,11 @@ func checkService(rootFile string, svc schedule.Service, reg regFuncs) (string, 
 	if err != nil {
 		return "", err
 	}
+
+	if svc.Tags == "" {
+		return checkMovingTag(baseImage, currentTag, reg, svc.Name, st)
+	}
+
 	include, exclude, err := compileTagFilters(svc)
 	if err != nil {
 		return "", err
@@ -181,6 +192,26 @@ func checkService(rootFile string, svc schedule.Service, reg regFuncs) (string, 
 		}
 	}
 	return "", nil
+}
+
+// checkMovingTag fetches the remote manifest digest for a moving tag (no
+// pull) and reports it as the candidate whenever it differs from the
+// recorded baseline in st. On the first check for a service (no recorded
+// baseline yet) it records the current digest in st and reports nothing.
+func checkMovingTag(baseImage, tag string, reg regFuncs, serviceName string, st map[string]string) (string, error) {
+	digest, err := reg.remoteDigest(baseImage, tag)
+	if err != nil {
+		return "", fmt.Errorf("fetching remote digest for %s:%s: %w", baseImage, tag, err)
+	}
+	lastKnown := st[serviceName]
+	if lastKnown == "" {
+		st[serviceName] = digest
+		return "", nil
+	}
+	if digest == lastKnown {
+		return "", nil
+	}
+	return digest, nil
 }
 
 // maxDelayChecks bounds how many candidate publish dates one service may

@@ -62,6 +62,17 @@ func resolveGHCRFromBase(path, digest, baseURL string) (Result, error) {
 	return result, nil
 }
 
+// ghcrTagDigestFromBase fetches a single tag's manifest digest, with no pull
+// and no tag listing — one auth round trip plus one HEAD request.
+func ghcrTagDigestFromBase(path, tag, baseURL string) (string, error) {
+	client := &http.Client{Timeout: 15 * time.Second}
+	token, err := ghcrTokenFromBase(client, path, baseURL)
+	if err != nil {
+		return "", fmt.Errorf("ghcr auth: %w", err)
+	}
+	return ghcrManifestDigestFromBase(client, token, path, tag, baseURL)
+}
+
 func ghcrToken(client *http.Client, path string) (string, error) {
 	return ghcrTokenFromBase(client, path, "https://ghcr.io")
 }

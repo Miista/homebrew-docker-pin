@@ -84,6 +84,14 @@ func resolveOCIFromBase(baseURL, repo, digest string) (Result, error) {
 	return result, nil
 }
 
+// ociTagDigestFromBase fetches a single tag's manifest digest from any
+// registry implementing the OCI Distribution Spec, with no pull and no tag
+// listing.
+func ociTagDigestFromBase(baseURL, repo, tag string) (string, error) {
+	client := &http.Client{Timeout: 15 * time.Second}
+	return ociManifestDigest(client, baseURL, repo, tag)
+}
+
 // ociDo performs req, transparently handling a single bearer-auth challenge.
 func ociDo(client *http.Client, req *http.Request, accept string) (*http.Response, error) {
 	if accept != "" {
