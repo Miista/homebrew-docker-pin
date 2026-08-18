@@ -100,6 +100,21 @@ check() { # $1 = description, $2 = condition (already evaluated as 0/1)
   else echo "   FAIL: $1"; fail=$((fail+1)); fi
 }
 
+# state_value <file> <key>: prints state.json's value for key, or nothing if
+# the file/key is missing -- used to assert the exact stored value, not just
+# that some matching substring appears somewhere in the file.
+state_value() {
+  python3 -c '
+import json, sys
+try:
+    with open(sys.argv[1]) as f:
+        data = json.load(f)
+except (FileNotFoundError, json.JSONDecodeError):
+    sys.exit(0)
+print(data.get(sys.argv[2], ""), end="")
+' "$1" "$2"
+}
+
 before_compose_hash=$(sha256sum "$ROOT/work/docker-compose.yml" | awk '{print $1}')
 
 echo "== first run: expect a newer tag detected and one notification sent"
@@ -121,8 +136,9 @@ check "notification names the discovered successor tag ($NEW_TAG)" "$mentions_ne
 state_written=0; [ -f "$ROOT/data/tagwatch.json" ] && state_written=1
 check "state file written" "$state_written"
 
-state_has_new_tag=0; grep -q "\"$NEW_TAG\"" "$ROOT/data/tagwatch.json" 2>/dev/null && state_has_new_tag=1
-check "state file records the discovered successor tag" "$state_has_new_tag"
+redis_state=$(state_value "$ROOT/data/tagwatch.json" redis)
+state_has_new_tag=0; [ "$redis_state" = "$NEW_TAG" ] && state_has_new_tag=1
+check "state[redis] is exactly the discovered successor tag ($NEW_TAG, got '$redis_state')" "$state_has_new_tag"
 
 echo "== second run: expect no repeat notification for the same tag"
 docker run --rm --add-host=host.docker.internal:host-gateway \
@@ -187,8 +203,22 @@ docker run --rm --add-host=host.docker.internal:host-gateway \
 no_notif_yet=0; [ "$(wc -l < "$MNTFY_LOG" | tr -d ' ')" = 0 ] && no_notif_yet=1
 check "moving tag: no notification on first check (no baseline yet)" "$no_notif_yet"
 
-baseline_written=0; grep -q '"redis"' "$MROOT/data/tagwatch.json" 2>/dev/null && baseline_written=1
-check "moving tag: baseline digest recorded" "$baseline_written"
+moving_state=$(state_value "$MROOT/data/tagwatch.json" redis)
+baseline_written=0
+case "$moving_state" in sha256:*) baseline_written=1 ;; esac
+check "moving tag: state[redis] holds a sha256 digest baseline (got '$moving_state')" "$baseline_written"
+
+echo "== moving-tag scenario: second run with an unchanged digest must not notify"
+docker run --rm --add-host=host.docker.internal:host-gateway \
+  -v "$MROOT/work:/work" -w /work -v "$MROOT/data:/data" \
+  "$IMAGE" run 2>&1 | sed 's/^/   | /'
+
+still_no_notif=0; [ "$(wc -l < "$MNTFY_LOG" | tr -d ' ')" = 0 ] && still_no_notif=1
+check "moving tag: no notification while the digest is unchanged" "$still_no_notif"
+
+moving_state2=$(state_value "$MROOT/data/tagwatch.json" redis)
+baseline_unchanged=0; [ "$moving_state2" = "$moving_state" ] && baseline_unchanged=1
+check "moving tag: recorded baseline unchanged across the unchanged-digest run" "$baseline_unchanged"
 
 echo "== e2e: $pass passed, $fail failed"
 exit $((fail > 0))
