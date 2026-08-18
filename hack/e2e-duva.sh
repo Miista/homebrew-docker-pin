@@ -118,7 +118,7 @@ print(data.get(sys.argv[2], ""), end="")
 before_compose_hash=$(sha256sum "$ROOT/work/docker-compose.yml" | awk '{print $1}')
 
 echo "== first run: expect a newer tag detected and one notification sent"
-docker run --rm --add-host=host.docker.internal:host-gateway \
+docker run --rm --user "$(id -u):$(id -g)" --add-host=host.docker.internal:host-gateway \
   -v "$ROOT/work:/compose:ro" -v "$ROOT/config.yaml:/config.yaml:ro" -v "$ROOT/data:/data" \
   "$IMAGE" run 2>&1 | sed 's/^/   | /'
 
@@ -141,7 +141,7 @@ state_has_new_tag=0; [ "$redis_state" = "$NEW_TAG" ] && state_has_new_tag=1
 check "state[redis] is exactly the discovered successor tag ($NEW_TAG, got '$redis_state')" "$state_has_new_tag"
 
 echo "== second run: expect no repeat notification for the same tag"
-docker run --rm --add-host=host.docker.internal:host-gateway \
+docker run --rm --user "$(id -u):$(id -g)" --add-host=host.docker.internal:host-gateway \
   -v "$ROOT/work:/compose:ro" -v "$ROOT/config.yaml:/config.yaml:ro" -v "$ROOT/data:/data" \
   "$IMAGE" run 2>&1 | sed 's/^/   | /'
 
@@ -196,7 +196,7 @@ MNTFY_PID=$!
 trap 'kill $NTFY_PID $MNTFY_PID 2>/dev/null || true; wait $NTFY_PID $MNTFY_PID 2>/dev/null || true; rm -rf "$ROOT" "$MROOT"' EXIT
 sleep 0.5
 
-docker run --rm --add-host=host.docker.internal:host-gateway \
+docker run --rm --user "$(id -u):$(id -g)" --add-host=host.docker.internal:host-gateway \
   -v "$MROOT/work:/compose:ro" -v "$MROOT/config.yaml:/config.yaml:ro" -v "$MROOT/data:/data" \
   "$IMAGE" run 2>&1 | sed 's/^/   | /'
 
@@ -209,7 +209,7 @@ case "$moving_state" in sha256:*) baseline_written=1 ;; esac
 check "moving tag: state[redis] holds a sha256 digest baseline (got '$moving_state')" "$baseline_written"
 
 echo "== moving-tag scenario: second run with an unchanged digest must not notify"
-docker run --rm --add-host=host.docker.internal:host-gateway \
+docker run --rm --user "$(id -u):$(id -g)" --add-host=host.docker.internal:host-gateway \
   -v "$MROOT/work:/compose:ro" -v "$MROOT/config.yaml:/config.yaml:ro" -v "$MROOT/data:/data" \
   "$IMAGE" run 2>&1 | sed 's/^/   | /'
 

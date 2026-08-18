@@ -269,11 +269,16 @@ The container contract is three fixed mount paths:
 services:
   duva:
     image: ghcr.io/miista/duva:latest
+    user: "1000:1000"   # match the owner of ./duva/data
     volumes:
       - ./duva/config.yaml:/config.yaml:ro
       - .:/compose:ro
       - ./duva/data:/data
 ```
+
+The image defaults to a distroless `nonroot` user (UID 65532), which won't
+be able to write the state file into a host-owned `./duva/data` — set
+`user:` to the directory owner's UID:GID (or `chown 65532` the directory).
 
 **`/compose` MUST be the compose project _directory_, never the compose file
 alone.** Two things break with a single-file mount: `include:`'d nested
