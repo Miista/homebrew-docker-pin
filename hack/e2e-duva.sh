@@ -54,7 +54,7 @@ services:
   redis:
     image: redis:$OLD_TAG
 EOF
-cat > "$ROOT/work/pin.yaml" <<EOF
+cat > "$ROOT/work/config.yaml" <<EOF
 schedule: "0 0 * * *"
 services:
   - name: redis
@@ -162,7 +162,7 @@ services:
     image: redis:alpine
 EOF
 MNTFY_PORT=8934
-cat > "$MROOT/work/pin.yaml" <<EOF
+cat > "$MROOT/work/config.yaml" <<EOF
 schedule: "0 0 * * *"
 services:
   - redis

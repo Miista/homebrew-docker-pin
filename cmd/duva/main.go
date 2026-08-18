@@ -61,18 +61,25 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "Usage: duva <run|serve|version>")
 }
 
-// loadConfig locates the compose file from the working directory, then the
-// pin.yaml next to it, and parses it.
+// loadConfig locates the compose file from the working directory and parses
+// duva's config: the file named by DUVA_CONFIG when set (so the container
+// can mount it anywhere, e.g. -v ./duva/config.yaml:/config.yaml), otherwise
+// config.yaml next to the compose file. The generic name is fine because the
+// file lives inside duva's own container mount — it doesn't share a
+// directory namespace with other tools the way pin.yaml does.
 func loadConfig() (cfg *schedule.Config, composeFile string, err error) {
 	composeFile, err = compose.Locate()
 	if err != nil {
 		return nil, "", err
 	}
-	pinFile, err := schedule.FindFile(composeFile)
-	if err != nil {
-		return nil, "", err
+	configFile := os.Getenv("DUVA_CONFIG")
+	if configFile == "" {
+		configFile, err = schedule.FindFileNamed(composeFile, "config.yaml", "config.yml")
+		if err != nil {
+			return nil, "", err
+		}
 	}
-	cfg, err = schedule.Load(pinFile)
+	cfg, err = schedule.Load(configFile)
 	if err != nil {
 		return nil, "", err
 	}
@@ -238,7 +245,7 @@ func notifyAvailable(cfg *schedule.Config, service, tag string) {
 }
 
 // hostLabel identifies this box in notifications, so several hosts can
-// share one ntfy topic: pin.yaml's `hostname:` when set, otherwise the
+// share one ntfy topic: config.yaml's `hostname:` when set, otherwise the
 // short OS hostname.
 func hostLabel(cfg *schedule.Config) string {
 	if cfg.Hostname != "" {

@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// chdirTemp creates a temp dir with a compose file and pin.yaml and makes
+// chdirTemp creates a temp dir with a compose file and config.yaml and makes
 // it the working directory for the test, mirroring docker-pin's own
 // schedule_test.go fixture helper.
 func chdirTemp(t *testing.T, composeContent, pinContent string) string {
@@ -18,7 +18,7 @@ func chdirTemp(t *testing.T, composeContent, pinContent string) string {
 		t.Fatal(err)
 	}
 	if pinContent != "" {
-		if err := os.WriteFile(filepath.Join(dir, "pin.yaml"), []byte(pinContent), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(pinContent), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -216,6 +216,25 @@ services:
 	}
 	if !bytes.Contains(out.Bytes(), []byte("sha256:bbb available\n")) {
 		t.Fatalf("second run output = %q, want it to report the changed digest", out.String())
+	}
+}
+
+func TestLoadConfigHonorsDuvaConfigEnv(t *testing.T) {
+	// Compose dir has NO config.yaml; the config lives elsewhere and is
+	// pointed at via DUVA_CONFIG, the way the container mounts it.
+	chdirTemp(t, oneService, "")
+	external := filepath.Join(t.TempDir(), "mounted-config.yaml")
+	if err := os.WriteFile(external, []byte(pinConfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DUVA_CONFIG", external)
+
+	cfg, _, err := loadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Services) != 1 || cfg.Services[0].Name != "qui" {
+		t.Fatalf("config = %+v, want the externally mounted config's qui service", cfg.Services)
 	}
 }
 
