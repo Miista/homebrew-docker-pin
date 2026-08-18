@@ -5,8 +5,14 @@
 # again for the same tag on a second run, and (3) never touches the compose
 # file it was pointed at (tagwatch is read-only by design).
 #
-# Uses redis:7.4-alpine -> a newer 7.x-alpine tag on Docker Hub: small, public,
-# no auth needed, and reliably has newer patch releases to find.
+# The tag pair is NOT hardcoded -- a hardcoded "old" tag drifts stale over
+# time (eventually every patch on the branch is "old"), and a hardcoded pair
+# risks the older tag eventually being pruned from the registry's listing.
+# Instead this discovers, live, the two newest x.y.z-alpine tags currently
+# published for redis (same regex tagwatch itself is configured with below),
+# pins the compose file to the OLDER of that pair, and expects tagwatch to
+# report exactly the NEWER one -- the real predecessor/successor relationship
+# on whatever redis has actually published by the time this runs.
 #
 # Notifications are captured by a throwaway local HTTP server standing in for
 # ntfy, so this needs no real ntfy account/token and no network egress beyond
@@ -18,10 +24,27 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$PWD/.e2e-tagwatch"
 IMAGE=tagwatch:e2e
-OLD_TAG=7.4-alpine
 
 echo "== building $IMAGE"
 docker build -q -f cmd/tagwatch/Dockerfile -t "$IMAGE" . >/dev/null
+
+echo "== discovering the two newest redis x.y.z-alpine tags"
+read -r OLD_TAG NEW_TAG < <(
+  curl -s "https://hub.docker.com/v2/repositories/library/redis/tags?page_size=100" |
+    python3 -c '
+import json, re, sys
+tags = json.load(sys.stdin)["results"]
+pat = re.compile(r"^\d+\.\d+\.\d+-alpine$")
+versioned = sorted(
+    (t["name"] for t in tags if pat.match(t["name"])),
+    key=lambda s: tuple(map(int, s.split("-")[0].split("."))),
+)
+if len(versioned) < 2:
+    sys.exit("not enough versioned alpine tags found")
+print(versioned[-2], versioned[-1])
+'
+)
+echo "   predecessor: $OLD_TAG   successor: $NEW_TAG"
 
 NTFY_PORT=8933
 
@@ -35,7 +58,7 @@ cat > "$ROOT/work/pin.yaml" <<EOF
 schedule: "0 0 * * *"
 services:
   - name: redis
-    tags: '^\d+\.\d+-alpine\$'
+    tags: '^\d+\.\d+\.\d+-alpine\$'
 notify:
   ntfy:
     url: http://host.docker.internal:$NTFY_PORT
@@ -92,14 +115,14 @@ notif_count=$(wc -l < "$NTFY_LOG" | tr -d ' ')
 one_notif=0; [ "$notif_count" = 1 ] && one_notif=1
 check "exactly one notification sent" "$one_notif"
 
-mentions_service=0; grep -q "redis" "$NTFY_LOG" && mentions_service=1
-check "notification mentions the service" "$mentions_service"
+mentions_new_tag=0; grep -q "$NEW_TAG" "$NTFY_LOG" && mentions_new_tag=1
+check "notification names the discovered successor tag ($NEW_TAG)" "$mentions_new_tag"
 
 state_written=0; [ -f "$ROOT/data/tagwatch.json" ] && state_written=1
 check "state file written" "$state_written"
 
-state_has_redis=0; grep -q '"redis"' "$ROOT/data/tagwatch.json" 2>/dev/null && state_has_redis=1
-check "state file records redis" "$state_has_redis"
+state_has_new_tag=0; grep -q "\"$NEW_TAG\"" "$ROOT/data/tagwatch.json" 2>/dev/null && state_has_new_tag=1
+check "state file records the discovered successor tag" "$state_has_new_tag"
 
 echo "== second run: expect no repeat notification for the same tag"
 docker run --rm --add-host=host.docker.internal:host-gateway \
