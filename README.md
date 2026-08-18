@@ -249,6 +249,43 @@ image: postgres:16.3
 
 No-op if the service isn't pinned.
 
+## duva — the notify-only companion
+
+This repo also ships **duva** (Swedish for dove — a carrier pigeon: flies to
+the registry, comes back with one note, touches nothing) as a container image:
+`ghcr.io/miista/duva`. It watches the images in a compose project and sends
+one ntfy notification when a newer version tag appears (or, for moving tags
+like `latest`, when the remote digest changes) — then remembers what it
+reported so it never repeats itself. It never rewrites the compose file,
+never pulls an image, never touches the Docker socket.
+
+Its config is the same format as `pin.yaml` (`schedule`, `services` with
+`tags`/`exclude`/`delay`, `notify.ntfy`, `hostname`; `on_change` is ignored
+— duva never changes anything).
+
+The container contract is three fixed mount paths:
+
+```yaml
+services:
+  duva:
+    image: ghcr.io/miista/duva:latest
+    volumes:
+      - ./duva/config.yaml:/config.yaml:ro
+      - .:/compose:ro
+      - ./duva/data:/data
+```
+
+**`/compose` MUST be the compose project _directory_, never the compose file
+alone.** Two things break with a single-file mount: `include:`'d nested
+compose files resolve relative to the directory and wouldn't exist inside
+the container, and a single-file bind mount silently pins the old inode when
+the host file is replaced by rename — which is exactly how editors and
+`docker pin` itself rewrite it, so duva would keep reading a stale file
+forever without any error.
+
+`duva serve` (the image's default command) runs the check on the config's
+cron `schedule`; `duva run` does a single check and exits.
+
 ## How digests work (multi-arch)
 
 `docker image inspect` returns the **index digest** — the hash of the multi-arch manifest list, not a per-platform image digest. This is intentional:

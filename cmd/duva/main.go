@@ -65,8 +65,13 @@ func usage() {
 // tricks, no search logic, no env vars:
 //
 //	/config.yaml  the config, mounted read-only
-//	/compose      the compose project directory, mounted read-only
+//	/compose      the compose project DIRECTORY, mounted read-only
 //	/data         small writable volume for the dedup state
+//
+// /compose MUST be the directory, never the compose file alone: include:'d
+// nested compose files resolve relative to it, and a single-file bind mount
+// silently pins the old inode when the host file is replaced by rename (as
+// editors and docker-pin do).
 //
 // These are package variables only so tests can point them at fixtures.
 var (
