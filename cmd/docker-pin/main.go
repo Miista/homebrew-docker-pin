@@ -202,24 +202,24 @@ func pinAll(d dockerFuncs, dryRun bool) error {
 		results = append(results, result{service, outcome})
 	}
 
-	fmt.Println()
-	fmt.Println("Summary:")
-	w := tabwriter.NewWriter(os.Stdout, 2, 8, 2, ' ', 0)
-	fmt.Fprintln(w, "SERVICE\tSTATUS\tIMAGE")
-	for _, r := range results {
-		switch {
-		case r.outcome.AlreadyPinned:
-			fmt.Fprintf(w, "%s\talready pinned\t%s\n", r.service, r.outcome.NewRaw)
-		case dryRun:
-			fmt.Fprintf(w, "%s\twould pin\t%s -> %s\n", r.service, r.outcome.OldRaw, r.outcome.NewRaw)
-		default:
-			fmt.Fprintf(w, "%s\tpinned\t%s -> %s\n", r.service, r.outcome.OldRaw, r.outcome.NewRaw)
+	if dryRun {
+		fmt.Println()
+		fmt.Println("Summary:")
+		w := tabwriter.NewWriter(os.Stdout, 2, 8, 2, ' ', 0)
+		fmt.Fprintln(w, "SERVICE\tSTATUS\tIMAGE")
+		for _, r := range results {
+			switch {
+			case r.outcome.AlreadyPinned:
+				fmt.Fprintf(w, "%s\talready pinned\t%s\n", r.service, r.outcome.NewRaw)
+			default:
+				fmt.Fprintf(w, "%s\twould pin\t%s -> %s\n", r.service, r.outcome.OldRaw, r.outcome.NewRaw)
+			}
 		}
+		for _, service := range failed {
+			fmt.Fprintf(w, "%s\tFAILED\t-\n", service)
+		}
+		w.Flush()
 	}
-	for _, service := range failed {
-		fmt.Fprintf(w, "%s\tFAILED\t-\n", service)
-	}
-	w.Flush()
 
 	if len(failed) > 0 {
 		return fmt.Errorf("failed to pin: %s", strings.Join(failed, ", "))
@@ -468,21 +468,22 @@ func upgradeAll(d dockerFuncs, dryRun bool) error {
 		results = append(results, result{service, outcome})
 	}
 
-	fmt.Println()
-	fmt.Println("Summary:")
-	verb := "Upgraded"
 	if dryRun {
-		verb = "Would upgrade"
-	}
-	for _, r := range results {
-		if r.outcome.Changed {
-			fmt.Printf("  %s %s: %s -> %s\n", verb, r.service, r.outcome.OldRaw, r.outcome.NewRaw)
-		} else {
-			fmt.Printf("  %s: up to date\n", r.service)
+		fmt.Println()
+		fmt.Println("Summary:")
+		w := tabwriter.NewWriter(os.Stdout, 2, 8, 2, ' ', 0)
+		fmt.Fprintln(w, "SERVICE\tSTATUS\tIMAGE")
+		for _, r := range results {
+			if r.outcome.Changed {
+				fmt.Fprintf(w, "%s\twould upgrade\t%s -> %s\n", r.service, r.outcome.OldRaw, r.outcome.NewRaw)
+			} else {
+				fmt.Fprintf(w, "%s\tup to date\t%s\n", r.service, r.outcome.OldRaw)
+			}
 		}
-	}
-	for _, service := range failed {
-		fmt.Printf("  %s: FAILED\n", service)
+		for _, service := range failed {
+			fmt.Fprintf(w, "%s\tFAILED\t-\n", service)
+		}
+		w.Flush()
 	}
 
 	if len(failed) > 0 {

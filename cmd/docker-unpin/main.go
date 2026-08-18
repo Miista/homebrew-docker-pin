@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"text/tabwriter"
 
 	"github.com/Miista/homebrew-docker-pin/internal/compose"
 	"github.com/Miista/homebrew-docker-pin/internal/help"
@@ -78,7 +79,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := run(args[0], dryRun); err != nil {
+	if _, err := run(args[0], dryRun); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
@@ -94,26 +95,63 @@ func runAll(dryRun bool) error {
 		return err
 	}
 	var failed []string
+	type result struct {
+		service string
+		outcome unpinOutcome
+	}
+	var results []result
 	for _, service := range services {
-		if err := run(service, dryRun); err != nil {
+		outcome, err := run(service, dryRun)
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error unpinning %s: %v\n", service, err)
 			failed = append(failed, service)
+			continue
 		}
+		results = append(results, result{service, outcome})
 	}
+
+	if dryRun {
+		fmt.Println()
+		fmt.Println("Summary:")
+		w := tabwriter.NewWriter(os.Stdout, 2, 8, 2, ' ', 0)
+		fmt.Fprintln(w, "SERVICE\tSTATUS\tIMAGE")
+		for _, r := range results {
+			switch {
+			case r.outcome.NotPinned:
+				fmt.Fprintf(w, "%s\tnot pinned\t%s\n", r.service, r.outcome.OldRaw)
+			default:
+				fmt.Fprintf(w, "%s\twould unpin\t%s -> %s\n", r.service, r.outcome.OldRaw, r.outcome.NewRaw)
+			}
+		}
+		for _, service := range failed {
+			fmt.Fprintf(w, "%s\tFAILED\t-\n", service)
+		}
+		w.Flush()
+	}
+
 	if len(failed) > 0 {
 		return fmt.Errorf("failed to unpin: %s", strings.Join(failed, ", "))
 	}
 	return nil
 }
 
-func run(service string, dryRun bool) error {
+// unpinOutcome describes what a run call did (or, in dry-run mode, would
+// have done).
+type unpinOutcome struct {
+	OldRaw string
+	NewRaw string
+	// NotPinned is true when the service had no digest pin to remove.
+	NotPinned bool
+}
+
+func run(service string, dryRun bool) (unpinOutcome, error) {
 	root, err := compose.Locate()
 	if err != nil {
-		return err
+		return unpinOutcome{}, err
 	}
 	composeFile, err := compose.ResolveServiceIn(root, service)
 	if err != nil {
-		return err
+		return unpinOutcome{}, err
 	}
 	if composeFile != root {
 		fmt.Printf("%s is declared in %s (via include:)\n", service, composeFile)
@@ -121,26 +159,27 @@ func run(service string, dryRun bool) error {
 
 	base, tag, err := compose.ParseImage(composeFile, service)
 	if err != nil {
-		return err
+		return unpinOutcome{}, err
 	}
 
 	rawImage, err := compose.RawImage(composeFile, service)
 	if err != nil {
-		return err
+		return unpinOutcome{}, err
 	}
 	if !strings.Contains(rawImage, "@sha256:") {
 		fmt.Printf("%s is not pinned\n", service)
-		return nil
+		return unpinOutcome{OldRaw: rawImage, NewRaw: rawImage, NotPinned: true}, nil
 	}
 
 	unpinned := base + ":" + tag
+	outcome := unpinOutcome{OldRaw: rawImage, NewRaw: unpinned}
 	if dryRun {
 		fmt.Printf("Would unpin %s: %s -> %s\n", service, rawImage, unpinned)
-		return nil
+		return outcome, nil
 	}
 	if err := compose.PinImage(composeFile, service, unpinned); err != nil {
-		return err
+		return outcome, err
 	}
 	fmt.Printf("Unpinned %s: now at %s\n", service, unpinned)
-	return nil
+	return outcome, nil
 }
