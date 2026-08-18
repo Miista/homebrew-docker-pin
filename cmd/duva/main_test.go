@@ -8,19 +8,22 @@ import (
 	"testing"
 )
 
-// chdirTemp creates a temp dir with a compose file and config.yaml and makes
-// it the working directory for the test, mirroring docker-pin's own
-// schedule_test.go fixture helper.
-func chdirTemp(t *testing.T, composeContent, pinContent string) string {
+// chdirTemp creates a temp dir with a compose file and a duva config, makes
+// it the working directory for the test, and points DUVA_CONFIG at the
+// config (in the container the config lives at the fixed /config.yaml
+// mount; the env var is the test seam for that path).
+func chdirTemp(t *testing.T, composeContent, configContent string) string {
 	t.Helper()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte(composeContent), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if pinContent != "" {
-		if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(pinContent), 0o644); err != nil {
+	if configContent != "" {
+		configFile := filepath.Join(dir, "config.yaml")
+		if err := os.WriteFile(configFile, []byte(configContent), 0o644); err != nil {
 			t.Fatal(err)
 		}
+		t.Setenv("DUVA_CONFIG", configFile)
 	}
 	old, err := os.Getwd()
 	if err != nil {
@@ -216,25 +219,6 @@ services:
 	}
 	if !bytes.Contains(out.Bytes(), []byte("sha256:bbb available\n")) {
 		t.Fatalf("second run output = %q, want it to report the changed digest", out.String())
-	}
-}
-
-func TestLoadConfigHonorsDuvaConfigEnv(t *testing.T) {
-	// Compose dir has NO config.yaml; the config lives elsewhere and is
-	// pointed at via DUVA_CONFIG, the way the container mounts it.
-	chdirTemp(t, oneService, "")
-	external := filepath.Join(t.TempDir(), "mounted-config.yaml")
-	if err := os.WriteFile(external, []byte(pinConfig), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("DUVA_CONFIG", external)
-
-	cfg, _, err := loadConfig()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(cfg.Services) != 1 || cfg.Services[0].Name != "qui" {
-		t.Fatalf("config = %+v, want the externally mounted config's qui service", cfg.Services)
 	}
 }
 

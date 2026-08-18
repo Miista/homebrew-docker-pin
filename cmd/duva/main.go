@@ -61,25 +61,24 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "Usage: duva <run|serve|version>")
 }
 
+// configPath is where duva reads its config: a fixed path inside the
+// container, mounted by the user (-v ./duva/config.yaml:/config.yaml:ro).
+// Overridable via DUVA_CONFIG only so tests can point at fixtures.
+func configPath() string {
+	if p := os.Getenv("DUVA_CONFIG"); p != "" {
+		return p
+	}
+	return "/config.yaml"
+}
+
 // loadConfig locates the compose file from the working directory and parses
-// duva's config: the file named by DUVA_CONFIG when set (so the container
-// can mount it anywhere, e.g. -v ./duva/config.yaml:/config.yaml), otherwise
-// config.yaml next to the compose file. The generic name is fine because the
-// file lives inside duva's own container mount — it doesn't share a
-// directory namespace with other tools the way pin.yaml does.
+// duva's config from the fixed container path.
 func loadConfig() (cfg *schedule.Config, composeFile string, err error) {
 	composeFile, err = compose.Locate()
 	if err != nil {
 		return nil, "", err
 	}
-	configFile := os.Getenv("DUVA_CONFIG")
-	if configFile == "" {
-		configFile, err = schedule.FindFileNamed(composeFile, "config.yaml", "config.yml")
-		if err != nil {
-			return nil, "", err
-		}
-	}
-	cfg, err = schedule.Load(configFile)
+	cfg, err = schedule.Load(configPath())
 	if err != nil {
 		return nil, "", err
 	}

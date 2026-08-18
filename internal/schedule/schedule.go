@@ -136,21 +136,14 @@ func unquoteEnvValue(v string) string {
 
 // FindFile returns the pin.yaml (or pin.yml) sitting next to composeFile.
 func FindFile(composeFile string) (string, error) {
-	return FindFileNamed(composeFile, "pin.yaml", "pin.yml")
-}
-
-// FindFileNamed returns the first of the given file names sitting next to
-// composeFile. It lets tools sharing this config format (duva) look for a
-// file named after themselves instead of pin.yaml.
-func FindFileNamed(composeFile string, names ...string) (string, error) {
 	dir := filepath.Dir(composeFile)
-	for _, name := range names {
+	for _, name := range []string{"pin.yaml", "pin.yml"} {
 		p := filepath.Join(dir, name)
 		if _, err := os.Stat(p); err == nil {
 			return p, nil
 		}
 	}
-	return "", fmt.Errorf("no %s found next to %s", names[0], composeFile)
+	return "", fmt.Errorf("no pin.yaml found next to %s", composeFile)
 }
 
 // Load parses and minimally validates a pin.yaml.
