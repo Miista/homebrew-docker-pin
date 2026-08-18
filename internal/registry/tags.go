@@ -42,10 +42,44 @@ func ListTags(baseImage string) ([]string, error) {
 	return ociListTags(client, "https://"+host, repo)
 }
 
+// ListMatchingTags is ListTags for a caller that will immediately narrow the
+// result with MatchingCandidates(tags, include, exclude, current): on Docker
+// Hub it stops paginating once a page contributes no further match, avoiding
+// up to hubMaxTagPages-1 unnecessary requests for images with many tags.
+// GHCR and generic OCI registries return their whole tag list in one
+// unpaginated response, so there is nothing to cut short there — those paths
+// are identical to ListTags.
+func ListMatchingTags(baseImage string, include, exclude *regexp.Regexp, current string) ([]string, error) {
+	if isDockerHub(baseImage) {
+		namespace, repo := splitDockerHubImage(baseImage)
+		url := fmt.Sprintf(
+			"https://hub.docker.com/v2/repositories/%s/%s/tags?page_size=100&ordering=last_updated",
+			namespace, repo,
+		)
+		return listDockerHubTagsMatching(url, include, exclude, current)
+	}
+	return ListTags(baseImage)
+}
+
 // hubMaxTagPages bounds Docker Hub pagination (100 tags per page).
 const hubMaxTagPages = 10
 
 func listDockerHubTags(url string) ([]string, error) {
+	tags, err := listDockerHubTagsMatching(url, nil, nil, "")
+	return tags, err
+}
+
+// listDockerHubTagsMatching paginates Docker Hub's tags API (newest-pushed
+// first, per ordering=last_updated) and stops as soon as a page contains a
+// tag that matches include/exclude and is newer than current per
+// CompareVersions — once found, older (later) pages can only contain older
+// pushes, so they're not fetched. Correctness relies on tags getting
+// monotonically newer over time, which holds for the near-universal case of
+// ordinary releases; it doesn't protect against a deliberate old-line
+// backport pushed out of order, but neither does anything else in this
+// package. include == nil disables the early exit (matches every tag), for
+// callers that want the unfiltered list regardless of current.
+func listDockerHubTagsMatching(url string, include, exclude *regexp.Regexp, current string) ([]string, error) {
 	client := &http.Client{Timeout: 15 * time.Second}
 	var tags []string
 	for page := 0; url != "" && page < hubMaxTagPages; page++ {
@@ -62,8 +96,19 @@ func listDockerHubTags(url string) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
+
+		pageHasMatch := false
 		for _, t := range data.Results {
 			tags = append(tags, t.Name)
+			if include != nil &&
+				include.MatchString(t.Name) &&
+				(exclude == nil || !exclude.MatchString(t.Name)) &&
+				CompareVersions(t.Name, current) > 0 {
+				pageHasMatch = true
+			}
+		}
+		if include != nil && pageHasMatch {
+			break
 		}
 		url = data.Next
 	}

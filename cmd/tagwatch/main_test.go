@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"regexp"
 	"testing"
 )
 
@@ -49,7 +50,9 @@ services:
 `
 
 func fakeReg(tags []string) regFuncs {
-	return regFuncs{listTags: func(baseImage string) ([]string, error) { return tags, nil }}
+	return regFuncs{listMatchingTags: func(baseImage string, include, exclude *regexp.Regexp, current string) ([]string, error) {
+		return tags, nil
+	}}
 }
 
 func fakeDigestReg(digest string) regFuncs {

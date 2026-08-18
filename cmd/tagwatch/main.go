@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"regexp"
 	"syscall"
 	"time"
 
@@ -26,11 +27,11 @@ var version = "dev"
 // regFuncs seams out registry access so run/serve can be tested without
 // network calls, mirroring docker-pin's dockerFuncs pattern.
 type regFuncs struct {
-	listTags     func(baseImage string) ([]string, error)
-	remoteDigest func(baseImage, tag string) (string, error)
+	listMatchingTags func(baseImage string, include, exclude *regexp.Regexp, current string) ([]string, error)
+	remoteDigest     func(baseImage, tag string) (string, error)
 }
 
-var realReg = regFuncs{listTags: registry.ListTags, remoteDigest: registry.RemoteDigest}
+var realReg = regFuncs{listMatchingTags: registry.ListMatchingTags, remoteDigest: registry.RemoteDigest}
 
 func main() {
 	if len(os.Args) < 2 {
@@ -163,7 +164,7 @@ func checkService(rootFile string, svc schedule.Service, reg regFuncs, st map[st
 	if err != nil {
 		return "", err
 	}
-	tags, err := reg.listTags(baseImage)
+	tags, err := reg.listMatchingTags(baseImage, include, exclude, currentTag)
 	if err != nil {
 		return "", fmt.Errorf("listing tags for %s: %w", baseImage, err)
 	}

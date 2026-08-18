@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -24,19 +25,19 @@ const (
 var version = "dev"
 
 type dockerFuncs struct {
-	getDigest func(ref string) (string, error)
-	pull      func(ref string) error
-	resolve    func(baseImage, pullTag, digest, service string) string
-	listTags   func(baseImage string) ([]string, error)
-	tagCreated func(baseImage, tag string) (time.Time, error)
+	getDigest        func(ref string) (string, error)
+	pull             func(ref string) error
+	resolve          func(baseImage, pullTag, digest, service string) string
+	listMatchingTags func(baseImage string, include, exclude *regexp.Regexp, current string) ([]string, error)
+	tagCreated       func(baseImage, tag string) (time.Time, error)
 }
 
 var realDocker = dockerFuncs{
-	getDigest:  docker.GetDigest,
-	pull:       docker.Pull,
-	resolve:    registry.ResolveOrWarn,
-	listTags:   registry.ListTags,
-	tagCreated: registry.TagCreated,
+	getDigest:        docker.GetDigest,
+	pull:             docker.Pull,
+	resolve:          registry.ResolveOrWarn,
+	listMatchingTags: registry.ListMatchingTags,
+	tagCreated:       registry.TagCreated,
 }
 
 func main() {

@@ -557,7 +557,7 @@ func constrainedTarget(composeFile string, service schedule.Service, d dockerFun
 			return "", "", err
 		}
 	}
-	tags, err := d.listTags(baseImage)
+	tags, err := d.listMatchingTags(baseImage, include, exclude, currentTag)
 	if err != nil {
 		return "", "", fmt.Errorf("listing tags for %s: %w", baseImage, err)
 	}
