@@ -8,36 +8,27 @@ import (
 	"testing"
 )
 
-// chdirTemp creates a temp dir with a compose file and a duva config, makes
-// it the working directory for the test, and points DUVA_CONFIG at the
-// config (in the container the config lives at the fixed /config.yaml
-// mount; the env var is the test seam for that path).
-func chdirTemp(t *testing.T, composeContent, configContent string) string {
+// setupFixture creates a temp dir with a compose file and a duva config,
+// and points the composeDir / configPath / stateFile package variables at
+// fixtures (in the container these are the fixed /compose, /config.yaml
+// and /data/duva.json mounts).
+func setupFixture(t *testing.T, composeContent, configContent string) string {
 	t.Helper()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte(composeContent), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	origCompose, origConfig, origState := composeDir, configPath, stateFile
+	t.Cleanup(func() { composeDir, configPath, stateFile = origCompose, origConfig, origState })
+	composeDir = dir
+	stateFile = filepath.Join(dir, "state.json")
 	if configContent != "" {
-		configFile := filepath.Join(dir, "config.yaml")
-		if err := os.WriteFile(configFile, []byte(configContent), 0o644); err != nil {
+		configPath = filepath.Join(dir, "config.yaml")
+		if err := os.WriteFile(configPath, []byte(configContent), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		t.Setenv("DUVA_CONFIG", configFile)
 	}
-	old, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.Chdir(old) })
-	wd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	return wd
+	return dir
 }
 
 const oneService = `services:
@@ -63,7 +54,7 @@ func fakeDigestReg(digest string) regFuncs {
 }
 
 func TestCheckServiceFindsNewerTag(t *testing.T) {
-	dir := chdirTemp(t, oneService, pinConfig)
+	dir := setupFixture(t, oneService, pinConfig)
 	cfg, composeFile, err := loadConfig()
 	if err != nil {
 		t.Fatal(err)
@@ -79,7 +70,7 @@ func TestCheckServiceFindsNewerTag(t *testing.T) {
 }
 
 func TestCheckServiceNoNewerTag(t *testing.T) {
-	chdirTemp(t, oneService, pinConfig)
+	setupFixture(t, oneService, pinConfig)
 	cfg, composeFile, err := loadConfig()
 	if err != nil {
 		t.Fatal(err)
@@ -94,7 +85,7 @@ func TestCheckServiceNoNewerTag(t *testing.T) {
 }
 
 func TestCheckServiceMovingTag_FirstCheckRecordsBaselineWithoutNotifying(t *testing.T) {
-	chdirTemp(t, oneService, `
+	setupFixture(t, oneService, `
 schedule: "0 0 * * *"
 services:
   - qui
@@ -117,7 +108,7 @@ services:
 }
 
 func TestCheckServiceMovingTag_DigestChangeIsReported(t *testing.T) {
-	chdirTemp(t, oneService, `
+	setupFixture(t, oneService, `
 schedule: "0 0 * * *"
 services:
   - qui
@@ -137,7 +128,7 @@ services:
 }
 
 func TestCheckServiceMovingTag_SameDigestNotReported(t *testing.T) {
-	chdirTemp(t, oneService, `
+	setupFixture(t, oneService, `
 schedule: "0 0 * * *"
 services:
   - qui
@@ -157,9 +148,7 @@ services:
 }
 
 func TestRunOnceNotifiesOnceThenDedupes(t *testing.T) {
-	chdirTemp(t, oneService, pinConfig)
-	statePath := filepath.Join(t.TempDir(), "state.json")
-	t.Setenv("DUVA_STATE_FILE", statePath)
+	setupFixture(t, oneService, pinConfig)
 
 	reg := fakeReg([]string{"1.2.0", "1.3.0"})
 	var out bytes.Buffer
@@ -171,7 +160,7 @@ func TestRunOnceNotifiesOnceThenDedupes(t *testing.T) {
 		t.Fatalf("first run output = %q, want it to report 1.3.0 available", first)
 	}
 
-	st, err := loadState(statePath)
+	st, err := loadState(stateFile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,14 +179,11 @@ func TestRunOnceNotifiesOnceThenDedupes(t *testing.T) {
 }
 
 func TestRunOnceMovingTagBaselineThenNotifiesOnChange(t *testing.T) {
-	chdirTemp(t, oneService, `
+	setupFixture(t, oneService, `
 schedule: "0 0 * * *"
 services:
   - qui
 `)
-	statePath := filepath.Join(t.TempDir(), "state.json")
-	t.Setenv("DUVA_STATE_FILE", statePath)
-
 	var out bytes.Buffer
 	if err := runOnce(fakeDigestReg("sha256:aaa"), &out); err != nil {
 		t.Fatal(err)
@@ -205,7 +191,7 @@ services:
 	if bytes.Contains(out.Bytes(), []byte("available\n")) {
 		t.Fatalf("first run output = %q, want no notification on initial baseline", out.String())
 	}
-	st, err := loadState(statePath)
+	st, err := loadState(stateFile)
 	if err != nil {
 		t.Fatal(err)
 	}

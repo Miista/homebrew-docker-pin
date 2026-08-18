@@ -9,16 +9,10 @@ import (
 	"github.com/Miista/homebrew-docker-pin/internal/schedule"
 )
 
-// stateFilePath returns where the last-notified-tag-per-service map is
-// persisted, overridable via DUVA_STATE_FILE for tests and non-default
-// mounts. The default assumes a volume mounted at /data, matching diun's
-// own convention.
-func stateFilePath() string {
-	if p := os.Getenv("DUVA_STATE_FILE"); p != "" {
-		return p
-	}
-	return "/data/duva.json"
-}
+// stateFile is where the last-notified-tag-per-service map is persisted:
+// a fixed path on the /data volume mount, matching diun's own convention.
+// A package variable only so tests can point it at a fixture.
+var stateFile = "/data/duva.json"
 
 // loadState reads the service -> last-notified-tag map. A missing file is
 // not an error — it means nothing has been notified about yet.

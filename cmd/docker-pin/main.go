@@ -173,7 +173,8 @@ func runPin(args []string, d dockerFuncs) error {
 		fmt.Fprintln(os.Stderr, "       docker pin --all")
 		os.Exit(1)
 	}
-	return pin(args[0], d, dryRun)
+	_, err := pin(args[0], d, dryRun)
+	return err
 }
 
 func pinAll(d dockerFuncs, dryRun bool) error {
@@ -186,26 +187,54 @@ func pinAll(d dockerFuncs, dryRun bool) error {
 		return err
 	}
 	var failed []string
+	type result struct {
+		service string
+		outcome pinOutcome
+	}
+	var results []result
 	for _, service := range services {
-		if err := pin(service, d, dryRun); err != nil {
+		outcome, err := pin(service, d, dryRun)
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error pinning %s: %v\n", service, err)
 			failed = append(failed, service)
+			continue
+		}
+		results = append(results, result{service, outcome})
+	}
+
+	fmt.Println()
+	fmt.Println("Summary:")
+	w := tabwriter.NewWriter(os.Stdout, 2, 8, 2, ' ', 0)
+	fmt.Fprintln(w, "SERVICE\tSTATUS\tIMAGE")
+	for _, r := range results {
+		switch {
+		case r.outcome.AlreadyPinned:
+			fmt.Fprintf(w, "%s\talready pinned\t%s\n", r.service, r.outcome.NewRaw)
+		case dryRun:
+			fmt.Fprintf(w, "%s\twould pin\t%s -> %s\n", r.service, r.outcome.OldRaw, r.outcome.NewRaw)
+		default:
+			fmt.Fprintf(w, "%s\tpinned\t%s -> %s\n", r.service, r.outcome.OldRaw, r.outcome.NewRaw)
 		}
 	}
+	for _, service := range failed {
+		fmt.Fprintf(w, "%s\tFAILED\t-\n", service)
+	}
+	w.Flush()
+
 	if len(failed) > 0 {
 		return fmt.Errorf("failed to pin: %s", strings.Join(failed, ", "))
 	}
 	return nil
 }
 
-func pin(service string, d dockerFuncs, dryRun bool) error {
+func pin(service string, d dockerFuncs, dryRun bool) (pinOutcome, error) {
 	root, err := compose.Locate()
 	if err != nil {
-		return err
+		return pinOutcome{}, err
 	}
 	composeFile, err := compose.ResolveServiceIn(root, service)
 	if err != nil {
-		return err
+		return pinOutcome{}, err
 	}
 	if composeFile != root {
 		fmt.Printf("%s is declared in %s (via include:)\n", service, composeFile)
@@ -213,15 +242,25 @@ func pin(service string, d dockerFuncs, dryRun bool) error {
 	return pinInFile(composeFile, service, d, dryRun)
 }
 
-func pinInFile(composeFile, service string, d dockerFuncs, dryRun bool) error {
+// pinOutcome describes what a pinInFile call did (or, in dry-run mode,
+// would have done).
+type pinOutcome struct {
+	OldRaw string
+	NewRaw string
+	// AlreadyPinned is true when the service was already digest-pinned, so
+	// no pin (or would-be pin) happened.
+	AlreadyPinned bool
+}
+
+func pinInFile(composeFile, service string, d dockerFuncs, dryRun bool) (pinOutcome, error) {
 	baseImage, tag, err := compose.ParseImage(composeFile, service)
 	if err != nil {
-		return err
+		return pinOutcome{}, err
 	}
 
 	raw, err := compose.RawImage(composeFile, service)
 	if err != nil {
-		return err
+		return pinOutcome{}, err
 	}
 
 	fmt.Printf("Read tag from compose file: %s\n", tag)
@@ -229,7 +268,7 @@ func pinInFile(composeFile, service string, d dockerFuncs, dryRun bool) error {
 	if strings.Contains(raw, "@sha256:") {
 		fmt.Printf("%s is already pinned to %s\n", service, raw)
 		fmt.Println("Run `docker unpin` first, or `docker pin upgrade` to move to a new version.")
-		return nil
+		return pinOutcome{OldRaw: raw, NewRaw: raw, AlreadyPinned: true}, nil
 	}
 
 	pullRef := baseImage + ":" + tag
@@ -237,11 +276,11 @@ func pinInFile(composeFile, service string, d dockerFuncs, dryRun bool) error {
 	if err != nil {
 		fmt.Printf("Image not found locally, pulling %s ...\n", pullRef)
 		if err := d.pull(pullRef); err != nil {
-			return fmt.Errorf("pull failed: %w", err)
+			return pinOutcome{}, fmt.Errorf("pull failed: %w", err)
 		}
 		digest, err = d.getDigest(pullRef)
 		if err != nil {
-			return err
+			return pinOutcome{}, err
 		}
 		fmt.Printf("Using digest from pulled image: %s\n", digest)
 	} else {
@@ -254,15 +293,16 @@ func pinInFile(composeFile, service string, d dockerFuncs, dryRun bool) error {
 	}
 
 	pinned := fmt.Sprintf("%s:%s@%s", baseImage, pinnedTag, digest)
+	outcome := pinOutcome{OldRaw: raw, NewRaw: pinned}
 	if dryRun {
 		fmt.Printf("Would pin %s: %s -> %s\n", service, raw, pinned)
-		return nil
+		return outcome, nil
 	}
 	if err := compose.PinImage(composeFile, service, pinned); err != nil {
-		return err
+		return outcome, err
 	}
 	fmt.Printf("Pinned %s to %s\n", service, pinned)
-	return nil
+	return outcome, nil
 }
 
 // list

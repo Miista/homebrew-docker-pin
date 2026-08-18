@@ -119,7 +119,7 @@ before_compose_hash=$(sha256sum "$ROOT/work/docker-compose.yml" | awk '{print $1
 
 echo "== first run: expect a newer tag detected and one notification sent"
 docker run --rm --add-host=host.docker.internal:host-gateway \
-  -v "$ROOT/work:/work:ro" -w /work -v "$ROOT/config.yaml:/config.yaml:ro" -v "$ROOT/data:/data" \
+  -v "$ROOT/work:/compose:ro" -v "$ROOT/config.yaml:/config.yaml:ro" -v "$ROOT/data:/data" \
   "$IMAGE" run 2>&1 | sed 's/^/   | /'
 
 after_compose_hash=$(sha256sum "$ROOT/work/docker-compose.yml" | awk '{print $1}')
@@ -142,7 +142,7 @@ check "state[redis] is exactly the discovered successor tag ($NEW_TAG, got '$red
 
 echo "== second run: expect no repeat notification for the same tag"
 docker run --rm --add-host=host.docker.internal:host-gateway \
-  -v "$ROOT/work:/work:ro" -w /work -v "$ROOT/config.yaml:/config.yaml:ro" -v "$ROOT/data:/data" \
+  -v "$ROOT/work:/compose:ro" -v "$ROOT/config.yaml:/config.yaml:ro" -v "$ROOT/data:/data" \
   "$IMAGE" run 2>&1 | sed 's/^/   | /'
 
 notif_count2=$(wc -l < "$NTFY_LOG" | tr -d ' ')
@@ -197,7 +197,7 @@ trap 'kill $NTFY_PID $MNTFY_PID 2>/dev/null || true; wait $NTFY_PID $MNTFY_PID 2
 sleep 0.5
 
 docker run --rm --add-host=host.docker.internal:host-gateway \
-  -v "$MROOT/work:/work:ro" -w /work -v "$MROOT/config.yaml:/config.yaml:ro" -v "$MROOT/data:/data" \
+  -v "$MROOT/work:/compose:ro" -v "$MROOT/config.yaml:/config.yaml:ro" -v "$MROOT/data:/data" \
   "$IMAGE" run 2>&1 | sed 's/^/   | /'
 
 no_notif_yet=0; [ "$(wc -l < "$MNTFY_LOG" | tr -d ' ')" = 0 ] && no_notif_yet=1
@@ -210,7 +210,7 @@ check "moving tag: state[redis] holds a sha256 digest baseline (got '$moving_sta
 
 echo "== moving-tag scenario: second run with an unchanged digest must not notify"
 docker run --rm --add-host=host.docker.internal:host-gateway \
-  -v "$MROOT/work:/work:ro" -w /work -v "$MROOT/config.yaml:/config.yaml:ro" -v "$MROOT/data:/data" \
+  -v "$MROOT/work:/compose:ro" -v "$MROOT/config.yaml:/config.yaml:ro" -v "$MROOT/data:/data" \
   "$IMAGE" run 2>&1 | sed 's/^/   | /'
 
 still_no_notif=0; [ "$(wc -l < "$MNTFY_LOG" | tr -d ' ')" = 0 ] && still_no_notif=1

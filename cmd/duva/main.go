@@ -61,24 +61,27 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "Usage: duva <run|serve|version>")
 }
 
-// configPath is where duva reads its config: a fixed path inside the
-// container, mounted by the user (-v ./duva/config.yaml:/config.yaml:ro).
-// Overridable via DUVA_CONFIG only so tests can point at fixtures.
-func configPath() string {
-	if p := os.Getenv("DUVA_CONFIG"); p != "" {
-		return p
-	}
-	return "/config.yaml"
-}
+// duva's container contract is fixed mount paths — no working-directory
+// tricks, no search logic, no env vars:
+//
+//	/config.yaml  the config, mounted read-only
+//	/compose      the compose project directory, mounted read-only
+//	/data         small writable volume for the dedup state
+//
+// These are package variables only so tests can point them at fixtures.
+var (
+	configPath = "/config.yaml"
+	composeDir = "/compose"
+)
 
-// loadConfig locates the compose file from the working directory and parses
-// duva's config from the fixed container path.
+// loadConfig finds the compose file in the fixed compose mount and parses
+// duva's config from the fixed config path.
 func loadConfig() (cfg *schedule.Config, composeFile string, err error) {
-	composeFile, err = compose.Locate()
+	composeFile, err = compose.FindFile(composeDir)
 	if err != nil {
 		return nil, "", err
 	}
-	cfg, err = schedule.Load(configPath())
+	cfg, err = schedule.Load(configPath)
 	if err != nil {
 		return nil, "", err
 	}
@@ -92,7 +95,7 @@ func runOnce(reg regFuncs, out io.Writer) error {
 		return err
 	}
 
-	statePath := stateFilePath()
+	statePath := stateFile
 	st, err := loadState(statePath)
 	if err != nil {
 		return fmt.Errorf("loading state: %w", err)
