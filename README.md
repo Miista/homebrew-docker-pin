@@ -268,6 +268,31 @@ Resolution is supported for:
 - **GHCR** — `ghcr.io/` images
 - **Any OCI-compliant registry** — bearer auth discovered via `WWW-Authenticate` challenge
 
+### GHCR/OCI tag listing cost
+
+Docker Hub's tag API sorts by push time and lets this tool ask for that order
+explicitly, so a "is there anything newer" check can stop as soon as it finds
+a qualifying tag — most checks need only the first page.
+
+GHCR and generic OCI registries have no such option. The OCI Distribution
+Spec's `tags/list` endpoint (`GET /v2/<name>/tags/list`) mandates **lexical
+(ASCIIbetical) ordering with no sort parameter**, confirmed directly against
+`ghcr.io`: no `order`/`sort`/`orderby` query parameter changes the response.
+Lexical order is not numeric order — `"2.10.0"` sorts *before* `"2.9.0"`,
+since `'1' < '9'` at the first differing character — so a tag doesn't have to
+be at the end of the list just because it's the newest release. That also
+rules out seeding the endpoint's `last=` pagination cursor at the currently
+pinned tag as a shortcut: any newer release whose version number grew a digit
+(`9` → `10`) would already sort *before* that cursor and be skipped.
+
+The endpoint paginates 100 tags per response via a `Link: rel="next"` header,
+and there is no way to know a page is the last one except by requesting it
+and finding no `Link` header at all — no total count, no `rel="last"`. This
+tool therefore walks every page to get a complete, correct list, with no
+early exit. For a tag-heavy image this is real cost: `ghcr.io/home-assistant/home-assistant`
+currently has ~4,400 tags, meaning ~45 requests per check for that one image.
+There is currently no cap or warning on this walk.
+
 ## Release & distribution
 
 This repo is the Homebrew tap. Pushing a `vX.Y.Z` tag triggers a GoReleaser workflow that:

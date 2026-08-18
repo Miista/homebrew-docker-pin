@@ -174,23 +174,56 @@ func ociFetchToken(client *http.Client, realm, service, scope string) (string, e
 	return "", fmt.Errorf("auth token endpoint returned no token")
 }
 
+// ociListTags walks every page of the tags/list endpoint via the Link
+// response header. See ghcrListTagsFromBase's comment: the OCI Distribution
+// Spec mandates lexical tag ordering with no sort option, so there is no
+// early-exit possible here — a full walk is the only correct option.
 func ociListTags(client *http.Client, baseURL, repo string) ([]string, error) {
-	req, _ := http.NewRequest("GET", fmt.Sprintf("%s/v2/%s/tags/list", baseURL, repo), nil)
-	resp, err := ociDo(client, req, "")
-	if err != nil {
-		return nil, err
+	var tags []string
+	url := fmt.Sprintf("%s/v2/%s/tags/list", baseURL, repo)
+	for url != "" {
+		req, _ := http.NewRequest("GET", url, nil)
+		resp, err := ociDo(client, req, "")
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			return nil, fmt.Errorf("tags list returned HTTP %d", resp.StatusCode)
+		}
+		var data struct {
+			Tags []string `json:"tags"`
+		}
+		err = json.NewDecoder(resp.Body).Decode(&data)
+		resp.Body.Close()
+		if err != nil {
+			return nil, err
+		}
+		tags = append(tags, data.Tags...)
+
+		next := nextPageURL(resp.Header.Get("Link"))
+		if next == "" {
+			break
+		}
+		url = baseURL + next
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("tags list returned HTTP %d", resp.StatusCode)
+	return tags, nil
+}
+
+// linkNextRe extracts the URL-reference and rel value from an RFC 5988 Link
+// header, e.g. `</v2/x/tags/list?last=foo&n=100>; rel="next"`.
+var linkNextRe = regexp.MustCompile(`<([^>]+)>\s*;\s*rel="([^"]+)"`)
+
+// nextPageURL returns the "next" relation's URL reference from a Link
+// header, or "" if absent (meaning the current page is the last one — the
+// OCI Distribution Spec gives no other way to know that in advance).
+func nextPageURL(linkHeader string) string {
+	for _, m := range linkNextRe.FindAllStringSubmatch(linkHeader, -1) {
+		if m[2] == "next" {
+			return m[1]
+		}
 	}
-	var data struct {
-		Tags []string `json:"tags"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-		return nil, err
-	}
-	return data.Tags, nil
+	return ""
 }
 
 func ociManifestDigest(client *http.Client, baseURL, repo, tag string) (string, error) {
