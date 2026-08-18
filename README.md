@@ -269,16 +269,21 @@ The container contract is three fixed mount paths:
 services:
   duva:
     image: ghcr.io/miista/duva:latest
-    user: "1000:1000"   # match the owner of ./duva/data
     volumes:
       - ./duva/config.yaml:/config.yaml:ro
       - .:/compose:ro
-      - ./duva/data:/data
+      - duva-state:/data
+volumes:
+  duva-state:
 ```
 
-The image defaults to a distroless `nonroot` user (UID 65532), which won't
-be able to write the state file into a host-owned `./duva/data` — set
-`user:` to the directory owner's UID:GID (or `chown 65532` the directory).
+`/data` holds only the small dedup-state file, so a named volume is the
+right default: it lives on disk under Docker's data root, persists across
+restarts and upgrades, and inherits the image's `nonroot` ownership on
+first use — no `user:` or `chown` needed. If you prefer a bind mount
+(`./duva/data:/data`), the image's distroless `nonroot` user (UID 65532)
+must be able to write it: set `user:` to the directory owner's UID:GID or
+`chown 65532` the directory.
 
 **`/compose` MUST be the compose project _directory_, never the compose file
 alone.** Two things break with a single-file mount: `include:`'d nested
