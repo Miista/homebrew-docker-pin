@@ -10,14 +10,14 @@ import (
 )
 
 // stateFilePath returns where the last-notified-tag-per-service map is
-// persisted, overridable via TAGWATCH_STATE_FILE for tests and non-default
+// persisted, overridable via DUVA_STATE_FILE for tests and non-default
 // mounts. The default assumes a volume mounted at /data, matching diun's
 // own convention.
 func stateFilePath() string {
-	if p := os.Getenv("TAGWATCH_STATE_FILE"); p != "" {
+	if p := os.Getenv("DUVA_STATE_FILE"); p != "" {
 		return p
 	}
-	return "/data/tagwatch.json"
+	return "/data/duva.json"
 }
 
 // loadState reads the service -> last-notified-tag map. A missing file is

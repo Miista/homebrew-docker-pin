@@ -156,7 +156,7 @@ services:
 func TestRunOnceNotifiesOnceThenDedupes(t *testing.T) {
 	chdirTemp(t, oneService, pinConfig)
 	statePath := filepath.Join(t.TempDir(), "state.json")
-	t.Setenv("TAGWATCH_STATE_FILE", statePath)
+	t.Setenv("DUVA_STATE_FILE", statePath)
 
 	reg := fakeReg([]string{"1.2.0", "1.3.0"})
 	var out bytes.Buffer
@@ -193,7 +193,7 @@ services:
   - qui
 `)
 	statePath := filepath.Join(t.TempDir(), "state.json")
-	t.Setenv("TAGWATCH_STATE_FILE", statePath)
+	t.Setenv("DUVA_STATE_FILE", statePath)
 
 	var out bytes.Buffer
 	if err := runOnce(fakeDigestReg("sha256:aaa"), &out); err != nil {

@@ -19,6 +19,17 @@ builds:
     ldflags:
       - -s -w -X main.version={{.Version}}
 
+  - id: duva
+    main: ./cmd/duva
+    binary: duva
+    env:
+      - CGO_ENABLED=0
+    goos: [linux]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
 archives:
   - id: default
     builds: [docker-pin, docker-unpin]
@@ -52,6 +63,40 @@ nfpms:
 
 checksum:
   name_template: checksums.txt
+
+dockers:
+  - use: buildx
+    ids: [duva]
+    goos: linux
+    goarch: amd64
+    dockerfile: cmd/duva/Dockerfile.goreleaser
+    image_templates:
+      - ghcr.io/miista/duva:{{ .Version }}-amd64
+    build_flag_templates:
+      - --platform=linux/amd64
+      - --label=org.opencontainers.image.source=https://github.com/Miista/homebrew-docker-pin
+      - --label=org.opencontainers.image.version={{ .Version }}
+  - use: buildx
+    ids: [duva]
+    goos: linux
+    goarch: arm64
+    dockerfile: cmd/duva/Dockerfile.goreleaser
+    image_templates:
+      - ghcr.io/miista/duva:{{ .Version }}-arm64
+    build_flag_templates:
+      - --platform=linux/arm64
+      - --label=org.opencontainers.image.source=https://github.com/Miista/homebrew-docker-pin
+      - --label=org.opencontainers.image.version={{ .Version }}
+
+docker_manifests:
+  - name_template: ghcr.io/miista/duva:{{ .Version }}
+    image_templates:
+      - ghcr.io/miista/duva:{{ .Version }}-amd64
+      - ghcr.io/miista/duva:{{ .Version }}-arm64
+  - name_template: ghcr.io/miista/duva:latest
+    image_templates:
+      - ghcr.io/miista/duva:{{ .Version }}-amd64
+      - ghcr.io/miista/duva:{{ .Version }}-arm64
 
 brews:
   - name: docker-pin

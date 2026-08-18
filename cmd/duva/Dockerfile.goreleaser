@@ -1,0 +1,8 @@
+# Used by goreleaser: the binary is prebuilt (per target arch) and copied in,
+# mirroring cmd/duva/Dockerfile's final stage. duva only reads compose
+# files and talks to registries over HTTPS -- no docker CLI, no socket, no
+# shell -- so distroless/static + ca-certificates is all this needs.
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY duva /duva
+ENTRYPOINT ["/duva"]
+CMD ["serve"]

@@ -16,8 +16,8 @@ jobs:
       - run: go vet ./...
       - run: go test ./... -cover
 
-  e2e-tagwatch:
+  e2e-duva:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: bash hack/e2e-tagwatch.sh
+      - run: bash hack/e2e-duva.sh

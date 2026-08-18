@@ -1,24 +1,24 @@
 INSTALL_DIR := $(HOME)/.docker/cli-plugins
 BINARIES     := docker-pin docker-unpin
 
-.PHONY: all build install clean docker-tagwatch
+.PHONY: all build install clean docker-duva
 
 all: build
 
 build:
 	go build -trimpath -o docker-pin   ./cmd/docker-pin
 	go build -trimpath -o docker-unpin ./cmd/docker-unpin
-	go build -trimpath -o tagwatch     ./cmd/tagwatch
+	go build -trimpath -o duva         ./cmd/duva
 
 install: build
 	mkdir -p $(INSTALL_DIR)
 	install -m 755 $(BINARIES) $(INSTALL_DIR)/
 
-# docker-tagwatch builds the tagwatch container image locally (linux/amd64
+# docker-duva builds the duva container image locally (linux/amd64
 # and linux/arm64 for optiplex/pi respectively; CI publishes the multi-arch
 # image to ghcr.io on release).
-docker-tagwatch:
-	docker build -f cmd/tagwatch/Dockerfile -t tagwatch:dev .
+docker-duva:
+	docker build -f cmd/duva/Dockerfile -t duva:dev .
 
 clean:
-	rm -f $(BINARIES) tagwatch
+	rm -f $(BINARIES) duva

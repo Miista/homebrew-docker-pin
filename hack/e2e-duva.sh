@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# End-to-end test for tagwatch against the real registry: builds the
+# End-to-end test for duva against the real registry: builds the
 # container image, points it at a compose file pinned to an old tag, and
 # verifies it (1) detects the newer tag and notifies, (2) does not notify
 # again for the same tag on a second run, and (3) never touches the compose
-# file it was pointed at (tagwatch is read-only by design).
+# file it was pointed at (duva is read-only by design).
 #
 # The tag pair is NOT hardcoded -- a hardcoded "old" tag drifts stale over
 # time (eventually every patch on the branch is "old"), and a hardcoded pair
 # risks the older tag eventually being pruned from the registry's listing.
 # Instead this discovers, live, the two newest x.y.z-alpine tags currently
-# published for redis (same regex tagwatch itself is configured with below),
-# pins the compose file to the OLDER of that pair, and expects tagwatch to
+# published for redis (same regex duva itself is configured with below),
+# pins the compose file to the OLDER of that pair, and expects duva to
 # report exactly the NEWER one -- the real predecessor/successor relationship
 # on whatever redis has actually published by the time this runs.
 #
@@ -18,15 +18,15 @@
 # ntfy, so this needs no real ntfy account/token and no network egress beyond
 # the registry lookup.
 #
-# Usage: hack/e2e-tagwatch.sh   (run from the repo root; needs docker)
+# Usage: hack/e2e-duva.sh   (run from the repo root; needs docker)
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-ROOT="$PWD/.e2e-tagwatch"
-IMAGE=tagwatch:e2e
+ROOT="$PWD/.e2e-duva"
+IMAGE=duva:e2e
 
 echo "== building $IMAGE"
-docker build -q -f cmd/tagwatch/Dockerfile -t "$IMAGE" . >/dev/null
+docker build -q -f cmd/duva/Dockerfile -t "$IMAGE" . >/dev/null
 
 echo "== discovering the two newest redis x.y.z-alpine tags"
 read -r OLD_TAG NEW_TAG < <(
@@ -92,7 +92,7 @@ PYEOF
 NTFY_PID=$!
 trap 'kill $NTFY_PID 2>/dev/null || true; wait $NTFY_PID 2>/dev/null || true; rm -rf "$ROOT"' EXIT
 
-sleep 0.5 # let the fake ntfy bind before tagwatch can reach it
+sleep 0.5 # let the fake ntfy bind before duva can reach it
 
 pass=0 fail=0
 check() { # $1 = description, $2 = condition (already evaluated as 0/1)
@@ -133,10 +133,10 @@ check "exactly one notification sent" "$one_notif"
 mentions_new_tag=0; grep -q "$NEW_TAG" "$NTFY_LOG" && mentions_new_tag=1
 check "notification names the discovered successor tag ($NEW_TAG)" "$mentions_new_tag"
 
-state_written=0; [ -f "$ROOT/data/tagwatch.json" ] && state_written=1
+state_written=0; [ -f "$ROOT/data/duva.json" ] && state_written=1
 check "state file written" "$state_written"
 
-redis_state=$(state_value "$ROOT/data/tagwatch.json" redis)
+redis_state=$(state_value "$ROOT/data/duva.json" redis)
 state_has_new_tag=0; [ "$redis_state" = "$NEW_TAG" ] && state_has_new_tag=1
 check "state[redis] is exactly the discovered successor tag ($NEW_TAG, got '$redis_state')" "$state_has_new_tag"
 
@@ -150,7 +150,7 @@ still_one=0; [ "$notif_count2" = 1 ] && still_one=1
 check "no repeat notification (still exactly one)" "$still_one"
 
 # --- moving-tag scenario: unconstrained service (no tags: regex) ---
-# tagwatch has no local baseline for a moving tag (nothing is pulled), so the
+# duva has no local baseline for a moving tag (nothing is pulled), so the
 # first check must record the remote digest silently, then only notify once
 # a later check sees a different digest.
 echo "== moving-tag scenario: unconstrained service, no baseline yet"
@@ -203,7 +203,7 @@ docker run --rm --add-host=host.docker.internal:host-gateway \
 no_notif_yet=0; [ "$(wc -l < "$MNTFY_LOG" | tr -d ' ')" = 0 ] && no_notif_yet=1
 check "moving tag: no notification on first check (no baseline yet)" "$no_notif_yet"
 
-moving_state=$(state_value "$MROOT/data/tagwatch.json" redis)
+moving_state=$(state_value "$MROOT/data/duva.json" redis)
 baseline_written=0
 case "$moving_state" in sha256:*) baseline_written=1 ;; esac
 check "moving tag: state[redis] holds a sha256 digest baseline (got '$moving_state')" "$baseline_written"
@@ -216,7 +216,7 @@ docker run --rm --add-host=host.docker.internal:host-gateway \
 still_no_notif=0; [ "$(wc -l < "$MNTFY_LOG" | tr -d ' ')" = 0 ] && still_no_notif=1
 check "moving tag: no notification while the digest is unchanged" "$still_no_notif"
 
-moving_state2=$(state_value "$MROOT/data/tagwatch.json" redis)
+moving_state2=$(state_value "$MROOT/data/duva.json" redis)
 baseline_unchanged=0; [ "$moving_state2" = "$moving_state" ] && baseline_unchanged=1
 check "moving tag: recorded baseline unchanged across the unchanged-digest run" "$baseline_unchanged"
 

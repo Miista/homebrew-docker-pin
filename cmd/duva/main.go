@@ -1,4 +1,4 @@
-// tagwatch checks whether a newer registry tag exists for each configured
+// duva checks whether a newer registry tag exists for each configured
 // compose service and sends an ntfy notification the first time a given
 // newer tag is seen — it never rewrites the compose file, pulls an image,
 // or restarts a container. State (the last tag notified about, per service)
@@ -40,7 +40,7 @@ func main() {
 	}
 	switch os.Args[1] {
 	case "version", "--version", "-v":
-		fmt.Println("tagwatch", version)
+		fmt.Println("duva", version)
 	case "run":
 		if err := runOnce(realReg, os.Stdout); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -58,7 +58,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "Usage: tagwatch <run|serve|version>")
+	fmt.Fprintln(os.Stderr, "Usage: duva <run|serve|version>")
 }
 
 // loadConfig locates the compose file from the working directory, then the
@@ -231,7 +231,7 @@ func notifyAvailable(cfg *schedule.Config, service, tag string) {
 		return
 	}
 	n := notify.Ntfy{URL: cfg.Notify.Ntfy.URL, Topic: cfg.Notify.Ntfy.Topic, Token: token}
-	title := fmt.Sprintf("tagwatch@%s: %s has an update", hostLabel(cfg), service)
+	title := fmt.Sprintf("duva@%s: %s has an update", hostLabel(cfg), service)
 	if err := n.Send(title, fmt.Sprintf("%s: newer tag %s is available", service, tag), notify.PriorityDefault); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: notification failed: %v\n", err)
 	}
@@ -271,19 +271,19 @@ func serve(reg regFuncs, out io.Writer) error {
 			return err
 		}
 		wait := time.Until(next)
-		fmt.Fprintf(out, "tagwatch: next check at %s (in %s)\n", next.Format(time.RFC3339), wait.Round(time.Second))
+		fmt.Fprintf(out, "duva: next check at %s (in %s)\n", next.Format(time.RFC3339), wait.Round(time.Second))
 
 		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			fmt.Fprintln(out, "tagwatch: shutting down")
+			fmt.Fprintln(out, "duva: shutting down")
 			return nil
 		case <-timer.C:
 		}
 
 		if err := runOnce(reg, out); err != nil {
-			fmt.Fprintf(os.Stderr, "tagwatch: check failed: %v\n", err)
+			fmt.Fprintf(os.Stderr, "duva: check failed: %v\n", err)
 		}
 	}
 }
