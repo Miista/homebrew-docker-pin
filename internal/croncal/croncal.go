@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 var monthNames = map[string]int{
@@ -26,34 +27,50 @@ var dowNames = map[string]int{
 // systemd weekday names, indexed by cron day-of-week number (0 = Sunday).
 var dowOut = []string{"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"}
 
+// fields is a parsed 5-field cron expression; nil in any slot means
+// unrestricted ("*").
+type fields struct {
+	minutes, hours, days, months, dows []int
+}
+
+// parse parses a 5-field cron expression into its component value sets.
+func parse(expr string) (fields, error) {
+	f := strings.Fields(expr)
+	if len(f) != 5 {
+		return fields{}, fmt.Errorf("cron expression %q: want 5 fields (minute hour day-of-month month day-of-week), got %d", expr, len(f))
+	}
+
+	minutes, err := expand(f[0], 0, 59, nil, "minute")
+	if err != nil {
+		return fields{}, err
+	}
+	hours, err := expand(f[1], 0, 23, nil, "hour")
+	if err != nil {
+		return fields{}, err
+	}
+	days, err := expand(f[2], 1, 31, nil, "day-of-month")
+	if err != nil {
+		return fields{}, err
+	}
+	months, err := expand(f[3], 1, 12, monthNames, "month")
+	if err != nil {
+		return fields{}, err
+	}
+	dows, err := expand(f[4], 0, 7, dowNames, "day-of-week")
+	if err != nil {
+		return fields{}, err
+	}
+	return fields{minutes, hours, days, months, dows}, nil
+}
+
 // Translate converts a 5-field cron expression (minute hour day-of-month
 // month day-of-week) into a systemd OnCalendar expression.
 func Translate(expr string) (string, error) {
-	fields := strings.Fields(expr)
-	if len(fields) != 5 {
-		return "", fmt.Errorf("cron expression %q: want 5 fields (minute hour day-of-month month day-of-week), got %d", expr, len(fields))
-	}
-
-	minutes, err := expand(fields[0], 0, 59, nil, "minute")
+	f, err := parse(expr)
 	if err != nil {
 		return "", err
 	}
-	hours, err := expand(fields[1], 0, 23, nil, "hour")
-	if err != nil {
-		return "", err
-	}
-	days, err := expand(fields[2], 1, 31, nil, "day-of-month")
-	if err != nil {
-		return "", err
-	}
-	months, err := expand(fields[3], 1, 12, monthNames, "month")
-	if err != nil {
-		return "", err
-	}
-	dows, err := expand(fields[4], 0, 7, dowNames, "day-of-week")
-	if err != nil {
-		return "", err
-	}
+	minutes, hours, days, months, dows := f.minutes, f.hours, f.days, f.months, f.dows
 
 	if days != nil && dows != nil {
 		return "", fmt.Errorf("cron expression %q restricts both day-of-month and day-of-week: cron ORs them but systemd ANDs them, so the schedule cannot be translated faithfully", expr)
@@ -75,6 +92,58 @@ func Translate(expr string) (string, error) {
 	parts = append(parts, fmt.Sprintf("*-%s-%s", join(months, 2), join(days, 2)))
 	parts = append(parts, fmt.Sprintf("%s:%s:00", join(hours, 2), join(minutes, 2)))
 	return strings.Join(parts, " "), nil
+}
+
+// maxLookahead bounds Next's brute-force minute walk (5-year default, far
+// beyond any real schedule) so a malformed expression can't hang forever.
+const maxLookahead = 5 * 366 * 24 * time.Hour
+
+// Next returns the first minute-aligned time strictly after from that
+// satisfies expr, matching cron's own semantics: when both day-of-month and
+// day-of-week are restricted they're ORed (unlike Translate, which rejects
+// that combination because systemd ANDs it instead).
+func Next(expr string, from time.Time) (time.Time, error) {
+	f, err := parse(expr)
+	if err != nil {
+		return time.Time{}, err
+	}
+	set := func(vals []int) map[int]bool {
+		if vals == nil {
+			return nil
+		}
+		m := make(map[int]bool, len(vals))
+		for _, v := range vals {
+			m[v] = true
+		}
+		return m
+	}
+	minutes, hours, months := set(f.minutes), set(f.hours), set(f.months)
+	days, dows := set(f.days), set(f.dows)
+
+	t := from.Truncate(time.Minute).Add(time.Minute)
+	deadline := from.Add(maxLookahead)
+	for ; t.Before(deadline); t = t.Add(time.Minute) {
+		if months != nil && !months[int(t.Month())] {
+			// Skip to the 1st of next month at minute resolution would be
+			// slow in the worst case but stays well under maxLookahead.
+			continue
+		}
+		if days != nil || dows != nil {
+			dayOK := days != nil && days[t.Day()]
+			dowOK := dows != nil && dows[int(t.Weekday())]
+			if !dayOK && !dowOK {
+				continue
+			}
+		}
+		if hours != nil && !hours[t.Hour()] {
+			continue
+		}
+		if minutes != nil && !minutes[t.Minute()] {
+			continue
+		}
+		return t, nil
+	}
+	return time.Time{}, fmt.Errorf("cron expression %q: no matching time within %s of %s", expr, maxLookahead, from)
 }
 
 // join renders values as a zero-padded comma list, or "*" for unrestricted.

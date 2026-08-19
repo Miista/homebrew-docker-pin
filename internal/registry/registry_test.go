@@ -222,3 +222,69 @@ func resolveGHCRWithBase(image, digest, baseURL string) (Result, error) {
 	path := strings.TrimPrefix(image, "ghcr.io/")
 	return resolveGHCRFromBase(path, digest, baseURL)
 }
+
+// --- RemoteDigest (mocked) ---
+
+func TestGHCRTagDigestFromBase(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/token") || r.URL.RawQuery != "":
+			json.NewEncoder(w).Encode(map[string]string{"token": "testtoken"})
+		default:
+			w.Header().Set("Docker-Content-Digest", "sha256:latestbuild")
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer srv.Close()
+
+	got, err := ghcrTagDigestFromBase("foo/bar", "latest", srv.URL)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "sha256:latestbuild" {
+		t.Errorf("got %q, want %q", got, "sha256:latestbuild")
+	}
+}
+
+func TestOCITagDigestFromBase(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Docker-Content-Digest", "sha256:ocibuild")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	got, err := ociTagDigestFromBase(srv.URL, "foo/bar", "latest")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "sha256:ocibuild" {
+		t.Errorf("got %q, want %q", got, "sha256:ocibuild")
+	}
+}
+
+func TestDockerHubTagDigestFromURL(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]string{"digest": "sha256:hubbuild"})
+	}))
+	defer srv.Close()
+
+	got, err := dockerHubTagDigestFromURL(srv.URL + "/v2/repositories/library/redis/tags/latest")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "sha256:hubbuild" {
+		t.Errorf("got %q, want %q", got, "sha256:hubbuild")
+	}
+}
+
+func TestDockerHubTagDigestFromURL_NotFound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	_, err := dockerHubTagDigestFromURL(srv.URL + "/v2/repositories/library/redis/tags/nope")
+	if err == nil {
+		t.Fatal("expected error for missing tag, got nil")
+	}
+}

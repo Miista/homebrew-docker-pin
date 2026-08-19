@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -24,19 +25,19 @@ const (
 var version = "dev"
 
 type dockerFuncs struct {
-	getDigest func(ref string) (string, error)
-	pull      func(ref string) error
-	resolve    func(baseImage, pullTag, digest, service string) string
-	listTags   func(baseImage string) ([]string, error)
-	tagCreated func(baseImage, tag string) (time.Time, error)
+	getDigest        func(ref string) (string, error)
+	pull             func(ref string) error
+	resolve          func(baseImage, pullTag, digest, service string) string
+	listMatchingTags func(baseImage string, include, exclude *regexp.Regexp, current string) ([]string, error)
+	tagCreated       func(baseImage, tag string) (time.Time, error)
 }
 
 var realDocker = dockerFuncs{
-	getDigest:  docker.GetDigest,
-	pull:       docker.Pull,
-	resolve:    registry.ResolveOrWarn,
-	listTags:   registry.ListTags,
-	tagCreated: registry.TagCreated,
+	getDigest:        docker.GetDigest,
+	pull:             docker.Pull,
+	resolve:          registry.ResolveOrWarn,
+	listMatchingTags: registry.ListMatchingTags,
+	tagCreated:       registry.TagCreated,
 }
 
 func main() {
@@ -172,7 +173,8 @@ func runPin(args []string, d dockerFuncs) error {
 		fmt.Fprintln(os.Stderr, "       docker pin --all")
 		os.Exit(1)
 	}
-	return pin(args[0], d, dryRun)
+	_, err := pin(args[0], d, dryRun)
+	return err
 }
 
 func pinAll(d dockerFuncs, dryRun bool) error {
@@ -185,50 +187,94 @@ func pinAll(d dockerFuncs, dryRun bool) error {
 		return err
 	}
 	var failed []string
+	type result struct {
+		service string
+		outcome pinOutcome
+	}
+	var results []result
 	for _, service := range services {
-		if err := pin(service, d, dryRun); err != nil {
+		outcome, err := pin(service, d, dryRun)
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error pinning %s: %v\n", service, err)
 			failed = append(failed, service)
+			continue
 		}
+		results = append(results, result{service, outcome})
 	}
+
+	if dryRun {
+		fmt.Println()
+		fmt.Println("Summary:")
+		w := tabwriter.NewWriter(os.Stdout, 2, 8, 2, ' ', 0)
+		fmt.Fprintln(w, "SERVICE\tACTION\tSHA")
+		for _, r := range results {
+			action := "pin"
+			if r.outcome.AlreadyPinned {
+				action = "none"
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\n", r.service, action, r.outcome.Digest)
+		}
+		for _, service := range failed {
+			fmt.Fprintf(w, "%s\tFAILED\t-\n", service)
+		}
+		w.Flush()
+	}
+
 	if len(failed) > 0 {
 		return fmt.Errorf("failed to pin: %s", strings.Join(failed, ", "))
 	}
 	return nil
 }
 
-func pin(service string, d dockerFuncs, dryRun bool) error {
+func pin(service string, d dockerFuncs, dryRun bool) (pinOutcome, error) {
 	root, err := compose.Locate()
 	if err != nil {
-		return err
+		return pinOutcome{}, err
 	}
 	composeFile, err := compose.ResolveServiceIn(root, service)
 	if err != nil {
-		return err
+		return pinOutcome{}, err
 	}
-	if composeFile != root {
+	if composeFile != root && !dryRun {
 		fmt.Printf("%s is declared in %s (via include:)\n", service, composeFile)
 	}
 	return pinInFile(composeFile, service, d, dryRun)
 }
 
-func pinInFile(composeFile, service string, d dockerFuncs, dryRun bool) error {
+// pinOutcome describes what a pinInFile call did (or, in dry-run mode,
+// would have done).
+type pinOutcome struct {
+	OldRaw string
+	NewRaw string
+	// Tag and Digest are the tag and digest the service is (or would be)
+	// pinned to.
+	Tag, Digest string
+	// AlreadyPinned is true when the service was already digest-pinned, so
+	// no pin (or would-be pin) happened.
+	AlreadyPinned bool
+}
+
+func pinInFile(composeFile, service string, d dockerFuncs, dryRun bool) (pinOutcome, error) {
 	baseImage, tag, err := compose.ParseImage(composeFile, service)
 	if err != nil {
-		return err
+		return pinOutcome{}, err
 	}
 
 	raw, err := compose.RawImage(composeFile, service)
 	if err != nil {
-		return err
+		return pinOutcome{}, err
 	}
 
-	fmt.Printf("Read tag from compose file: %s\n", tag)
+	if !dryRun {
+		fmt.Printf("Read tag from compose file: %s\n", tag)
+	}
 
 	if strings.Contains(raw, "@sha256:") {
-		fmt.Printf("%s is already pinned to %s\n", service, raw)
-		fmt.Println("Run `docker unpin` first, or `docker pin upgrade` to move to a new version.")
-		return nil
+		if !dryRun {
+			fmt.Printf("%s is already pinned to %s\n", service, raw)
+			fmt.Println("Run `docker unpin` first, or `docker pin upgrade` to move to a new version.")
+		}
+		return pinOutcome{OldRaw: raw, NewRaw: raw, Tag: tag, Digest: digestOf(raw), AlreadyPinned: true}, nil
 	}
 
 	pullRef := baseImage + ":" + tag
@@ -236,32 +282,37 @@ func pinInFile(composeFile, service string, d dockerFuncs, dryRun bool) error {
 	if err != nil {
 		fmt.Printf("Image not found locally, pulling %s ...\n", pullRef)
 		if err := d.pull(pullRef); err != nil {
-			return fmt.Errorf("pull failed: %w", err)
+			return pinOutcome{}, fmt.Errorf("pull failed: %w", err)
 		}
 		digest, err = d.getDigest(pullRef)
 		if err != nil {
-			return err
+			return pinOutcome{}, err
 		}
-		fmt.Printf("Using digest from pulled image: %s\n", digest)
-	} else {
+		if !dryRun {
+			fmt.Printf("Using digest from pulled image: %s\n", digest)
+		}
+	} else if !dryRun {
 		fmt.Printf("Using digest from local image: %s\n", digest)
 	}
 
+	// Resolving `latest` to a version tag is purely cosmetic (the digest
+	// pinned is the same either way), so skip the registry round-trip in
+	// dry-run mode -- it's only worth paying for when we're about to write.
 	pinnedTag := tag
-	if tag == "latest" {
+	if tag == "latest" && !dryRun {
 		pinnedTag = d.resolve(baseImage, tag, digest, service)
 	}
 
 	pinned := fmt.Sprintf("%s:%s@%s", baseImage, pinnedTag, digest)
+	outcome := pinOutcome{OldRaw: raw, NewRaw: pinned, Tag: pinnedTag, Digest: digest}
 	if dryRun {
-		fmt.Printf("Would pin %s: %s -> %s\n", service, raw, pinned)
-		return nil
+		return outcome, nil
 	}
 	if err := compose.PinImage(composeFile, service, pinned); err != nil {
-		return err
+		return outcome, err
 	}
 	fmt.Printf("Pinned %s to %s\n", service, pinned)
-	return nil
+	return outcome, nil
 }
 
 // list
@@ -427,21 +478,22 @@ func upgradeAll(d dockerFuncs, dryRun bool) error {
 		results = append(results, result{service, outcome})
 	}
 
-	fmt.Println()
-	fmt.Println("Summary:")
-	verb := "Upgraded"
 	if dryRun {
-		verb = "Would upgrade"
-	}
-	for _, r := range results {
-		if r.outcome.Changed {
-			fmt.Printf("  %s %s: %s -> %s\n", verb, r.service, r.outcome.OldRaw, r.outcome.NewRaw)
-		} else {
-			fmt.Printf("  %s: up to date\n", r.service)
+		fmt.Println()
+		fmt.Println("Summary:")
+		w := tabwriter.NewWriter(os.Stdout, 2, 8, 2, ' ', 0)
+		fmt.Fprintln(w, "SERVICE\tACTION\tSHA")
+		for _, r := range results {
+			action := "none"
+			if r.outcome.Changed {
+				action = "upgrade"
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\n", r.service, action, r.outcome.Digest)
 		}
-	}
-	for _, service := range failed {
-		fmt.Printf("  %s: FAILED\n", service)
+		for _, service := range failed {
+			fmt.Fprintf(w, "%s\tFAILED\t-\n", service)
+		}
+		w.Flush()
 	}
 
 	if len(failed) > 0 {
@@ -459,7 +511,7 @@ func upgrade(service, targetVersion string, d dockerFuncs, dryRun bool) (upgrade
 	if err != nil {
 		return upgradeOutcome{}, err
 	}
-	if composeFile != root {
+	if composeFile != root && !dryRun {
 		fmt.Printf("%s is declared in %s (via include:)\n", service, composeFile)
 	}
 	return upgradeInFile(composeFile, service, targetVersion, d, dryRun)
@@ -470,6 +522,9 @@ func upgrade(service, targetVersion string, d dockerFuncs, dryRun bool) (upgrade
 type upgradeOutcome struct {
 	OldRaw string
 	NewRaw string
+	// Tag and Digest are the tag and digest the service is (or would be)
+	// pinned to.
+	Tag, Digest string
 	// Changed is true when the pin moved (or would move, in a dry run).
 	Changed bool
 }
@@ -487,7 +542,7 @@ func upgradeInFile(composeFile, service, targetVersion string, d dockerFuncs, dr
 	if err != nil {
 		return upgradeOutcome{}, err
 	}
-	outcome := upgradeOutcome{OldRaw: oldRaw, NewRaw: oldRaw}
+	outcome := upgradeOutcome{OldRaw: oldRaw, NewRaw: oldRaw, Tag: currentTag, Digest: digestOf(oldRaw)}
 
 	pullTag := targetVersion
 	if pullTag == "" {
@@ -495,8 +550,10 @@ func upgradeInFile(composeFile, service, targetVersion string, d dockerFuncs, dr
 		if err != nil {
 			return outcome, err
 		}
-		fmt.Printf("%s: on %s:%s — checking whether the %q moving tag has a newer build ...\n",
-			service, baseImage, currentTag, pullTag)
+		if !dryRun {
+			fmt.Printf("%s: on %s:%s — checking whether the %q moving tag has a newer build ...\n",
+				service, baseImage, currentTag, pullTag)
+		}
 	}
 
 	pullRef := baseImage + ":" + pullTag
@@ -511,20 +568,26 @@ func upgradeInFile(composeFile, service, targetVersion string, d dockerFuncs, dr
 	}
 
 	if oldDigest := digestOf(oldRaw); oldDigest != "" && oldDigest == digest {
-		fmt.Printf("%s: up to date — %s still points at the pinned digest (%s)\n", service, pullRef, shortDigest(oldDigest))
+		if !dryRun {
+			fmt.Printf("%s: up to date — %s still points at the pinned digest (%s)\n", service, pullRef, shortDigest(oldDigest))
+		}
 		return outcome, nil
 	}
 
+	// Resolving to a version tag is purely cosmetic (the digest pinned is
+	// the same either way), so skip the registry round-trip in dry-run mode
+	// -- it's only worth paying for when we're about to write.
 	pinnedTag := pullTag
-	if targetVersion == "" {
+	if targetVersion == "" && !dryRun {
 		pinnedTag = d.resolve(baseImage, pullTag, digest, service)
 	}
 
 	pinned := fmt.Sprintf("%s:%s@%s", baseImage, pinnedTag, digest)
 	outcome.NewRaw = pinned
+	outcome.Tag = pinnedTag
+	outcome.Digest = digest
 	outcome.Changed = true
 	if dryRun {
-		fmt.Printf("Would upgrade %s: %s -> %s\n", service, oldRaw, pinned)
 		return outcome, nil
 	}
 	if err := compose.PinImage(composeFile, service, pinned); err != nil {

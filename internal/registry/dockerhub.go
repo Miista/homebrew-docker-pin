@@ -90,6 +90,33 @@ func resolveDockerHubFromURL(digest, url string) (Result, error) {
 	return result, nil
 }
 
+// dockerHubTagDigestFromURL fetches a single tag's digest via Docker Hub's
+// per-tag endpoint, with no pull and no listing/pagination.
+func dockerHubTagDigestFromURL(url string) (string, error) {
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := getWithRetry(client, url)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return "", fmt.Errorf("tag not found (HTTP 404 from %s)", url)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("docker hub API: HTTP %d", resp.StatusCode)
+	}
+	var data struct {
+		Digest string `json:"digest"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return "", err
+	}
+	if data.Digest == "" {
+		return "", fmt.Errorf("response from %s has no digest", url)
+	}
+	return data.Digest, nil
+}
+
 func splitDockerHubImage(image string) (namespace, repo string) {
 	image = strings.TrimPrefix(image, "docker.io/")
 	parts := strings.SplitN(image, "/", 2)

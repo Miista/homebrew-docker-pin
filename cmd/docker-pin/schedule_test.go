@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -196,7 +197,7 @@ func TestScheduleRun_TagConstraint(t *testing.T) {
 		getDigest: func(ref string) (string, error) { return "sha256:new1", nil },
 		pull:      func(ref string) error { pulled = append(pulled, ref); return nil },
 		resolve:   noResolve,
-		listTags: func(baseImage string) ([]string, error) {
+		listMatchingTags: func(baseImage string, include, exclude *regexp.Regexp, current string) ([]string, error) {
 			return []string{"latest", "2.7.6", "2.8.4", "3.0.0", "2.8.4-beta.1"}, nil
 		},
 	}
@@ -233,7 +234,7 @@ func TestScheduleRun_ExcludeAndDelay(t *testing.T) {
 		getDigest: func(ref string) (string, error) { return "sha256:new1", nil },
 		pull:      func(ref string) error { pulled = append(pulled, ref); return nil },
 		resolve:   noResolve,
-		listTags: func(baseImage string) ([]string, error) {
+		listMatchingTags: func(baseImage string, include, exclude *regexp.Regexp, current string) ([]string, error) {
 			return []string{"2.9.0", "2.9.0-beta.2", "2.8.4", "2.7.6"}, nil
 		},
 		tagCreated: func(baseImage, tag string) (time.Time, error) {
@@ -267,7 +268,9 @@ func TestScheduleRun_DelayAllTooFresh(t *testing.T) {
 		getDigest: func(ref string) (string, error) { t.Error("getDigest should not run"); return "", nil },
 		pull:      func(ref string) error { t.Error("pull should not run"); return nil },
 		resolve:   noResolve,
-		listTags:  func(baseImage string) ([]string, error) { return []string{"2.9.0", "2.8.4"}, nil },
+		listMatchingTags: func(baseImage string, include, exclude *regexp.Regexp, current string) ([]string, error) {
+			return []string{"2.9.0", "2.8.4"}, nil
+		},
 		tagCreated: func(baseImage, tag string) (time.Time, error) {
 			return time.Now().Add(-time.Hour), nil // everything published an hour ago
 		},
@@ -288,7 +291,7 @@ func TestScheduleRun_TagConstraintUpToDate(t *testing.T) {
 		getDigest: func(ref string) (string, error) { t.Error("getDigest should not run"); return "", nil },
 		pull:      func(ref string) error { t.Error("pull should not run"); return nil },
 		resolve:   noResolve,
-		listTags: func(baseImage string) ([]string, error) {
+		listMatchingTags: func(baseImage string, include, exclude *regexp.Regexp, current string) ([]string, error) {
 			return []string{"2.7.6", "2.6.0"}, nil // current 2.7.6 is already newest
 		},
 	}

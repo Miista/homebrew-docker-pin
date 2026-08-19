@@ -3,6 +3,7 @@ package croncal
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestTranslate(t *testing.T) {
@@ -48,6 +49,47 @@ func TestTranslate(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("Translate(%q) = %q, want %q", tt.expr, got, tt.want)
 		}
+	}
+}
+
+func TestNext(t *testing.T) {
+	mustParse := func(s string) time.Time {
+		tm, err := time.Parse("2006-01-02 15:04", s)
+		if err != nil {
+			t.Fatalf("bad fixture time %q: %v", s, err)
+		}
+		return tm
+	}
+	tests := []struct {
+		expr string
+		from string
+		want string
+	}{
+		{"0 6 * * *", "2026-08-15 05:00", "2026-08-15 06:00"},
+		{"0 6 * * *", "2026-08-15 06:00", "2026-08-16 06:00"},
+		{"30 4 * * *", "2026-08-15 04:29", "2026-08-15 04:30"},
+		{"0 0 1 * *", "2026-08-15 00:00", "2026-09-01 00:00"},
+		{"0 22 * * 1-5", "2026-08-15 00:00", "2026-08-17 22:00"}, // Sat -> Mon
+		{"*/15 * * * *", "2026-08-15 10:01", "2026-08-15 10:15"},
+		// day-of-month OR day-of-week (cron semantics unlike Translate).
+		{"0 0 1,15 * MON", "2026-08-15 00:00", "2026-08-17 00:00"}, // 15th already passed; next Monday
+	}
+	for _, tt := range tests {
+		got, err := Next(tt.expr, mustParse(tt.from))
+		if err != nil {
+			t.Errorf("Next(%q, %q): unexpected error: %v", tt.expr, tt.from, err)
+			continue
+		}
+		if want := mustParse(tt.want); !got.Equal(want) {
+			t.Errorf("Next(%q, %q) = %s, want %s", tt.expr, tt.from, got, want)
+		}
+	}
+}
+
+func TestNextRejectsInvalidExpr(t *testing.T) {
+	_, err := Next("bad", time.Now())
+	if err == nil {
+		t.Fatal("Next with invalid expression: expected error, got nil")
 	}
 }
 

@@ -1,0 +1,17 @@
+# Used by goreleaser: the binary is prebuilt (per target arch) and copied in,
+# mirroring cmd/duva/Dockerfile's final stage. duva only reads compose
+# files and talks to registries over HTTPS -- no docker CLI, no socket, no
+# shell -- so distroless/static + ca-certificates is all this needs.
+
+# /data must exist in the image owned by nonroot: a named volume mounted
+# there inherits this ownership on first use, so `- duva-state:/data` works
+# without any user:/chown ceremony. (An absent dir would make Docker create
+# the volume root-owned, and nonroot couldn't write the state file.)
+FROM alpine:3 AS prep
+RUN mkdir /data && chown 65532:65532 /data
+
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=prep --chown=65532:65532 /data /data
+COPY duva /duva
+ENTRYPOINT ["/duva"]
+CMD ["serve"]

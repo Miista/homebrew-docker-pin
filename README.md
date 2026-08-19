@@ -158,7 +158,7 @@ services:                     # optional; omitted = every service
                               # this long ago ("48h", "7d", "2w")
 on_change: ./pin-upgraded.sh  # optional; run in the compose dir after
                               # upgrades changed the compose file
-hostname: optiplex            # optional; box name in notification titles
+hostname: myhost              # optional; box name in notification titles
                               # (defaults to the OS hostname)
 notify:                       # optional; report each run via ntfy
   ntfy:
@@ -249,6 +249,53 @@ image: postgres:16.3
 
 No-op if the service isn't pinned.
 
+## duva — the notify-only companion
+
+This repo also ships **duva** (Swedish for dove — a carrier pigeon: flies to
+the registry, comes back with one note, touches nothing) as a container image:
+`ghcr.io/miista/duva`. It watches the images in a compose project and sends
+one ntfy notification when a newer version tag appears (or, for moving tags
+like `latest`, when the remote digest changes) — then remembers what it
+reported so it never repeats itself. It never rewrites the compose file,
+never pulls an image, never touches the Docker socket.
+
+Its config is the same format as `pin.yaml` (`schedule`, `services` with
+`tags`/`exclude`/`delay`, `notify.ntfy`, `hostname`; `on_change` is ignored
+— duva never changes anything).
+
+The container contract is three fixed mount paths:
+
+```yaml
+services:
+  duva:
+    image: ghcr.io/miista/duva:latest
+    volumes:
+      - ./duva/config.yaml:/config.yaml:ro
+      - .:/compose:ro
+      - duva-state:/data
+volumes:
+  duva-state:
+```
+
+`/data` holds only the small dedup-state file, so a named volume is the
+right default: it lives on disk under Docker's data root, persists across
+restarts and upgrades, and inherits the image's `nonroot` ownership on
+first use — no `user:` or `chown` needed. If you prefer a bind mount
+(`./duva/data:/data`), the image's distroless `nonroot` user (UID 65532)
+must be able to write it: set `user:` to the directory owner's UID:GID or
+`chown 65532` the directory.
+
+**`/compose` MUST be the compose project _directory_, never the compose file
+alone.** Two things break with a single-file mount: `include:`'d nested
+compose files resolve relative to the directory and wouldn't exist inside
+the container, and a single-file bind mount silently pins the old inode when
+the host file is replaced by rename — which is exactly how editors and
+`docker pin` itself rewrite it, so duva would keep reading a stale file
+forever without any error.
+
+`duva serve` (the image's default command) runs the check on the config's
+cron `schedule`; `duva run` does a single check and exits.
+
 ## How digests work (multi-arch)
 
 `docker image inspect` returns the **index digest** — the hash of the multi-arch manifest list, not a per-platform image digest. This is intentional:
@@ -267,6 +314,31 @@ Resolution is supported for:
 - **Docker Hub** — public images, no auth required
 - **GHCR** — `ghcr.io/` images
 - **Any OCI-compliant registry** — bearer auth discovered via `WWW-Authenticate` challenge
+
+### GHCR/OCI tag listing cost
+
+Docker Hub's tag API sorts by push time and lets this tool ask for that order
+explicitly, so a "is there anything newer" check can stop as soon as it finds
+a qualifying tag — most checks need only the first page.
+
+GHCR and generic OCI registries have no such option. The OCI Distribution
+Spec's `tags/list` endpoint (`GET /v2/<name>/tags/list`) mandates **lexical
+(ASCIIbetical) ordering with no sort parameter**, confirmed directly against
+`ghcr.io`: no `order`/`sort`/`orderby` query parameter changes the response.
+Lexical order is not numeric order — `"2.10.0"` sorts *before* `"2.9.0"`,
+since `'1' < '9'` at the first differing character — so a tag doesn't have to
+be at the end of the list just because it's the newest release. That also
+rules out seeding the endpoint's `last=` pagination cursor at the currently
+pinned tag as a shortcut: any newer release whose version number grew a digit
+(`9` → `10`) would already sort *before* that cursor and be skipped.
+
+The endpoint paginates 100 tags per response via a `Link: rel="next"` header,
+and there is no way to know a page is the last one except by requesting it
+and finding no `Link` header at all — no total count, no `rel="last"`. This
+tool therefore walks every page to get a complete, correct list, with no
+early exit. For a tag-heavy image this is real cost: `ghcr.io/home-assistant/home-assistant`
+currently has ~4,400 tags, meaning ~45 requests per check for that one image.
+There is currently no cap or warning on this walk.
 
 ## Release & distribution
 

@@ -94,7 +94,7 @@ Reads a git-trackable pin.yaml (or pin.yml) next to the compose file:
                                # least this long ago ("48h", "7d", "2w")
   on_change: ./pin-upgraded.sh # optional; run after upgrades changed
                                # the compose file (sh -c, compose dir)
-  hostname: optiplex           # optional; box name shown in notification
+  hostname: myhost             # optional; box name shown in notification
                                # titles (defaults to the OS hostname)
   notify:                      # optional; report each run via ntfy
     ntfy:

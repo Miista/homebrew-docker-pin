@@ -50,7 +50,7 @@ func TestRun(t *testing.T) {
   web:
     image: nginx:1.25@sha256:abc123
 `)
-	if err := run("web", false); err != nil {
+	if _, err := run("web", false); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	got := readCompose(t, f)
@@ -67,7 +67,7 @@ func TestRun_NotPinned(t *testing.T) {
   web:
     image: nginx:1.25
 `)
-	if err := run("web", false); err != nil {
+	if _, err := run("web", false); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if readCompose(t, f) != "services:\n  web:\n    image: nginx:1.25\n" {
@@ -80,7 +80,7 @@ func TestRun_DryRun(t *testing.T) {
   web:
     image: nginx:1.25@sha256:abc123
 `)
-	if err := run("web", true); err != nil {
+	if _, err := run("web", true); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	got := readCompose(t, f)
