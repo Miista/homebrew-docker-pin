@@ -71,9 +71,37 @@ func FindFile(dir string) (string, error) {
 
 type composeFile struct {
 	Services map[string]struct {
-		Image string `yaml:"image"`
+		Image  string      `yaml:"image"`
+		Labels labelsField `yaml:"labels"`
 	} `yaml:"services"`
 	Include []includeEntry `yaml:"include"`
+}
+
+// labelsField accepts both forms Compose allows for a service's `labels:`:
+// a mapping (`labels: {KEY: value}`) or a list of "KEY=value" strings
+// (`labels: ["KEY=value"]`).
+type labelsField map[string]string
+
+func (l *labelsField) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind == yaml.MappingNode {
+		var m map[string]string
+		if err := value.Decode(&m); err != nil {
+			return err
+		}
+		*l = m
+		return nil
+	}
+	var list []string
+	if err := value.Decode(&list); err != nil {
+		return err
+	}
+	m := make(map[string]string, len(list))
+	for _, entry := range list {
+		k, v, _ := strings.Cut(entry, "=")
+		m[k] = v
+	}
+	*l = m
+	return nil
 }
 
 // includeEntry accepts both forms an `include:` list element can take: a
@@ -217,6 +245,23 @@ func RawImage(file, serviceName string) (string, error) {
 		return "", fmt.Errorf("service %q not found in %s", serviceName, file)
 	}
 	return svc.Image, nil
+}
+
+// Labels returns the labels of the given service (nil if it has none).
+func Labels(file, serviceName string) (map[string]string, error) {
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return nil, err
+	}
+	var cf composeFile
+	if err := yaml.Unmarshal(data, &cf); err != nil {
+		return nil, fmt.Errorf("parsing %s: %w", file, err)
+	}
+	svc, ok := cf.Services[serviceName]
+	if !ok {
+		return nil, fmt.Errorf("service %q not found in %s", serviceName, file)
+	}
+	return svc.Labels, nil
 }
 
 // ParseImage returns the base image name and tag for the given service.

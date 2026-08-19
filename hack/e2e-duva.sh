@@ -2,8 +2,10 @@
 # End-to-end test for duva against the real registry: builds the
 # container image, points it at a compose file pinned to an old tag, and
 # verifies it (1) detects the newer tag and notifies, (2) does not notify
-# again for the same tag on a second run, and (3) never touches the compose
-# file it was pointed at (duva is read-only by design).
+# again for the same tag on a second run, (3) never touches the compose
+# file it was pointed at (duva is read-only by design), and (4) skips any
+# service that isn't pinned (image: has no @sha256:...) -- duva only
+# watches services that were deliberately pinned via `docker pin`.
 #
 # The tag pair is NOT hardcoded -- a hardcoded "old" tag drifts stale over
 # time (eventually every patch on the branch is "old"), and a hardcoded pair
@@ -46,24 +48,21 @@ print(versioned[-2], versioned[-1])
 )
 echo "   predecessor: $OLD_TAG   successor: $NEW_TAG"
 
+echo "== resolving redis:$OLD_TAG's digest so the fixture is pinned"
+docker pull -q "redis:$OLD_TAG" >/dev/null
+OLD_DIGEST=$(docker image inspect "redis:$OLD_TAG" --format '{{index .RepoDigests 0}}' | sed 's/^.*@//')
+
 NTFY_PORT=8933
 
 rm -rf "$ROOT" && mkdir -p "$ROOT/work" "$ROOT/data"
 cat > "$ROOT/work/docker-compose.yml" <<EOF
 services:
   redis:
-    image: redis:$OLD_TAG
+    image: redis:$OLD_TAG@$OLD_DIGEST
+    labels:
+      duva.tags: '^\d+\.\d+\.\d+-alpine\$'
 EOF
-cat > "$ROOT/config.yaml" <<EOF
-schedule: "0 0 * * *"
-services:
-  - name: redis
-    tags: '^\d+\.\d+\.\d+-alpine\$'
-notify:
-  ntfy:
-    url: http://host.docker.internal:$NTFY_PORT
-    topic: e2e
-EOF
+DUVA_ENV=(-e "DUVA_SCHEDULE=0 0 * * *" -e "DUVA_NTFY_URL=http://host.docker.internal:$NTFY_PORT" -e "DUVA_NTFY_TOPIC=e2e")
 
 # Minimal fake ntfy: a netcat-less HTTP responder using python3 (present on
 # GitHub Actions ubuntu-latest and any dev machine with Docker), logging each
@@ -119,7 +118,8 @@ before_compose_hash=$(sha256sum "$ROOT/work/docker-compose.yml" | awk '{print $1
 
 echo "== first run: expect a newer tag detected and one notification sent"
 docker run --rm --user "$(id -u):$(id -g)" --add-host=host.docker.internal:host-gateway \
-  -v "$ROOT/work:/compose:ro" -v "$ROOT/config.yaml:/config.yaml:ro" -v "$ROOT/data:/data" \
+  "${DUVA_ENV[@]}" \
+  -v "$ROOT/work:/compose:ro" -v "$ROOT/data:/data" \
   "$IMAGE" run 2>&1 | sed 's/^/   | /'
 
 after_compose_hash=$(sha256sum "$ROOT/work/docker-compose.yml" | awk '{print $1}')
@@ -142,7 +142,8 @@ check "state[redis] is exactly the discovered successor tag ($NEW_TAG, got '$red
 
 echo "== second run: expect no repeat notification for the same tag"
 docker run --rm --user "$(id -u):$(id -g)" --add-host=host.docker.internal:host-gateway \
-  -v "$ROOT/work:/compose:ro" -v "$ROOT/config.yaml:/config.yaml:ro" -v "$ROOT/data:/data" \
+  "${DUVA_ENV[@]}" \
+  -v "$ROOT/work:/compose:ro" -v "$ROOT/data:/data" \
   "$IMAGE" run 2>&1 | sed 's/^/   | /'
 
 notif_count2=$(wc -l < "$NTFY_LOG" | tr -d ' ')
@@ -156,21 +157,16 @@ check "no repeat notification (still exactly one)" "$still_one"
 echo "== moving-tag scenario: unconstrained service, no baseline yet"
 MROOT="$ROOT-moving"
 rm -rf "$MROOT" && mkdir -p "$MROOT/work" "$MROOT/data"
+
+docker pull -q redis:alpine >/dev/null
+ALPINE_DIGEST=$(docker image inspect redis:alpine --format '{{index .RepoDigests 0}}' | sed 's/^.*@//')
 cat > "$MROOT/work/docker-compose.yml" <<EOF
 services:
   redis:
-    image: redis:alpine
+    image: redis:alpine@$ALPINE_DIGEST
 EOF
 MNTFY_PORT=8934
-cat > "$MROOT/config.yaml" <<EOF
-schedule: "0 0 * * *"
-services:
-  - redis
-notify:
-  ntfy:
-    url: http://host.docker.internal:$MNTFY_PORT
-    topic: e2e
-EOF
+MDUVA_ENV=(-e "DUVA_SCHEDULE=0 0 * * *" -e "DUVA_NTFY_URL=http://host.docker.internal:$MNTFY_PORT" -e "DUVA_NTFY_TOPIC=e2e")
 
 MNTFY_LOG="$MROOT/ntfy-requests.log"
 : > "$MNTFY_LOG"
@@ -197,7 +193,8 @@ trap 'kill $NTFY_PID $MNTFY_PID 2>/dev/null || true; wait $NTFY_PID $MNTFY_PID 2
 sleep 0.5
 
 docker run --rm --user "$(id -u):$(id -g)" --add-host=host.docker.internal:host-gateway \
-  -v "$MROOT/work:/compose:ro" -v "$MROOT/config.yaml:/config.yaml:ro" -v "$MROOT/data:/data" \
+  "${MDUVA_ENV[@]}" \
+  -v "$MROOT/work:/compose:ro" -v "$MROOT/data:/data" \
   "$IMAGE" run 2>&1 | sed 's/^/   | /'
 
 no_notif_yet=0; [ "$(wc -l < "$MNTFY_LOG" | tr -d ' ')" = 0 ] && no_notif_yet=1
@@ -210,7 +207,8 @@ check "moving tag: state[redis] holds a sha256 digest baseline (got '$moving_sta
 
 echo "== moving-tag scenario: second run with an unchanged digest must not notify"
 docker run --rm --user "$(id -u):$(id -g)" --add-host=host.docker.internal:host-gateway \
-  -v "$MROOT/work:/compose:ro" -v "$MROOT/config.yaml:/config.yaml:ro" -v "$MROOT/data:/data" \
+  "${MDUVA_ENV[@]}" \
+  -v "$MROOT/work:/compose:ro" -v "$MROOT/data:/data" \
   "$IMAGE" run 2>&1 | sed 's/^/   | /'
 
 still_no_notif=0; [ "$(wc -l < "$MNTFY_LOG" | tr -d ' ')" = 0 ] && still_no_notif=1
@@ -219,6 +217,56 @@ check "moving tag: no notification while the digest is unchanged" "$still_no_not
 moving_state2=$(state_value "$MROOT/data/duva.json" redis)
 baseline_unchanged=0; [ "$moving_state2" = "$moving_state" ] && baseline_unchanged=1
 check "moving tag: recorded baseline unchanged across the unchanged-digest run" "$baseline_unchanged"
+
+# --- pin-gate scenario: an unpinned service must be skipped entirely ---
+echo "== pin-gate scenario: unpinned service is skipped, no state, no notification"
+UROOT="$ROOT-unpinned"
+rm -rf "$UROOT" && mkdir -p "$UROOT/work" "$UROOT/data"
+cat > "$UROOT/work/docker-compose.yml" <<EOF
+services:
+  redis:
+    image: redis:$OLD_TAG
+EOF
+UNTFY_PORT=8935
+UDUVA_ENV=(-e "DUVA_SCHEDULE=0 0 * * *" -e "DUVA_NTFY_URL=http://host.docker.internal:$UNTFY_PORT" -e "DUVA_NTFY_TOPIC=e2e")
+UNTFY_LOG="$UROOT/ntfy-requests.log"
+: > "$UNTFY_LOG"
+python3 - "$UNTFY_PORT" "$UNTFY_LOG" >"$UROOT/ntfy-server.log" 2>&1 <<'PYEOF' &
+import http.server, sys
+
+port, log_path = int(sys.argv[1]), sys.argv[2]
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(length).decode(errors="replace")
+        with open(log_path, "a") as f:
+            f.write(self.headers.get("Title", "") + "|" + body + "\n")
+        self.send_response(200)
+        self.end_headers()
+    def log_message(self, *a):
+        pass
+
+http.server.HTTPServer(("0.0.0.0", port), Handler).serve_forever()
+PYEOF
+UNTFY_PID=$!
+trap 'kill $NTFY_PID $MNTFY_PID $UNTFY_PID 2>/dev/null || true; wait $NTFY_PID $MNTFY_PID $UNTFY_PID 2>/dev/null || true; rm -rf "$ROOT" "$MROOT" "$UROOT"' EXIT
+sleep 0.5
+
+run_output=$(docker run --rm --user "$(id -u):$(id -g)" --add-host=host.docker.internal:host-gateway \
+  "${UDUVA_ENV[@]}" \
+  -v "$UROOT/work:/compose:ro" -v "$UROOT/data:/data" \
+  "$IMAGE" run 2>&1)
+echo "$run_output" | sed 's/^/   | /'
+
+skipped=0; echo "$run_output" | grep -q "redis: not pinned, skipping" && skipped=1
+check "unpinned service logged as skipped" "$skipped"
+
+no_notif=0; [ "$(wc -l < "$UNTFY_LOG" | tr -d ' ')" = 0 ] && no_notif=1
+check "unpinned service: no notification sent" "$no_notif"
+
+no_state=0; { [ ! -f "$UROOT/data/duva.json" ] || [ "$(state_value "$UROOT/data/duva.json" redis)" = "" ]; } && no_state=1
+check "unpinned service: no state recorded" "$no_state"
 
 echo "== e2e: $pass passed, $fail failed"
 exit $((fail > 0))
