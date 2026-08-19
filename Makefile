@@ -15,7 +15,7 @@ install: build
 	install -m 755 $(BINARIES) $(INSTALL_DIR)/
 
 # docker-duva builds the duva container image locally (linux/amd64
-# and linux/arm64 for optiplex/pi respectively; CI publishes the multi-arch
+# and linux/arm64 for x86/pi hosts respectively; CI publishes the multi-arch
 # image to ghcr.io on release).
 docker-duva:
 	docker build -f cmd/duva/Dockerfile -t duva:dev .
