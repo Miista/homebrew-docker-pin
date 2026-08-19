@@ -206,16 +206,16 @@ func pinAll(d dockerFuncs, dryRun bool) error {
 		fmt.Println()
 		fmt.Println("Summary:")
 		w := tabwriter.NewWriter(os.Stdout, 2, 8, 2, ' ', 0)
-		fmt.Fprintln(w, "SERVICE\tACTION\tTAG\tSHA")
+		fmt.Fprintln(w, "SERVICE\tACTION\tSHA")
 		for _, r := range results {
 			action := "pin"
 			if r.outcome.AlreadyPinned {
 				action = "none"
 			}
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", r.service, action, r.outcome.Tag, r.outcome.Digest)
+			fmt.Fprintf(w, "%s\t%s\t%s\n", r.service, action, r.outcome.Digest)
 		}
 		for _, service := range failed {
-			fmt.Fprintf(w, "%s\tFAILED\t-\t-\n", service)
+			fmt.Fprintf(w, "%s\tFAILED\t-\n", service)
 		}
 		w.Flush()
 	}
@@ -477,16 +477,16 @@ func upgradeAll(d dockerFuncs, dryRun bool) error {
 		fmt.Println()
 		fmt.Println("Summary:")
 		w := tabwriter.NewWriter(os.Stdout, 2, 8, 2, ' ', 0)
-		fmt.Fprintln(w, "SERVICE\tACTION\tTAG\tSHA")
+		fmt.Fprintln(w, "SERVICE\tACTION\tSHA")
 		for _, r := range results {
 			action := "none"
 			if r.outcome.Changed {
 				action = "upgrade"
 			}
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", r.service, action, r.outcome.Tag, r.outcome.Digest)
+			fmt.Fprintf(w, "%s\t%s\t%s\n", r.service, action, r.outcome.Digest)
 		}
 		for _, service := range failed {
-			fmt.Fprintf(w, "%s\tFAILED\t-\t-\n", service)
+			fmt.Fprintf(w, "%s\tFAILED\t-\n", service)
 		}
 		w.Flush()
 	}
