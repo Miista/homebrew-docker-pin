@@ -289,8 +289,11 @@ func pinInFile(composeFile, service string, d dockerFuncs, dryRun bool) (pinOutc
 		fmt.Printf("Using digest from local image: %s\n", digest)
 	}
 
+	// Resolving `latest` to a version tag is purely cosmetic (the digest
+	// pinned is the same either way), so skip the registry round-trip in
+	// dry-run mode -- it's only worth paying for when we're about to write.
 	pinnedTag := tag
-	if tag == "latest" {
+	if tag == "latest" && !dryRun {
 		pinnedTag = d.resolve(baseImage, tag, digest, service)
 	}
 
@@ -562,8 +565,11 @@ func upgradeInFile(composeFile, service, targetVersion string, d dockerFuncs, dr
 		return outcome, nil
 	}
 
+	// Resolving to a version tag is purely cosmetic (the digest pinned is
+	// the same either way), so skip the registry round-trip in dry-run mode
+	// -- it's only worth paying for when we're about to write.
 	pinnedTag := pullTag
-	if targetVersion == "" {
+	if targetVersion == "" && !dryRun {
 		pinnedTag = d.resolve(baseImage, pullTag, digest, service)
 	}
 
