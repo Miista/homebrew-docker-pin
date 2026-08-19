@@ -40,7 +40,7 @@ func TestPinInFile_AlreadyPinned(t *testing.T) {
 		getDigest: func(ref string) (string, error) { called = true; return "", errors.New("should not be called") },
 		pull:      func(ref string) error { called = true; return errors.New("should not be called") },
 	}
-	if err := pinInFile(f, "web", d, false); err != nil {
+	if _, err := pinInFile(f, "web", d, false); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if called {
@@ -61,7 +61,7 @@ func TestPinInFile_LocalImage(t *testing.T) {
 		getDigest: func(ref string) (string, error) { return "sha256:localhash", nil },
 		pull:      func(ref string) error { pulled = true; return nil },
 	}
-	if err := pinInFile(f, "web", d, false); err != nil {
+	if _, err := pinInFile(f, "web", d, false); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if pulled {
@@ -81,7 +81,7 @@ func TestPinInFile_DryRun(t *testing.T) {
 		getDigest: func(ref string) (string, error) { return "sha256:localhash", nil },
 		pull:      func(ref string) error { return errors.New("should not be called") },
 	}
-	if err := pinInFile(f, "web", d, true); err != nil {
+	if _, err := pinInFile(f, "web", d, true); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(readCompose(t, f), "nginx:1.25\n") || strings.Contains(readCompose(t, f), "@sha256:") {
@@ -105,7 +105,7 @@ func TestPinInFile_PullsWhenNotLocal(t *testing.T) {
 		},
 		pull: func(ref string) error { return nil },
 	}
-	if err := pinInFile(f, "web", d, false); err != nil {
+	if _, err := pinInFile(f, "web", d, false); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(readCompose(t, f), "sha256:pulledhash") {
@@ -122,7 +122,7 @@ func TestPinInFile_PullFails(t *testing.T) {
 		getDigest: func(ref string) (string, error) { return "", errors.New("not found") },
 		pull:      func(ref string) error { return errors.New("pull failed: network error") },
 	}
-	err := pinInFile(f, "web", d, false)
+	_, err := pinInFile(f, "web", d, false)
 	if err == nil {
 		t.Fatal("expected error when pull fails")
 	}
@@ -140,7 +140,7 @@ func TestPinInFile_UnknownService(t *testing.T) {
 		getDigest: func(ref string) (string, error) { return "sha256:abc", nil },
 		pull:      func(ref string) error { return nil },
 	}
-	if err := pinInFile(f, "nonexistent", d, false); err == nil {
+	if _, err := pinInFile(f, "nonexistent", d, false); err == nil {
 		t.Error("expected error for unknown service")
 	}
 }
@@ -241,7 +241,7 @@ func TestPinAll(t *testing.T) {
 
 	// pinAll uses os.Getwd + FindFile, so exercise pinInFile directly per service
 	for _, svc := range []string{"web", "db"} {
-		if err := pinInFile(f, svc, d, false); err != nil {
+		if _, err := pinInFile(f, svc, d, false); err != nil {
 			t.Fatalf("pinInFile(%s): %v", svc, err)
 		}
 	}
