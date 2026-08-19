@@ -253,24 +253,47 @@ No-op if the service isn't pinned.
 
 This repo also ships **duva** (Swedish for dove — a carrier pigeon: flies to
 the registry, comes back with one note, touches nothing) as a container image:
-`ghcr.io/miista/duva`. It watches the images in a compose project and sends
-one ntfy notification when a newer version tag appears (or, for moving tags
-like `latest`, when the remote digest changes) — then remembers what it
-reported so it never repeats itself. It never rewrites the compose file,
-never pulls an image, never touches the Docker socket.
+`ghcr.io/miista/duva`. It watches **pinned** services in a compose project
+(`image:` has `@sha256:...`) and sends one ntfy notification when a newer
+version tag appears (or, for an unconstrained pin, when the remote digest
+changes) — then remembers what it reported so it never repeats itself. It
+never rewrites the compose file, never pulls an image, never touches the
+Docker socket.
 
-Its config is the same format as `pin.yaml` (`schedule`, `services` with
-`tags`/`exclude`/`delay`, `notify.ntfy`, `hostname`; `on_change` is ignored
-— duva never changes anything).
+Being pinned **is** the opt-in: `docker pin <service>` starts duva watching
+it, `docker unpin <service>` stops it. A service without a digest is logged
+as skipped and otherwise ignored — no notification, no state tracking. This
+is what duva is actually for: telling you when a deliberate version pin has
+gone stale, not generic "is anything newer" drift-watching.
 
-The container contract is three fixed mount paths:
+Per-service rules live as labels on the service, right next to the pin they
+govern:
+
+```yaml
+services:
+  radarr:
+    image: ghcr.io/linuxserver/radarr:latest@sha256:...
+    labels:
+      duva.tags: '^\d+\.\d+\.\d+$'  # only consider tags matching this regex
+      duva.exclude: '(alpha|beta|rc)' # drop matching candidates
+      duva.delay: 7d                  # only report a candidate this old
+```
+
+Everything else is env vars — `DUVA_SCHEDULE` (cron expression),
+`DUVA_HOSTNAME` (optional, defaults to the OS hostname), and
+`DUVA_NTFY_URL`/`DUVA_NTFY_TOPIC`/`DUVA_NTFY_TOKEN` for notifications. The
+container contract is two fixed mount paths plus env — no config file:
 
 ```yaml
 services:
   duva:
     image: ghcr.io/miista/duva:latest
+    environment:
+      DUVA_SCHEDULE: "0 6 * * *"
+      DUVA_NTFY_URL: https://ntfy.example.net
+      DUVA_NTFY_TOPIC: docker-pin
+    env_file: ./duva-secrets.env   # DUVA_NTFY_TOKEN=... ; gitignored
     volumes:
-      - ./duva/config.yaml:/config.yaml:ro
       - .:/compose:ro
       - duva-state:/data
 volumes:
@@ -293,8 +316,9 @@ the host file is replaced by rename — which is exactly how editors and
 `docker pin` itself rewrite it, so duva would keep reading a stale file
 forever without any error.
 
-`duva serve` (the image's default command) runs the check on the config's
-cron `schedule`; `duva run` does a single check and exits.
+`duva serve` (the image's default command) runs the check on
+`DUVA_SCHEDULE`'s cron expression; `duva run` does a single check and
+exits.
 
 ## How digests work (multi-arch)
 

@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"regexp"
+	"strings"
 	"syscall"
 	"time"
 
@@ -61,41 +62,84 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "Usage: duva <run|serve|version>")
 }
 
-// duva's container contract is fixed mount paths — no working-directory
-// tricks, no search logic, no env vars:
+// duva's container contract is fixed mount paths plus env vars — no
+// working-directory tricks, no search logic:
 //
-//	/config.yaml  the config, mounted read-only
-//	/compose      the compose project DIRECTORY, mounted read-only
-//	/data         small writable volume for the dedup state
+//	/compose  the compose project DIRECTORY, mounted read-only
+//	/data     small writable volume for the dedup state
 //
 // /compose MUST be the directory, never the compose file alone: include:'d
 // nested compose files resolve relative to it, and a single-file bind mount
 // silently pins the old inode when the host file is replaced by rename (as
 // editors and docker-pin do).
 //
-// These are package variables only so tests can point them at fixtures.
-var (
-	configPath = "/config.yaml"
-	composeDir = "/compose"
-)
+// composeDir is a package variable only so tests can point it at a fixture.
+var composeDir = "/compose"
 
-// loadConfig finds the compose file in the fixed compose mount and parses
-// duva's config from the fixed config path.
-func loadConfig() (cfg *schedule.Config, composeFile string, err error) {
-	composeFile, err = compose.FindFile(composeDir)
-	if err != nil {
-		return nil, "", err
-	}
-	cfg, err = schedule.Load(configPath)
-	if err != nil {
-		return nil, "", err
-	}
-	return cfg, composeFile, nil
+// duva only watches services that are pinned (image: has @sha256:...) —
+// pin status is the opt-in/opt-out: `docker pin <service>` starts duva
+// watching it, `docker unpin <service>` stops it. Unpinned services are
+// skipped with a log line, never notified about, never state-tracked.
+//
+// Per-service rules (tags/exclude/delay) live as labels on the service in
+// the compose file, not in a separate config file — config that governs a
+// service should live with that service, so there's one file to check and
+// nothing to drift when services are added/renamed/removed:
+//
+//	services:
+//	  radarr:
+//	    image: ghcr.io/linuxserver/radarr:latest@sha256:...
+//	    labels:
+//	      duva.tags: '^\d+\.\d+\.\d+$'
+//	      duva.exclude: '(alpha|beta|rc)'
+//	      duva.delay: 7d
+//
+// Everything else (schedule, notify, hostname) comes from env vars — see
+// loadEnvConfig.
+type envConfig struct {
+	Schedule  string
+	Hostname  string
+	NtfyURL   string
+	NtfyTopic string
+	NtfyToken string
 }
 
-// runOnce checks every configured service once and reports what it found.
+func loadEnvConfig() envConfig {
+	return envConfig{
+		Schedule:  os.Getenv("DUVA_SCHEDULE"),
+		Hostname:  os.Getenv("DUVA_HOSTNAME"),
+		NtfyURL:   os.Getenv("DUVA_NTFY_URL"),
+		NtfyTopic: os.Getenv("DUVA_NTFY_TOPIC"),
+		NtfyToken: os.Getenv("DUVA_NTFY_TOKEN"),
+	}
+}
+
+// serviceRules is a pinned service's tags/exclude/delay, read from its
+// compose labels.
+type serviceRules struct {
+	Name    string
+	Tags    string
+	Exclude string
+	Delay   string
+}
+
+func loadServiceRules(composeFile, name string) (serviceRules, error) {
+	labels, err := compose.Labels(composeFile, name)
+	if err != nil {
+		return serviceRules{}, err
+	}
+	return serviceRules{
+		Name:    name,
+		Tags:    labels["duva.tags"],
+		Exclude: labels["duva.exclude"],
+		Delay:   labels["duva.delay"],
+	}, nil
+}
+
+// runOnce checks every pinned service once and reports what it found.
 func runOnce(reg regFuncs, out io.Writer) error {
-	cfg, composeFile, err := loadConfig()
+	cfg := loadEnvConfig()
+	composeFile, err := compose.FindFile(composeDir)
 	if err != nil {
 		return err
 	}
@@ -106,39 +150,54 @@ func runOnce(reg regFuncs, out io.Writer) error {
 		return fmt.Errorf("loading state: %w", err)
 	}
 
-	services := cfg.Services
-	if len(services) == 0 {
-		names, err := compose.ListServices(composeFile)
-		if err != nil {
-			return err
-		}
-		for _, n := range names {
-			services = append(services, schedule.Service{Name: n})
-		}
+	names, err := compose.ListServices(composeFile)
+	if err != nil {
+		return err
 	}
 
 	changed := false
-	for _, svc := range services {
-		before := st[svc.Name]
-		candidate, err := checkService(composeFile, svc, reg, st)
+	for _, name := range names {
+		serviceFile, err := compose.ResolveServiceIn(composeFile, name)
 		if err != nil {
-			fmt.Fprintf(out, "%s: error: %v\n", svc.Name, err)
+			fmt.Fprintf(out, "%s: error: %v\n", name, err)
 			continue
 		}
-		if st[svc.Name] != before {
+		raw, err := compose.RawImage(serviceFile, name)
+		if err != nil {
+			fmt.Fprintf(out, "%s: error: %v\n", name, err)
+			continue
+		}
+		if !strings.Contains(raw, "@sha256:") {
+			fmt.Fprintf(out, "%s: not pinned, skipping\n", name)
+			continue
+		}
+
+		svc, err := loadServiceRules(composeFile, name)
+		if err != nil {
+			fmt.Fprintf(out, "%s: error: %v\n", name, err)
+			continue
+		}
+
+		before := st[name]
+		candidate, err := checkService(composeFile, svc, reg, st)
+		if err != nil {
+			fmt.Fprintf(out, "%s: error: %v\n", name, err)
+			continue
+		}
+		if st[name] != before {
 			changed = true // checkService recorded a moving-tag baseline
 		}
 		if candidate == "" {
-			fmt.Fprintf(out, "%s: up to date\n", svc.Name)
+			fmt.Fprintf(out, "%s: up to date\n", name)
 			continue
 		}
-		if st[svc.Name] == candidate {
-			fmt.Fprintf(out, "%s: %s available (already notified)\n", svc.Name, candidate)
+		if st[name] == candidate {
+			fmt.Fprintf(out, "%s: %s available (already notified)\n", name, candidate)
 			continue
 		}
-		fmt.Fprintf(out, "%s: %s available\n", svc.Name, candidate)
-		notifyAvailable(cfg, svc.Name, candidate)
-		st[svc.Name] = candidate
+		fmt.Fprintf(out, "%s: %s available\n", name, candidate)
+		notifyAvailable(cfg, name, candidate)
+		st[name] = candidate
 		changed = true
 	}
 
@@ -160,7 +219,7 @@ func runOnce(reg regFuncs, out io.Writer) error {
 // against, so it records one silently rather than notifying (otherwise
 // every newly-watched service would fire once on day one regardless of
 // whether anything actually changed).
-func checkService(rootFile string, svc schedule.Service, reg regFuncs, st map[string]string) (string, error) {
+func checkService(rootFile string, svc serviceRules, reg regFuncs, st map[string]string) (string, error) {
 	serviceFile, err := compose.ResolveServiceIn(rootFile, svc.Name)
 	if err != nil {
 		return "", err
@@ -235,16 +294,11 @@ const maxDelayChecks = 10
 
 // notifyAvailable reports a newly-seen newer tag via ntfy. Notification
 // failures only warn — a lost notification must not fail the check.
-func notifyAvailable(cfg *schedule.Config, service, tag string) {
-	if cfg.Notify == nil || cfg.Notify.Ntfy == nil {
+func notifyAvailable(cfg envConfig, service, tag string) {
+	if cfg.NtfyURL == "" || cfg.NtfyTopic == "" {
 		return
 	}
-	token, err := cfg.Notify.Ntfy.Token()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
-		return
-	}
-	n := notify.Ntfy{URL: cfg.Notify.Ntfy.URL, Topic: cfg.Notify.Ntfy.Topic, Token: token}
+	n := notify.Ntfy{URL: cfg.NtfyURL, Topic: cfg.NtfyTopic, Token: cfg.NtfyToken}
 	title := fmt.Sprintf("duva@%s: %s has an update", hostLabel(cfg), service)
 	if err := n.Send(title, fmt.Sprintf("%s: newer tag %s is available", service, tag), notify.PriorityDefault); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: notification failed: %v\n", err)
@@ -252,9 +306,9 @@ func notifyAvailable(cfg *schedule.Config, service, tag string) {
 }
 
 // hostLabel identifies this box in notifications, so several hosts can
-// share one ntfy topic: config.yaml's `hostname:` when set, otherwise the
-// short OS hostname.
-func hostLabel(cfg *schedule.Config) string {
+// share one ntfy topic: DUVA_HOSTNAME when set, otherwise the short OS
+// hostname.
+func hostLabel(cfg envConfig) string {
 	if cfg.Hostname != "" {
 		return cfg.Hostname
 	}
@@ -268,10 +322,7 @@ func hostLabel(cfg *schedule.Config) string {
 // serve loops forever, running the same check as `run` on cfg.Schedule
 // (a 5-field cron expression), until SIGTERM/SIGINT.
 func serve(reg regFuncs, out io.Writer) error {
-	cfg, _, err := loadConfig()
-	if err != nil {
-		return err
-	}
+	cfg := loadEnvConfig()
 	if _, err := croncal.Next(cfg.Schedule, time.Now()); err != nil {
 		return fmt.Errorf("schedule %q: %w", cfg.Schedule, err)
 	}

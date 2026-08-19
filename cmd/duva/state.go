@@ -5,8 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-
-	"github.com/Miista/homebrew-docker-pin/internal/schedule"
 )
 
 // stateFile is where the last-notified-tag-per-service map is persisted:
@@ -48,7 +46,7 @@ func saveState(path string, st map[string]string) error {
 }
 
 // compileTagFilters compiles a service's tags/exclude regexes.
-func compileTagFilters(svc schedule.Service) (include, exclude *regexp.Regexp, err error) {
+func compileTagFilters(svc serviceRules) (include, exclude *regexp.Regexp, err error) {
 	include, err = regexp.Compile(svc.Tags)
 	if err != nil {
 		return nil, nil, err

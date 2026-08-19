@@ -8,39 +8,37 @@ import (
 	"testing"
 )
 
-// setupFixture creates a temp dir with a compose file and a duva config,
-// and points the composeDir / configPath / stateFile package variables at
-// fixtures (in the container these are the fixed /compose, /config.yaml
-// and /data/duva.json mounts).
-func setupFixture(t *testing.T, composeContent, configContent string) string {
+// setupFixture creates a temp dir with a compose file and points the
+// composeDir / stateFile package variables at fixtures (in the container
+// these are the fixed /compose and /data/duva.json mounts).
+func setupFixture(t *testing.T, composeContent string) string {
 	t.Helper()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte(composeContent), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	origCompose, origConfig, origState := composeDir, configPath, stateFile
-	t.Cleanup(func() { composeDir, configPath, stateFile = origCompose, origConfig, origState })
+	origCompose, origState := composeDir, stateFile
+	t.Cleanup(func() { composeDir, stateFile = origCompose, origState })
 	composeDir = dir
 	stateFile = filepath.Join(dir, "state.json")
-	if configContent != "" {
-		configPath = filepath.Join(dir, "config.yaml")
-		if err := os.WriteFile(configPath, []byte(configContent), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
 	return dir
 }
 
-const oneService = `services:
+const pinnedConstrainedService = `services:
   qui:
-    image: ghcr.io/autobrr/qui:1.2.0
+    image: ghcr.io/autobrr/qui:1.2.0@sha256:aaa
+    labels:
+      duva.tags: '^\d+\.\d+\.\d+$'
 `
 
-const pinConfig = `
-schedule: "0 0 * * *"
-services:
-  - name: qui
-    tags: '^\d+\.\d+\.\d+$'
+const pinnedUnconstrainedService = `services:
+  qui:
+    image: ghcr.io/autobrr/qui:latest@sha256:aaa
+`
+
+const unpinnedService = `services:
+  qui:
+    image: ghcr.io/autobrr/qui:1.2.0
 `
 
 func fakeReg(tags []string) regFuncs {
@@ -54,13 +52,12 @@ func fakeDigestReg(digest string) regFuncs {
 }
 
 func TestCheckServiceFindsNewerTag(t *testing.T) {
-	dir := setupFixture(t, oneService, pinConfig)
-	cfg, composeFile, err := loadConfig()
+	composeFile := filepath.Join(setupFixture(t, pinnedConstrainedService), "docker-compose.yml")
+	svc, err := loadServiceRules(composeFile, "qui")
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = dir
-	candidate, err := checkService(composeFile, cfg.Services[0], fakeReg([]string{"1.2.0", "1.3.0", "1.2.1"}), map[string]string{})
+	candidate, err := checkService(composeFile, svc, fakeReg([]string{"1.2.0", "1.3.0", "1.2.1"}), map[string]string{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,12 +67,12 @@ func TestCheckServiceFindsNewerTag(t *testing.T) {
 }
 
 func TestCheckServiceNoNewerTag(t *testing.T) {
-	setupFixture(t, oneService, pinConfig)
-	cfg, composeFile, err := loadConfig()
+	composeFile := filepath.Join(setupFixture(t, pinnedConstrainedService), "docker-compose.yml")
+	svc, err := loadServiceRules(composeFile, "qui")
 	if err != nil {
 		t.Fatal(err)
 	}
-	candidate, err := checkService(composeFile, cfg.Services[0], fakeReg([]string{"1.2.0", "1.1.0"}), map[string]string{})
+	candidate, err := checkService(composeFile, svc, fakeReg([]string{"1.2.0", "1.1.0"}), map[string]string{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,17 +82,13 @@ func TestCheckServiceNoNewerTag(t *testing.T) {
 }
 
 func TestCheckServiceMovingTag_FirstCheckRecordsBaselineWithoutNotifying(t *testing.T) {
-	setupFixture(t, oneService, `
-schedule: "0 0 * * *"
-services:
-  - qui
-`)
-	cfg, composeFile, err := loadConfig()
+	composeFile := filepath.Join(setupFixture(t, pinnedUnconstrainedService), "docker-compose.yml")
+	svc, err := loadServiceRules(composeFile, "qui")
 	if err != nil {
 		t.Fatal(err)
 	}
 	st := map[string]string{}
-	candidate, err := checkService(composeFile, cfg.Services[0], fakeDigestReg("sha256:aaa"), st)
+	candidate, err := checkService(composeFile, svc, fakeDigestReg("sha256:aaa"), st)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,17 +101,13 @@ services:
 }
 
 func TestCheckServiceMovingTag_DigestChangeIsReported(t *testing.T) {
-	setupFixture(t, oneService, `
-schedule: "0 0 * * *"
-services:
-  - qui
-`)
-	cfg, composeFile, err := loadConfig()
+	composeFile := filepath.Join(setupFixture(t, pinnedUnconstrainedService), "docker-compose.yml")
+	svc, err := loadServiceRules(composeFile, "qui")
 	if err != nil {
 		t.Fatal(err)
 	}
 	st := map[string]string{"qui": "sha256:aaa"}
-	candidate, err := checkService(composeFile, cfg.Services[0], fakeDigestReg("sha256:bbb"), st)
+	candidate, err := checkService(composeFile, svc, fakeDigestReg("sha256:bbb"), st)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,17 +117,13 @@ services:
 }
 
 func TestCheckServiceMovingTag_SameDigestNotReported(t *testing.T) {
-	setupFixture(t, oneService, `
-schedule: "0 0 * * *"
-services:
-  - qui
-`)
-	cfg, composeFile, err := loadConfig()
+	composeFile := filepath.Join(setupFixture(t, pinnedUnconstrainedService), "docker-compose.yml")
+	svc, err := loadServiceRules(composeFile, "qui")
 	if err != nil {
 		t.Fatal(err)
 	}
 	st := map[string]string{"qui": "sha256:aaa"}
-	candidate, err := checkService(composeFile, cfg.Services[0], fakeDigestReg("sha256:aaa"), st)
+	candidate, err := checkService(composeFile, svc, fakeDigestReg("sha256:aaa"), st)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +133,7 @@ services:
 }
 
 func TestRunOnceNotifiesOnceThenDedupes(t *testing.T) {
-	setupFixture(t, oneService, pinConfig)
+	setupFixture(t, pinnedConstrainedService)
 
 	reg := fakeReg([]string{"1.2.0", "1.3.0"})
 	var out bytes.Buffer
@@ -179,11 +164,8 @@ func TestRunOnceNotifiesOnceThenDedupes(t *testing.T) {
 }
 
 func TestRunOnceMovingTagBaselineThenNotifiesOnChange(t *testing.T) {
-	setupFixture(t, oneService, `
-schedule: "0 0 * * *"
-services:
-  - qui
-`)
+	setupFixture(t, pinnedUnconstrainedService)
+
 	var out bytes.Buffer
 	if err := runOnce(fakeDigestReg("sha256:aaa"), &out); err != nil {
 		t.Fatal(err)
@@ -205,6 +187,26 @@ services:
 	}
 	if !bytes.Contains(out.Bytes(), []byte("sha256:bbb available\n")) {
 		t.Fatalf("second run output = %q, want it to report the changed digest", out.String())
+	}
+}
+
+func TestRunOnceSkipsUnpinnedServices(t *testing.T) {
+	setupFixture(t, unpinnedService)
+
+	var out bytes.Buffer
+	if err := runOnce(fakeReg(nil), &out); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(out.Bytes(), []byte("qui: not pinned, skipping\n")) {
+		t.Fatalf("output = %q, want it to skip the unpinned service", out.String())
+	}
+
+	st, err := loadState(stateFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st) != 0 {
+		t.Fatalf("state = %v, want empty — unpinned services must never be state-tracked", st)
 	}
 }
 
