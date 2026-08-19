@@ -45,9 +45,9 @@ func saveState(path string, st map[string]string) error {
 	return os.WriteFile(path, data, 0o644)
 }
 
-// compileTagFilters compiles a service's tags/exclude regexes.
+// compileTagFilters compiles a service's include/exclude regexes.
 func compileTagFilters(svc serviceRules) (include, exclude *regexp.Regexp, err error) {
-	include, err = regexp.Compile(svc.Tags)
+	include, err = regexp.Compile(svc.Include)
 	if err != nil {
 		return nil, nil, err
 	}

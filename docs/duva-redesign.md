@@ -22,15 +22,15 @@ decision was made.
 
 ## Per-service rules move into compose labels
 
-`tags` / `exclude` / `delay` move from `config.yaml`'s `services:` list to
-labels on the service in the compose file:
+`include` / `exclude` / `delay` move from `config.yaml`'s `services:` list
+to labels on the service in the compose file:
 
 ```yaml
 services:
   paperless-db:
     image: postgres:17.10-alpine@sha256:...
     labels:
-      duva.tags: '^17\.\d+-alpine$'
+      duva.include: '^17\.\d+-alpine$'
       duva.exclude: '(alpha|beta|rc)'
       duva.delay: 7d
 ```

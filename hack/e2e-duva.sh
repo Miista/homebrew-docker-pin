@@ -60,7 +60,7 @@ services:
   redis:
     image: redis:$OLD_TAG@$OLD_DIGEST
     labels:
-      duva.tags: '^\d+\.\d+\.\d+-alpine\$'
+      duva.include: '^\d+\.\d+\.\d+-alpine\$'
 EOF
 DUVA_ENV=(-e "DUVA_SCHEDULE=0 0 * * *" -e "DUVA_NTFY_URL=http://host.docker.internal:$NTFY_PORT" -e "DUVA_NTFY_TOPIC=e2e")
 

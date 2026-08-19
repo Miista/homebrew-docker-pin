@@ -90,7 +90,7 @@ var composeDir = "/compose"
 //	  radarr:
 //	    image: ghcr.io/linuxserver/radarr:latest@sha256:...
 //	    labels:
-//	      duva.tags: '^\d+\.\d+\.\d+$'
+//	      duva.include: '^\d+\.\d+\.\d+$'
 //	      duva.exclude: '(alpha|beta|rc)'
 //	      duva.delay: 7d
 //
@@ -114,11 +114,11 @@ func loadEnvConfig() envConfig {
 	}
 }
 
-// serviceRules is a pinned service's tags/exclude/delay, read from its
+// serviceRules is a pinned service's include/exclude/delay, read from its
 // compose labels.
 type serviceRules struct {
 	Name    string
-	Tags    string
+	Include string
 	Exclude string
 	Delay   string
 }
@@ -130,7 +130,7 @@ func loadServiceRules(composeFile, name string) (serviceRules, error) {
 	}
 	return serviceRules{
 		Name:    name,
-		Tags:    labels["duva.tags"],
+		Include: labels["duva.include"],
 		Exclude: labels["duva.exclude"],
 		Delay:   labels["duva.delay"],
 	}, nil
@@ -229,7 +229,7 @@ func checkService(rootFile string, svc serviceRules, reg regFuncs, st map[string
 		return "", err
 	}
 
-	if svc.Tags == "" {
+	if svc.Include == "" {
 		return checkMovingTag(baseImage, currentTag, reg, svc.Name, st)
 	}
 
