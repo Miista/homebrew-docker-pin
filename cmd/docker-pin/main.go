@@ -235,7 +235,7 @@ func pin(service string, d dockerFuncs, dryRun bool) (pinOutcome, error) {
 	if err != nil {
 		return pinOutcome{}, err
 	}
-	if composeFile != root {
+	if composeFile != root && !dryRun {
 		fmt.Printf("%s is declared in %s (via include:)\n", service, composeFile)
 	}
 	return pinInFile(composeFile, service, d, dryRun)
@@ -265,11 +265,15 @@ func pinInFile(composeFile, service string, d dockerFuncs, dryRun bool) (pinOutc
 		return pinOutcome{}, err
 	}
 
-	fmt.Printf("Read tag from compose file: %s\n", tag)
+	if !dryRun {
+		fmt.Printf("Read tag from compose file: %s\n", tag)
+	}
 
 	if strings.Contains(raw, "@sha256:") {
-		fmt.Printf("%s is already pinned to %s\n", service, raw)
-		fmt.Println("Run `docker unpin` first, or `docker pin upgrade` to move to a new version.")
+		if !dryRun {
+			fmt.Printf("%s is already pinned to %s\n", service, raw)
+			fmt.Println("Run `docker unpin` first, or `docker pin upgrade` to move to a new version.")
+		}
 		return pinOutcome{OldRaw: raw, NewRaw: raw, Tag: tag, Digest: digestOf(raw), AlreadyPinned: true}, nil
 	}
 
@@ -284,8 +288,10 @@ func pinInFile(composeFile, service string, d dockerFuncs, dryRun bool) (pinOutc
 		if err != nil {
 			return pinOutcome{}, err
 		}
-		fmt.Printf("Using digest from pulled image: %s\n", digest)
-	} else {
+		if !dryRun {
+			fmt.Printf("Using digest from pulled image: %s\n", digest)
+		}
+	} else if !dryRun {
 		fmt.Printf("Using digest from local image: %s\n", digest)
 	}
 
@@ -300,7 +306,6 @@ func pinInFile(composeFile, service string, d dockerFuncs, dryRun bool) (pinOutc
 	pinned := fmt.Sprintf("%s:%s@%s", baseImage, pinnedTag, digest)
 	outcome := pinOutcome{OldRaw: raw, NewRaw: pinned, Tag: pinnedTag, Digest: digest}
 	if dryRun {
-		fmt.Printf("Would pin %s: %s -> %s\n", service, raw, pinned)
 		return outcome, nil
 	}
 	if err := compose.PinImage(composeFile, service, pinned); err != nil {
@@ -506,7 +511,7 @@ func upgrade(service, targetVersion string, d dockerFuncs, dryRun bool) (upgrade
 	if err != nil {
 		return upgradeOutcome{}, err
 	}
-	if composeFile != root {
+	if composeFile != root && !dryRun {
 		fmt.Printf("%s is declared in %s (via include:)\n", service, composeFile)
 	}
 	return upgradeInFile(composeFile, service, targetVersion, d, dryRun)
@@ -545,8 +550,10 @@ func upgradeInFile(composeFile, service, targetVersion string, d dockerFuncs, dr
 		if err != nil {
 			return outcome, err
 		}
-		fmt.Printf("%s: on %s:%s — checking whether the %q moving tag has a newer build ...\n",
-			service, baseImage, currentTag, pullTag)
+		if !dryRun {
+			fmt.Printf("%s: on %s:%s — checking whether the %q moving tag has a newer build ...\n",
+				service, baseImage, currentTag, pullTag)
+		}
 	}
 
 	pullRef := baseImage + ":" + pullTag
@@ -561,7 +568,9 @@ func upgradeInFile(composeFile, service, targetVersion string, d dockerFuncs, dr
 	}
 
 	if oldDigest := digestOf(oldRaw); oldDigest != "" && oldDigest == digest {
-		fmt.Printf("%s: up to date — %s still points at the pinned digest (%s)\n", service, pullRef, shortDigest(oldDigest))
+		if !dryRun {
+			fmt.Printf("%s: up to date — %s still points at the pinned digest (%s)\n", service, pullRef, shortDigest(oldDigest))
+		}
 		return outcome, nil
 	}
 
@@ -579,7 +588,6 @@ func upgradeInFile(composeFile, service, targetVersion string, d dockerFuncs, dr
 	outcome.Digest = digest
 	outcome.Changed = true
 	if dryRun {
-		fmt.Printf("Would upgrade %s: %s -> %s\n", service, oldRaw, pinned)
 		return outcome, nil
 	}
 	if err := compose.PinImage(composeFile, service, pinned); err != nil {

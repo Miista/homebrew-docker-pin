@@ -155,7 +155,7 @@ func run(service string, dryRun bool) (unpinOutcome, error) {
 	if err != nil {
 		return unpinOutcome{}, err
 	}
-	if composeFile != root {
+	if composeFile != root && !dryRun {
 		fmt.Printf("%s is declared in %s (via include:)\n", service, composeFile)
 	}
 
@@ -169,14 +169,15 @@ func run(service string, dryRun bool) (unpinOutcome, error) {
 		return unpinOutcome{}, err
 	}
 	if !strings.Contains(rawImage, "@sha256:") {
-		fmt.Printf("%s is not pinned\n", service)
+		if !dryRun {
+			fmt.Printf("%s is not pinned\n", service)
+		}
 		return unpinOutcome{OldRaw: rawImage, NewRaw: rawImage, Tag: tag, NotPinned: true}, nil
 	}
 
 	unpinned := base + ":" + tag
 	outcome := unpinOutcome{OldRaw: rawImage, NewRaw: unpinned, Tag: tag, Digest: digestOf(rawImage)}
 	if dryRun {
-		fmt.Printf("Would unpin %s: %s -> %s\n", service, rawImage, unpinned)
 		return outcome, nil
 	}
 	if err := compose.PinImage(composeFile, service, unpinned); err != nil {
