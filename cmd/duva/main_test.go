@@ -28,7 +28,7 @@ const pinnedConstrainedService = `services:
   qui:
     image: ghcr.io/autobrr/qui:1.2.0@sha256:aaa
     labels:
-      duva.tags: '^\d+\.\d+\.\d+$'
+      duva.include: '^\d+\.\d+\.\d+$'
 `
 
 const pinnedUnconstrainedService = `services:

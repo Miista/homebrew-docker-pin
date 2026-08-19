@@ -274,7 +274,7 @@ services:
   radarr:
     image: ghcr.io/linuxserver/radarr:latest@sha256:...
     labels:
-      duva.tags: '^\d+\.\d+\.\d+$'  # only consider tags matching this regex
+      duva.include: '^\d+\.\d+\.\d+$' # only consider tags matching this regex
       duva.exclude: '(alpha|beta|rc)' # drop matching candidates
       duva.delay: 7d                  # only report a candidate this old
 ```
