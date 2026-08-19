@@ -206,17 +206,16 @@ func pinAll(d dockerFuncs, dryRun bool) error {
 		fmt.Println()
 		fmt.Println("Summary:")
 		w := tabwriter.NewWriter(os.Stdout, 2, 8, 2, ' ', 0)
-		fmt.Fprintln(w, "SERVICE\tSTATUS\tIMAGE")
+		fmt.Fprintln(w, "SERVICE\tACTION\tTAG\tSHA")
 		for _, r := range results {
-			switch {
-			case r.outcome.AlreadyPinned:
-				fmt.Fprintf(w, "%s\talready pinned\t%s\n", r.service, r.outcome.NewRaw)
-			default:
-				fmt.Fprintf(w, "%s\twould pin\t%s -> %s\n", r.service, r.outcome.OldRaw, r.outcome.NewRaw)
+			action := "pin"
+			if r.outcome.AlreadyPinned {
+				action = "none"
 			}
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", r.service, action, r.outcome.Tag, r.outcome.Digest)
 		}
 		for _, service := range failed {
-			fmt.Fprintf(w, "%s\tFAILED\t-\n", service)
+			fmt.Fprintf(w, "%s\tFAILED\t-\t-\n", service)
 		}
 		w.Flush()
 	}
@@ -247,6 +246,9 @@ func pin(service string, d dockerFuncs, dryRun bool) (pinOutcome, error) {
 type pinOutcome struct {
 	OldRaw string
 	NewRaw string
+	// Tag and Digest are the tag and digest the service is (or would be)
+	// pinned to.
+	Tag, Digest string
 	// AlreadyPinned is true when the service was already digest-pinned, so
 	// no pin (or would-be pin) happened.
 	AlreadyPinned bool
@@ -268,7 +270,7 @@ func pinInFile(composeFile, service string, d dockerFuncs, dryRun bool) (pinOutc
 	if strings.Contains(raw, "@sha256:") {
 		fmt.Printf("%s is already pinned to %s\n", service, raw)
 		fmt.Println("Run `docker unpin` first, or `docker pin upgrade` to move to a new version.")
-		return pinOutcome{OldRaw: raw, NewRaw: raw, AlreadyPinned: true}, nil
+		return pinOutcome{OldRaw: raw, NewRaw: raw, Tag: tag, Digest: digestOf(raw), AlreadyPinned: true}, nil
 	}
 
 	pullRef := baseImage + ":" + tag
@@ -293,7 +295,7 @@ func pinInFile(composeFile, service string, d dockerFuncs, dryRun bool) (pinOutc
 	}
 
 	pinned := fmt.Sprintf("%s:%s@%s", baseImage, pinnedTag, digest)
-	outcome := pinOutcome{OldRaw: raw, NewRaw: pinned}
+	outcome := pinOutcome{OldRaw: raw, NewRaw: pinned, Tag: pinnedTag, Digest: digest}
 	if dryRun {
 		fmt.Printf("Would pin %s: %s -> %s\n", service, raw, pinned)
 		return outcome, nil
@@ -472,16 +474,16 @@ func upgradeAll(d dockerFuncs, dryRun bool) error {
 		fmt.Println()
 		fmt.Println("Summary:")
 		w := tabwriter.NewWriter(os.Stdout, 2, 8, 2, ' ', 0)
-		fmt.Fprintln(w, "SERVICE\tSTATUS\tIMAGE")
+		fmt.Fprintln(w, "SERVICE\tACTION\tTAG\tSHA")
 		for _, r := range results {
+			action := "none"
 			if r.outcome.Changed {
-				fmt.Fprintf(w, "%s\twould upgrade\t%s -> %s\n", r.service, r.outcome.OldRaw, r.outcome.NewRaw)
-			} else {
-				fmt.Fprintf(w, "%s\tup to date\t%s\n", r.service, r.outcome.OldRaw)
+				action = "upgrade"
 			}
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", r.service, action, r.outcome.Tag, r.outcome.Digest)
 		}
 		for _, service := range failed {
-			fmt.Fprintf(w, "%s\tFAILED\t-\n", service)
+			fmt.Fprintf(w, "%s\tFAILED\t-\t-\n", service)
 		}
 		w.Flush()
 	}
@@ -512,6 +514,9 @@ func upgrade(service, targetVersion string, d dockerFuncs, dryRun bool) (upgrade
 type upgradeOutcome struct {
 	OldRaw string
 	NewRaw string
+	// Tag and Digest are the tag and digest the service is (or would be)
+	// pinned to.
+	Tag, Digest string
 	// Changed is true when the pin moved (or would move, in a dry run).
 	Changed bool
 }
@@ -529,7 +534,7 @@ func upgradeInFile(composeFile, service, targetVersion string, d dockerFuncs, dr
 	if err != nil {
 		return upgradeOutcome{}, err
 	}
-	outcome := upgradeOutcome{OldRaw: oldRaw, NewRaw: oldRaw}
+	outcome := upgradeOutcome{OldRaw: oldRaw, NewRaw: oldRaw, Tag: currentTag, Digest: digestOf(oldRaw)}
 
 	pullTag := targetVersion
 	if pullTag == "" {
@@ -564,6 +569,8 @@ func upgradeInFile(composeFile, service, targetVersion string, d dockerFuncs, dr
 
 	pinned := fmt.Sprintf("%s:%s@%s", baseImage, pinnedTag, digest)
 	outcome.NewRaw = pinned
+	outcome.Tag = pinnedTag
+	outcome.Digest = digest
 	outcome.Changed = true
 	if dryRun {
 		fmt.Printf("Would upgrade %s: %s -> %s\n", service, oldRaw, pinned)

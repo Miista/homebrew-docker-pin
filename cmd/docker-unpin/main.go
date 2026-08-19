@@ -114,17 +114,16 @@ func runAll(dryRun bool) error {
 		fmt.Println()
 		fmt.Println("Summary:")
 		w := tabwriter.NewWriter(os.Stdout, 2, 8, 2, ' ', 0)
-		fmt.Fprintln(w, "SERVICE\tSTATUS\tIMAGE")
+		fmt.Fprintln(w, "SERVICE\tACTION\tTAG\tSHA")
 		for _, r := range results {
-			switch {
-			case r.outcome.NotPinned:
-				fmt.Fprintf(w, "%s\tnot pinned\t%s\n", r.service, r.outcome.OldRaw)
-			default:
-				fmt.Fprintf(w, "%s\twould unpin\t%s -> %s\n", r.service, r.outcome.OldRaw, r.outcome.NewRaw)
+			action := "unpin"
+			if r.outcome.NotPinned {
+				action = "none"
 			}
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", r.service, action, r.outcome.Tag, r.outcome.Digest)
 		}
 		for _, service := range failed {
-			fmt.Fprintf(w, "%s\tFAILED\t-\n", service)
+			fmt.Fprintf(w, "%s\tFAILED\t-\t-\n", service)
 		}
 		w.Flush()
 	}
@@ -140,6 +139,9 @@ func runAll(dryRun bool) error {
 type unpinOutcome struct {
 	OldRaw string
 	NewRaw string
+	// Tag is the tag the service is (or would be) left at. Digest is the
+	// pinned digest being removed (empty if there was none).
+	Tag, Digest string
 	// NotPinned is true when the service had no digest pin to remove.
 	NotPinned bool
 }
@@ -168,11 +170,11 @@ func run(service string, dryRun bool) (unpinOutcome, error) {
 	}
 	if !strings.Contains(rawImage, "@sha256:") {
 		fmt.Printf("%s is not pinned\n", service)
-		return unpinOutcome{OldRaw: rawImage, NewRaw: rawImage, NotPinned: true}, nil
+		return unpinOutcome{OldRaw: rawImage, NewRaw: rawImage, Tag: tag, NotPinned: true}, nil
 	}
 
 	unpinned := base + ":" + tag
-	outcome := unpinOutcome{OldRaw: rawImage, NewRaw: unpinned}
+	outcome := unpinOutcome{OldRaw: rawImage, NewRaw: unpinned, Tag: tag, Digest: digestOf(rawImage)}
 	if dryRun {
 		fmt.Printf("Would unpin %s: %s -> %s\n", service, rawImage, unpinned)
 		return outcome, nil
@@ -182,4 +184,12 @@ func run(service string, dryRun bool) (unpinOutcome, error) {
 	}
 	fmt.Printf("Unpinned %s: now at %s\n", service, unpinned)
 	return outcome, nil
+}
+
+// digestOf extracts the "sha256:..." digest from an "image@sha256:..." ref.
+func digestOf(image string) string {
+	if i := strings.Index(image, "@"); i != -1 {
+		return image[i+1:]
+	}
+	return ""
 }
