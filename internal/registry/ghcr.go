@@ -29,7 +29,11 @@ func resolveGHCRFromBase(path, digest, baseURL string) (Result, error) {
 		return Result{}, fmt.Errorf("ghcr tags: %w", err)
 	}
 
-	// Filter and sort version tags by specificity, most specific first.
+	// Filter and sort version tags newest first by actual numeric version,
+	// not string specificity — a registry can have hundreds of version tags
+	// (e.g. linuxserver images), and only the top ghcrMaxTagChecks are
+	// checked, so the sort order determines whether the real match is ever
+	// examined.
 	var versionTags []string
 	for _, tag := range tags {
 		if isVersionTag(tag) {
@@ -37,12 +41,7 @@ func resolveGHCRFromBase(path, digest, baseURL string) (Result, error) {
 		}
 	}
 	sort.Slice(versionTags, func(i, j int) bool {
-		di, li := tagSpecificity(versionTags[i])
-		dj, lj := tagSpecificity(versionTags[j])
-		if di != dj {
-			return di > dj
-		}
-		return li > lj
+		return CompareVersions(versionTags[i], versionTags[j]) > 0
 	})
 
 	result := Result{VersionTagsSeen: len(versionTags)}
@@ -52,6 +51,7 @@ func resolveGHCRFromBase(path, digest, baseURL string) (Result, error) {
 		}
 		tagDigest, err := ghcrManifestDigestFromBase(client, token, path, tag, baseURL)
 		if err != nil {
+			result.ChecksFailed++
 			continue
 		}
 		if tagDigest == digest {
