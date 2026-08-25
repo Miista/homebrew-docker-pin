@@ -6,7 +6,10 @@ import (
 	"os"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"text/tabwriter"
 	"time"
 
@@ -414,19 +417,34 @@ func shortDigest(digest string) string {
 
 func runUpgrade(args []string, d dockerFuncs) error {
 	dryRun := false
+	concurrency := upgradeAllConcurrency
 	filtered := args[:0:0]
-	for _, a := range args {
-		if a == "--dry-run" || a == "-n" {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--dry-run" || a == "-n":
 			dryRun = true
-			continue
+		case a == "--concurrency" || a == "-j":
+			if i+1 >= len(args) {
+				fmt.Fprintf(os.Stderr, "Error: %s requires a value\n", a)
+				os.Exit(1)
+			}
+			i++
+			n, err := strconv.Atoi(args[i])
+			if err != nil || n < 1 {
+				fmt.Fprintf(os.Stderr, "Error: invalid --concurrency value %q\n", args[i])
+				os.Exit(1)
+			}
+			concurrency = n
+		default:
+			filtered = append(filtered, a)
 		}
-		filtered = append(filtered, a)
 	}
 	args = filtered
 
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, "Usage: docker pin upgrade <service> [version]")
-		fmt.Fprintln(os.Stderr, "       docker pin upgrade --all")
+		fmt.Fprintln(os.Stderr, "       docker pin upgrade --all [--concurrency N]")
 		os.Exit(1)
 	}
 
@@ -435,7 +453,7 @@ func runUpgrade(args []string, d dockerFuncs) error {
 			fmt.Fprintln(os.Stderr, "Error: --all cannot be combined with a version")
 			os.Exit(1)
 		}
-		return upgradeAll(d, dryRun)
+		return upgradeAll(d, dryRun, concurrency)
 	}
 
 	if len(args) > 2 {
@@ -453,45 +471,115 @@ func runUpgrade(args []string, d dockerFuncs) error {
 	return err
 }
 
-func upgradeAll(d dockerFuncs, dryRun bool) error {
-	composeFile, err := compose.Locate()
+// upgradeAllConcurrency is the default cap on how many services pull at
+// once, so a large --all doesn't saturate the network or local disk I/O.
+// Override with --concurrency/-j.
+const upgradeAllConcurrency = 4
+
+func upgradeAll(d dockerFuncs, dryRun bool, concurrency int) error {
+	root, err := compose.Locate()
 	if err != nil {
 		return err
 	}
-	services, err := compose.ListServices(composeFile)
+	services, err := compose.ListServices(root)
 	if err != nil {
 		return err
 	}
+
+	type pulled struct {
+		service     string
+		composeFile string
+		pullRef     string
+		targetVer   string
+		err         error
+	}
+
+	// Phase 1: resolve each service's pull ref and pull it, concurrently.
+	// This touches only the registry and local docker state, never the
+	// compose file, so it's safe to parallelize. All per-service detail is
+	// suppressed in favor of a single progress counter; nothing here decides
+	// whether a service actually changed -- that happens in phase 2.
+	pulls := make([]pulled, len(services))
+	sem := make(chan struct{}, concurrency)
+	var wg sync.WaitGroup
+	var done int32
+	for i, service := range services {
+		wg.Add(1)
+		go func(i int, service string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			composeFile, err := compose.ResolveServiceIn(root, service)
+			if err != nil {
+				pulls[i] = pulled{service: service, err: err}
+			} else if pullRef, targetVer, err := resolvePullRef(composeFile, service, "", dryRun, true); err != nil {
+				pulls[i] = pulled{service: service, composeFile: composeFile, err: err}
+			} else if err := d.pull(pullRef); err != nil {
+				pulls[i] = pulled{service: service, composeFile: composeFile, err: fmt.Errorf("pull failed: %w", err)}
+			} else {
+				pulls[i] = pulled{service: service, composeFile: composeFile, pullRef: pullRef, targetVer: targetVer}
+			}
+
+			n := atomic.AddInt32(&done, 1)
+			fmt.Printf("\rPulling %d of %d images...", n, len(services))
+		}(i, service)
+	}
+	wg.Wait()
+	fmt.Println()
+
+	// Phase 2: now that every pull has finished, work out per-service
+	// outcomes and apply the compose file writes -- sequentially, so this
+	// never races on the file and per-service output prints cleanly in
+	// order.
 	var failed []string
 	type result struct {
 		service string
 		outcome upgradeOutcome
 	}
 	var results []result
-	for _, service := range services {
-		outcome, err := upgrade(service, "", d, dryRun)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error upgrading %s: %v\n", service, err)
-			failed = append(failed, service)
+	for _, p := range pulls {
+		if p.err != nil {
+			fmt.Fprintf(os.Stderr, "Error upgrading %s: %v\n", p.service, p.err)
+			failed = append(failed, p.service)
 			continue
 		}
-		results = append(results, result{service, outcome})
+		outcome, err := computeUpgrade(p.composeFile, p.service, p.targetVer, p.pullRef, d, dryRun)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error upgrading %s: %v\n", p.service, err)
+			failed = append(failed, p.service)
+			continue
+		}
+		results = append(results, result{p.service, outcome})
+		if !dryRun && outcome.Changed {
+			if err := applyUpgrade(p.composeFile, p.service, outcome); err != nil {
+				fmt.Fprintf(os.Stderr, "Error upgrading %s: %v\n", p.service, err)
+				failed = append(failed, p.service)
+				continue
+			}
+			fmt.Printf("Upgraded %s: %s -> %s\n", p.service, outcome.OldRaw, outcome.NewRaw)
+			fmt.Printf("Pinned to %s\n", outcome.Digest)
+		}
 	}
 
 	if dryRun {
 		fmt.Println()
 		fmt.Println("Summary:")
 		w := tabwriter.NewWriter(os.Stdout, 2, 8, 2, ' ', 0)
-		fmt.Fprintln(w, "SERVICE\tACTION\tSHA")
+		fmt.Fprintln(w, "SERVICE\tACTION\tTAG\tSHA")
 		for _, r := range results {
 			action := "none"
+			tag := tagOf(r.outcome.OldRaw)
 			if r.outcome.Changed {
 				action = "upgrade"
+				if newTag := tagOf(r.outcome.NewRaw); newTag != tag {
+					tag = tag + " -> " + newTag
+				}
 			}
-			fmt.Fprintf(w, "%s\t%s\t%s\n", r.service, action, r.outcome.Digest)
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", r.service, action, tag, r.outcome.Digest)
 		}
 		for _, service := range failed {
-			fmt.Fprintf(w, "%s\tFAILED\t-\n", service)
+			fmt.Fprintf(w, "%s\tFAILED\t-\t-\n", service)
 		}
 		w.Flush()
 	}
@@ -533,6 +621,69 @@ type upgradeOutcome struct {
 // to the pulled digest. With dryRun it does everything except rewrite the
 // compose file, printing what the upgrade would be instead.
 func upgradeInFile(composeFile, service, targetVersion string, d dockerFuncs, dryRun bool) (upgradeOutcome, error) {
+	pullRef, targetVersion, err := resolvePullRef(composeFile, service, targetVersion, dryRun, false)
+	if err != nil {
+		return upgradeOutcome{}, err
+	}
+	fmt.Printf("Pulling %s ...\n", pullRef)
+	if err := d.pull(pullRef); err != nil {
+		return upgradeOutcome{}, fmt.Errorf("pull failed: %w", err)
+	}
+
+	outcome, err := computeUpgrade(composeFile, service, targetVersion, pullRef, d, dryRun)
+	if err != nil || dryRun || !outcome.Changed {
+		return outcome, err
+	}
+	if err := applyUpgrade(composeFile, service, outcome); err != nil {
+		return outcome, err
+	}
+	fmt.Printf("Upgraded %s: %s -> %s\n", service, outcome.OldRaw, outcome.NewRaw)
+	fmt.Printf("Pinned to %s\n", outcome.Digest)
+	return outcome, nil
+}
+
+// applyUpgrade rewrites the compose file's image line for service to the
+// pinned image computed by computeUpgrade. Kept separate from computeUpgrade
+// so callers (e.g. upgradeAll) can apply the file writes sequentially.
+func applyUpgrade(composeFile, service string, outcome upgradeOutcome) error {
+	return compose.PinImage(composeFile, service, outcome.NewRaw)
+}
+
+// resolvePullRef works out which image ref to pull for service: either the
+// explicit targetVersion, or (if empty) the discovered moving tag for its
+// current tag. Returns the full pull ref and the resolved targetVersion
+// (unchanged if it was already explicit). Does no I/O beyond the registry
+// lookup needed to discover the moving tag, and never pulls — safe to run
+// concurrently across services so all pulls can be kicked off in parallel.
+// quiet suppresses the "checking whether..." progress line, for use during
+// upgradeAll's parallel pull phase where per-service lines would race with
+// the shared progress counter.
+func resolvePullRef(composeFile, service, targetVersion string, dryRun, quiet bool) (pullRef, resolvedVersion string, err error) {
+	baseImage, currentTag, err := compose.ParseImage(composeFile, service)
+	if err != nil {
+		return "", "", err
+	}
+
+	pullTag := targetVersion
+	if pullTag == "" {
+		pullTag, err = registry.MovingPullTag(baseImage, currentTag)
+		if err != nil {
+			return "", "", err
+		}
+		if !dryRun && !quiet {
+			fmt.Printf("%s: on %s:%s — checking whether the %q moving tag has a newer build ...\n",
+				service, baseImage, currentTag, pullTag)
+		}
+	}
+	return baseImage + ":" + pullTag, targetVersion, nil
+}
+
+// computeUpgrade works out what the new pinned image reference would be for
+// a service whose target pullRef has already been pulled. Must run after the
+// pull (and, across services, sequentially — it prints per-service outcome
+// lines and, for upgradeAll, is called once all parallel pulls have
+// completed).
+func computeUpgrade(composeFile, service, targetVersion, pullRef string, d dockerFuncs, dryRun bool) (upgradeOutcome, error) {
 	baseImage, currentTag, err := compose.ParseImage(composeFile, service)
 	if err != nil {
 		return upgradeOutcome{}, err
@@ -543,24 +694,6 @@ func upgradeInFile(composeFile, service, targetVersion string, d dockerFuncs, dr
 		return upgradeOutcome{}, err
 	}
 	outcome := upgradeOutcome{OldRaw: oldRaw, NewRaw: oldRaw, Tag: currentTag, Digest: digestOf(oldRaw)}
-
-	pullTag := targetVersion
-	if pullTag == "" {
-		pullTag, err = registry.MovingPullTag(baseImage, currentTag)
-		if err != nil {
-			return outcome, err
-		}
-		if !dryRun {
-			fmt.Printf("%s: on %s:%s — checking whether the %q moving tag has a newer build ...\n",
-				service, baseImage, currentTag, pullTag)
-		}
-	}
-
-	pullRef := baseImage + ":" + pullTag
-	fmt.Printf("Pulling %s ...\n", pullRef)
-	if err := d.pull(pullRef); err != nil {
-		return outcome, fmt.Errorf("pull failed: %w", err)
-	}
 
 	digest, err := d.getDigest(pullRef)
 	if err != nil {
@@ -574,11 +707,13 @@ func upgradeInFile(composeFile, service, targetVersion string, d dockerFuncs, dr
 		return outcome, nil
 	}
 
-	// Resolving to a version tag is purely cosmetic (the digest pinned is
-	// the same either way), so skip the registry round-trip in dry-run mode
-	// -- it's only worth paying for when we're about to write.
+	pullTag := strings.TrimPrefix(pullRef, baseImage+":")
+
+	// Resolve the moving tag (e.g. "latest") to the specific version tag it
+	// matches, so both the write and the dry-run summary show what's
+	// actually being pinned to, not just the moving tag name.
 	pinnedTag := pullTag
-	if targetVersion == "" && !dryRun {
+	if targetVersion == "" {
 		pinnedTag = d.resolve(baseImage, pullTag, digest, service)
 	}
 
@@ -587,19 +722,24 @@ func upgradeInFile(composeFile, service, targetVersion string, d dockerFuncs, dr
 	outcome.Tag = pinnedTag
 	outcome.Digest = digest
 	outcome.Changed = true
-	if dryRun {
-		return outcome, nil
-	}
-	if err := compose.PinImage(composeFile, service, pinned); err != nil {
-		return outcome, err
-	}
-	fmt.Printf("Upgraded %s: %s -> %s\n", service, oldRaw, pinned)
-	fmt.Printf("Pinned to %s\n", digest)
 	return outcome, nil
 }
 
 func digestOf(image string) string {
 	if i := strings.Index(image, "@"); i != -1 {
+		return image[i+1:]
+	}
+	return ""
+}
+
+// tagOf extracts the tag from a "base:tag" or "base:tag@sha256:..." image
+// reference, for display purposes (e.g. summarizing what a moving tag like
+// "latest" actually resolved to).
+func tagOf(image string) string {
+	if i := strings.Index(image, "@"); i != -1 {
+		image = image[:i]
+	}
+	if i := strings.LastIndex(image, ":"); i != -1 {
 		return image[i+1:]
 	}
 	return ""
