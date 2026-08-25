@@ -88,48 +88,47 @@ func RemoteDigest(baseImage, tag string) (string, error) {
 //
 // service is the compose service name, used only to suggest a follow-up command.
 func ResolveOrWarn(baseImage, pullTag, digest, service string) string {
-	return resolveOrWarn(baseImage, pullTag, digest, service, false)
-}
-
-// ResolveOrWarnQuiet is ResolveOrWarn without the "Resolving version tag
-// for..." progress line, for use when many services are being resolved
-// concurrently and per-service progress lines would interleave. Warnings on
-// failure still print to stderr, since those are exceptional and worth
-// surfacing even when interleaved.
-func ResolveOrWarnQuiet(baseImage, pullTag, digest, service string) string {
-	return resolveOrWarn(baseImage, pullTag, digest, service, true)
-}
-
-func resolveOrWarn(baseImage, pullTag, digest, service string, quiet bool) string {
-	if !quiet {
-		fmt.Printf("Resolving version tag for %s:%s via %s ...\n", baseImage, pullTag, registryKind(baseImage))
+	fmt.Printf("Resolving version tag for %s:%s via %s ...\n", baseImage, pullTag, registryKind(baseImage))
+	tag, warning := ResolveTag(baseImage, pullTag, digest, service)
+	if warning != "" {
+		fmt.Fprint(os.Stderr, warning)
 	}
+	return tag
+}
+
+// ResolveTag is ResolveOrWarn without printing anything: it returns the tag
+// to pin with, and separately any warning text that ResolveOrWarn would have
+// printed to stderr (empty if resolution succeeded cleanly). For use when
+// many services are being resolved concurrently, so callers can buffer
+// warnings and print them after their progress counter finishes instead of
+// interleaving mid-line.
+func ResolveTag(baseImage, pullTag, digest, service string) (tag, warning string) {
 	res, err := ResolveVersionTag(baseImage, digest)
-	// Each warning is written with a single Fprintf call (not one per line) so
+	// Each warning is built with a single Sprintf call (not one per line) so
 	// concurrent callers resolving different services don't interleave their
-	// warnings mid-message; every line is also prefixed with the service name
-	// so a warning is attributable even if it does interleave with another
-	// stream's output (e.g. a progress counter on stdout).
+	// warnings mid-message if printed immediately; every line is also
+	// prefixed with the service name so a warning is attributable even when
+	// interleaved with another stream's output (e.g. a progress counter).
 	switch {
 	case err != nil:
-		fmt.Fprintf(os.Stderr, "%[1]s: Warning: could not resolve version tag via %[2]s (%[3]v).\n%[1]s:          Pinning as %[4]s with the current digest.\n",
+		warning = fmt.Sprintf("%[1]s: Warning: could not resolve version tag via %[2]s (%[3]v).\n%[1]s:          Pinning as %[4]s with the current digest.\n",
 			service, registryKind(baseImage), err, pullTag)
 	case res.Tag != "":
-		return res.Tag
+		return res.Tag, ""
 	case res.VersionTagsSeen == 0:
-		fmt.Fprintf(os.Stderr, "%[1]s: Warning: the registry publishes no version tags for this image.\n%[1]s:          Pinning as %[2]s with the current digest.\n",
+		warning = fmt.Sprintf("%[1]s: Warning: the registry publishes no version tags for this image.\n%[1]s:          Pinning as %[2]s with the current digest.\n",
 			service, pullTag)
 	default:
 		// Version tags exist, but none match the local image — orphaned/stale build,
 		// unless some manifest checks failed (throttling, timeouts), in which case
 		// "no match" isn't a confident result: those candidates were never checked.
 		if res.ChecksFailed > 0 {
-			fmt.Fprintf(os.Stderr, "%[1]s: Warning: could not verify %[2]d of %[3]d version tag(s) in the registry (throttled or timed out) and found no match among the rest.\n%[1]s:          This may be a false negative — retry, or lower --concurrency if this happens often.\n%[1]s:          Pinning the running image as %[4]s; run `docker upgrade %[1]s` to move to the current tagged build.\n",
+			warning = fmt.Sprintf("%[1]s: Warning: could not verify %[2]d of %[3]d version tag(s) in the registry (throttled or timed out) and found no match among the rest.\n%[1]s:          This may be a false negative — retry, or lower --concurrency if this happens often.\n%[1]s:          Pinning the running image as %[4]s; run `docker upgrade %[1]s` to move to the current tagged build.\n",
 				service, res.ChecksFailed, res.VersionTagsSeen, pullTag)
 		} else {
-			fmt.Fprintf(os.Stderr, "%[1]s: Warning: your local image matches none of the %[2]d version tag(s) in the registry.\n%[1]s:          A newer build has likely replaced the %[3]s tag you pulled earlier.\n%[1]s:          Pinning the running image as %[3]s; run `docker upgrade %[1]s` to move to the current tagged build.\n",
+			warning = fmt.Sprintf("%[1]s: Warning: your local image matches none of the %[2]d version tag(s) in the registry.\n%[1]s:          A newer build has likely replaced the %[3]s tag you pulled earlier.\n%[1]s:          Pinning the running image as %[3]s; run `docker upgrade %[1]s` to move to the current tagged build.\n",
 				service, res.VersionTagsSeen, pullTag)
 		}
 	}
-	return pullTag
+	return pullTag, warning
 }

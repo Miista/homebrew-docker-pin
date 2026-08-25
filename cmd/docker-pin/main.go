@@ -534,14 +534,15 @@ func upgradeAll(d dockerFuncs, dryRun bool, concurrency int) error {
 		service     string
 		composeFile string
 		outcome     upgradeOutcome
+		warning     string
 		err         error
 	}
 
 	// Phase 2: work out each service's outcome (digest compare + moving-tag
 	// resolution) concurrently -- this only hits local docker state and the
-	// registry, never the compose file. Per-service progress lines are
-	// suppressed in favor of a counter, same as phase 1; warnings still
-	// print to stderr since they're rare and worth surfacing immediately.
+	// registry, never the compose file. Per-service progress lines and
+	// resolution warnings are suppressed during the counter and printed
+	// afterward instead, so nothing interleaves with the in-place \r updates.
 	computedResults := make([]computed, len(pulls))
 	done = 0
 	var wg2 sync.WaitGroup
@@ -556,8 +557,8 @@ func upgradeAll(d dockerFuncs, dryRun bool, concurrency int) error {
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			outcome, err := computeUpgrade(p.composeFile, p.service, p.targetVer, p.pullRef, d, dryRun, true)
-			computedResults[i] = computed{service: p.service, composeFile: p.composeFile, outcome: outcome, err: err}
+			outcome, warning, err := computeUpgrade(p.composeFile, p.service, p.targetVer, p.pullRef, d, dryRun, true)
+			computedResults[i] = computed{service: p.service, composeFile: p.composeFile, outcome: outcome, warning: warning, err: err}
 
 			n := atomic.AddInt32(&done, 1)
 			fmt.Printf("\rResolving %d of %d images...          ", n, len(pulls))
@@ -566,6 +567,11 @@ func upgradeAll(d dockerFuncs, dryRun bool, concurrency int) error {
 	wg2.Wait()
 	if len(pulls) > 0 {
 		fmt.Println()
+	}
+	for _, c := range computedResults {
+		if c.warning != "" {
+			fmt.Fprint(os.Stderr, c.warning)
+		}
 	}
 
 	// Phase 3: apply the compose file writes sequentially, in service order,
@@ -662,7 +668,7 @@ func upgradeInFile(composeFile, service, targetVersion string, d dockerFuncs, dr
 		return upgradeOutcome{}, fmt.Errorf("pull failed: %w", err)
 	}
 
-	outcome, err := computeUpgrade(composeFile, service, targetVersion, pullRef, d, dryRun, false)
+	outcome, _, err := computeUpgrade(composeFile, service, targetVersion, pullRef, d, dryRun, false)
 	if err != nil || dryRun || !outcome.Changed {
 		return outcome, err
 	}
@@ -712,30 +718,33 @@ func resolvePullRef(composeFile, service, targetVersion string, dryRun, quiet bo
 
 // computeUpgrade works out what the new pinned image reference would be for
 // a service whose target pullRef has already been pulled. Must run after the
-// pull. quiet suppresses per-service progress lines (but not warnings, which
-// still go to stderr) for use when many services are computed concurrently.
-func computeUpgrade(composeFile, service, targetVersion, pullRef string, d dockerFuncs, dryRun, quiet bool) (upgradeOutcome, error) {
+// pull. quiet suppresses per-service progress lines and defers any
+// resolution warning to the returned warning string instead of printing it,
+// for use when many services are computed concurrently and immediate prints
+// would interleave with a shared progress counter; the caller is expected to
+// print the warning itself once it's safe to do so.
+func computeUpgrade(composeFile, service, targetVersion, pullRef string, d dockerFuncs, dryRun, quiet bool) (outcome upgradeOutcome, warning string, err error) {
 	baseImage, currentTag, err := compose.ParseImage(composeFile, service)
 	if err != nil {
-		return upgradeOutcome{}, err
+		return upgradeOutcome{}, "", err
 	}
 
 	oldRaw, err := compose.RawImage(composeFile, service)
 	if err != nil {
-		return upgradeOutcome{}, err
+		return upgradeOutcome{}, "", err
 	}
-	outcome := upgradeOutcome{OldRaw: oldRaw, NewRaw: oldRaw, Tag: currentTag, Digest: digestOf(oldRaw)}
+	outcome = upgradeOutcome{OldRaw: oldRaw, NewRaw: oldRaw, Tag: currentTag, Digest: digestOf(oldRaw)}
 
 	digest, err := d.getDigest(pullRef)
 	if err != nil {
-		return outcome, err
+		return outcome, "", err
 	}
 
 	if oldDigest := digestOf(oldRaw); oldDigest != "" && oldDigest == digest {
 		if !dryRun && !quiet {
 			fmt.Printf("%s: up to date — %s still points at the pinned digest (%s)\n", service, pullRef, shortDigest(oldDigest))
 		}
-		return outcome, nil
+		return outcome, "", nil
 	}
 
 	pullTag := strings.TrimPrefix(pullRef, baseImage+":")
@@ -745,11 +754,11 @@ func computeUpgrade(composeFile, service, targetVersion, pullRef string, d docke
 	// actually being pinned to, not just the moving tag name.
 	pinnedTag := pullTag
 	if targetVersion == "" {
-		resolve := d.resolve
 		if quiet {
-			resolve = registry.ResolveOrWarnQuiet
+			pinnedTag, warning = registry.ResolveTag(baseImage, pullTag, digest, service)
+		} else {
+			pinnedTag = d.resolve(baseImage, pullTag, digest, service)
 		}
-		pinnedTag = resolve(baseImage, pullTag, digest, service)
 	}
 
 	pinned := fmt.Sprintf("%s:%s@%s", baseImage, pinnedTag, digest)
@@ -757,7 +766,7 @@ func computeUpgrade(composeFile, service, targetVersion, pullRef string, d docke
 	outcome.Tag = pinnedTag
 	outcome.Digest = digest
 	outcome.Changed = true
-	return outcome, nil
+	return outcome, warning, nil
 }
 
 func digestOf(image string) string {
