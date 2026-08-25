@@ -83,7 +83,22 @@ func RemoteDigest(baseImage, tag string) (string, error) {
 //
 // service is the compose service name, used only to suggest a follow-up command.
 func ResolveOrWarn(baseImage, pullTag, digest, service string) string {
-	fmt.Printf("Resolving version tag for %s:%s via %s ...\n", baseImage, pullTag, registryKind(baseImage))
+	return resolveOrWarn(baseImage, pullTag, digest, service, false)
+}
+
+// ResolveOrWarnQuiet is ResolveOrWarn without the "Resolving version tag
+// for..." progress line, for use when many services are being resolved
+// concurrently and per-service progress lines would interleave. Warnings on
+// failure still print to stderr, since those are exceptional and worth
+// surfacing even when interleaved.
+func ResolveOrWarnQuiet(baseImage, pullTag, digest, service string) string {
+	return resolveOrWarn(baseImage, pullTag, digest, service, true)
+}
+
+func resolveOrWarn(baseImage, pullTag, digest, service string, quiet bool) string {
+	if !quiet {
+		fmt.Printf("Resolving version tag for %s:%s via %s ...\n", baseImage, pullTag, registryKind(baseImage))
+	}
 	res, err := ResolveVersionTag(baseImage, digest)
 	switch {
 	case err != nil:
