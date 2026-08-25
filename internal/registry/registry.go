@@ -10,6 +10,11 @@ import (
 type Result struct {
 	Tag             string // matched version tag; "" if none matched
 	VersionTagsSeen int    // number of version tags present in the registry
+	// ChecksFailed counts candidate tags whose manifest digest could not be
+	// fetched (network error, throttling, timeout) rather than genuinely not
+	// matching. A non-zero count means "no match" is not a confident result
+	// — some candidates were never actually checked.
+	ChecksFailed int
 }
 
 // ResolveVersionTag attempts to find the most specific version tag for an image
@@ -100,20 +105,31 @@ func resolveOrWarn(baseImage, pullTag, digest, service string, quiet bool) strin
 		fmt.Printf("Resolving version tag for %s:%s via %s ...\n", baseImage, pullTag, registryKind(baseImage))
 	}
 	res, err := ResolveVersionTag(baseImage, digest)
+	// Each warning is written with a single Fprintf call (not one per line) so
+	// concurrent callers resolving different services don't interleave their
+	// warnings mid-message; every line is also prefixed with the service name
+	// so a warning is attributable even if it does interleave with another
+	// stream's output (e.g. a progress counter on stdout).
 	switch {
 	case err != nil:
-		fmt.Fprintf(os.Stderr, "Warning: could not resolve version tag via %s (%v).\n", registryKind(baseImage), err)
-		fmt.Fprintf(os.Stderr, "         Pinning as %s with the current digest.\n", pullTag)
+		fmt.Fprintf(os.Stderr, "%[1]s: Warning: could not resolve version tag via %[2]s (%[3]v).\n%[1]s:          Pinning as %[4]s with the current digest.\n",
+			service, registryKind(baseImage), err, pullTag)
 	case res.Tag != "":
 		return res.Tag
 	case res.VersionTagsSeen == 0:
-		fmt.Fprintf(os.Stderr, "Warning: the registry publishes no version tags for this image.\n")
-		fmt.Fprintf(os.Stderr, "         Pinning as %s with the current digest.\n", pullTag)
+		fmt.Fprintf(os.Stderr, "%[1]s: Warning: the registry publishes no version tags for this image.\n%[1]s:          Pinning as %[2]s with the current digest.\n",
+			service, pullTag)
 	default:
-		// Version tags exist, but none match the local image — orphaned/stale build.
-		fmt.Fprintf(os.Stderr, "Warning: your local image matches none of the %d version tag(s) in the registry.\n", res.VersionTagsSeen)
-		fmt.Fprintf(os.Stderr, "         A newer build has likely replaced the %s tag you pulled earlier.\n", pullTag)
-		fmt.Fprintf(os.Stderr, "         Pinning the running image as %s; run `docker upgrade %s` to move to the current tagged build.\n", pullTag, service)
+		// Version tags exist, but none match the local image — orphaned/stale build,
+		// unless some manifest checks failed (throttling, timeouts), in which case
+		// "no match" isn't a confident result: those candidates were never checked.
+		if res.ChecksFailed > 0 {
+			fmt.Fprintf(os.Stderr, "%[1]s: Warning: could not verify %[2]d of %[3]d version tag(s) in the registry (throttled or timed out) and found no match among the rest.\n%[1]s:          This may be a false negative — retry, or lower --concurrency if this happens often.\n%[1]s:          Pinning the running image as %[4]s; run `docker upgrade %[1]s` to move to the current tagged build.\n",
+				service, res.ChecksFailed, res.VersionTagsSeen, pullTag)
+		} else {
+			fmt.Fprintf(os.Stderr, "%[1]s: Warning: your local image matches none of the %[2]d version tag(s) in the registry.\n%[1]s:          A newer build has likely replaced the %[3]s tag you pulled earlier.\n%[1]s:          Pinning the running image as %[3]s; run `docker upgrade %[1]s` to move to the current tagged build.\n",
+				service, res.VersionTagsSeen, pullTag)
+		}
 	}
 	return pullTag
 }

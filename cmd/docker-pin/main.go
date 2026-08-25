@@ -471,10 +471,12 @@ func runUpgrade(args []string, d dockerFuncs) error {
 	return err
 }
 
-// upgradeAllConcurrency is the default cap on how many services pull at
-// once, so a large --all doesn't saturate the network or local disk I/O.
+// upgradeAllConcurrency is the default cap on how many services pull/resolve
+// at once. Kept modest because registries (esp. GHCR under load) throttle
+// bursts of manifest-check requests; a resolve failure from throttling can
+// masquerade as "no matching tag" (see registry.Result.ChecksFailed).
 // Override with --concurrency/-j.
-const upgradeAllConcurrency = 4
+const upgradeAllConcurrency = 2
 
 func upgradeAll(d dockerFuncs, dryRun bool, concurrency int) error {
 	root, err := compose.Locate()
@@ -522,7 +524,7 @@ func upgradeAll(d dockerFuncs, dryRun bool, concurrency int) error {
 			}
 
 			n := atomic.AddInt32(&done, 1)
-			fmt.Printf("\rPulling %d of %d images...", n, len(services))
+			fmt.Printf("\rPulling %d of %d images...          ", n, len(services))
 		}(i, service)
 	}
 	wg.Wait()
@@ -558,7 +560,7 @@ func upgradeAll(d dockerFuncs, dryRun bool, concurrency int) error {
 			computedResults[i] = computed{service: p.service, composeFile: p.composeFile, outcome: outcome, err: err}
 
 			n := atomic.AddInt32(&done, 1)
-			fmt.Printf("\rResolving %d of %d images...", n, len(pulls))
+			fmt.Printf("\rResolving %d of %d images...          ", n, len(pulls))
 		}(i, p)
 	}
 	wg2.Wait()

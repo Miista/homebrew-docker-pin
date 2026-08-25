@@ -52,6 +52,8 @@ func resolveOCIFromBase(baseURL, repo, digest string) (Result, error) {
 		return Result{}, err
 	}
 
+	// Sort newest first by actual numeric version, not string specificity —
+	// see the equivalent comment in ghcr.go.
 	var versionTags []string
 	for _, t := range tags {
 		if isVersionTag(t) {
@@ -59,12 +61,7 @@ func resolveOCIFromBase(baseURL, repo, digest string) (Result, error) {
 		}
 	}
 	sort.Slice(versionTags, func(i, j int) bool {
-		di, li := tagSpecificity(versionTags[i])
-		dj, lj := tagSpecificity(versionTags[j])
-		if di != dj {
-			return di > dj
-		}
-		return li > lj
+		return CompareVersions(versionTags[i], versionTags[j]) > 0
 	})
 
 	result := Result{VersionTagsSeen: len(versionTags)}
@@ -74,6 +71,7 @@ func resolveOCIFromBase(baseURL, repo, digest string) (Result, error) {
 		}
 		d, err := ociManifestDigest(client, baseURL, repo, t)
 		if err != nil {
+			result.ChecksFailed++
 			continue
 		}
 		if d == digest {
