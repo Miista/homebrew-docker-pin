@@ -52,27 +52,44 @@ Resolves which *version* tag (e.g. `1.2.3`) corresponds to a digest, so a
   anything else → generic OCI Distribution (`oci.go`), discovering bearer auth
   from the `WWW-Authenticate` challenge and a `/token` realm request.
 - Each resolver lists tags, keeps only version-like tags (`versionRe`:
-  digits-and-dots with optional suffixes), sorts by `tagSpecificity` (more dots,
-  then longer — so the most specific immutable tag such as a `-g<sha>` build tag
-  wins over a bare `1.2`), and matches each tag's manifest digest against the
-  local digest (OCI/GHCR cap manifest checks at 20).
-- `Result` carries the matched `Tag` and `VersionTagsSeen`.
-- `ResolveOrWarn(baseImage, pullTag, digest, service)` is the entry point the
-  plugins call. It prints progress and, on failure, distinguishes three cases:
-  resolution error, registry publishes no version tags, or version tags exist but
-  **none match the local digest** (orphaned/stale image — warns that a newer build
-  replaced the tag and suggests `docker pin upgrade <service>`). In every failure
-  case it falls back to pinning with `pullTag` unchanged.
+  digits-and-dots with optional suffixes), sorts newest-first by
+  `CompareVersions` (numeric dotted-core comparison, not string specificity —
+  a registry can have hundreds of version tags, e.g. linuxserver images, and
+  only the top N are checked, so a naive specificity sort can starve out the
+  real match), and matches each tag's manifest digest against the local
+  digest (OCI/GHCR cap manifest checks at 20).
+- `Result` carries the matched `Tag`, `VersionTagsSeen`, and `ChecksFailed`
+  (manifest checks that errored rather than genuinely not matching — e.g.
+  registry throttling — so a "no match" caused by failed checks is
+  distinguishable from a confident one).
+- `ResolveOrWarn(baseImage, pullTag, digest, service)` is the entry point
+  **plain `docker pin` (not `upgrade`)** calls. It prints progress and, on
+  failure, distinguishes three cases: resolution error, registry publishes no
+  version tags, or version tags exist but **none match the local digest**
+  (orphaned/stale image — warns that a newer build replaced the tag and
+  suggests `docker pin upgrade <service>`). In every failure case it falls
+  back to pinning with `pullTag` unchanged. `ResolveTag` is the same logic
+  without printing, returning the warning text instead, for callers that need
+  to defer/buffer it.
 
 ## Command semantics
 
 - **`docker pin <service>`**: no-op if the image is already digest-pinned. Uses the
   *local* digest, pulling only if the image isn't present locally. If the tag is
-  `latest`, resolves it to a version tag via `ResolveOrWarn`. Writes
-  `base:tag@sha256:...`.
-- **`docker pin upgrade <service> [version]`**: *always* pulls (`version` or `latest`),
-  then pins to the freshly pulled digest; resolves the version tag when pulling
-  `latest`. `--all` cannot be combined with a version.
+  `latest`, resolves it to a version tag via `ResolveOrWarn` — a first-time,
+  low-stakes label guess, since the digest (not the tag) is what's pinned.
+  Writes `base:tag@sha256:...`.
+- **`docker pin upgrade <service> [version]`**: *always* pulls — `version` if
+  given, otherwise the moving tag `registry.MovingPullTag` derives from the
+  service's current tag (e.g. a service pinned at `1.4.2` checks `1.4`; one
+  on `latest` checks `latest`) — then pins to the freshly pulled digest
+  **under that same pulled tag**. Unlike plain `pin`, upgrade never tries to
+  relabel/guess a different version tag from the digest: the tag is already
+  meaningful (either explicit, or whatever the service was already
+  tracking), so there's nothing to resolve. `--all` cannot be combined with a
+  version. `--all` pulls all services concurrently (default concurrency 4,
+  `--concurrency`/`-j` to override), then applies compose file writes
+  sequentially so nothing races.
 - **`docker pin list [--missing] [-q]`**: read-only table of every service's
   image/tag/digest/pin-status (compose parse only — no docker/network calls).
   `--missing` shows only unpinned services and exits 1 if any exist (CI gate);
