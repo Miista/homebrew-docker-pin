@@ -248,10 +248,17 @@ func pinAll(d dockerFuncs, dryRun bool) error {
 		fmt.Fprintln(w, "SERVICE\tACTION\tSHA")
 		for _, r := range results {
 			action := "pin"
-			if r.outcome.AlreadyPinned {
+			switch {
+			case r.outcome.Built:
+				action = "built"
+			case r.outcome.AlreadyPinned:
 				action = "none"
 			}
-			fmt.Fprintf(w, "%s\t%s\t%s\n", r.service, action, r.outcome.Digest)
+			digest := r.outcome.Digest
+			if digest == "" {
+				digest = "-"
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\n", r.service, action, digest)
 		}
 		for _, service := range failed {
 			fmt.Fprintf(w, "%s\tFAILED\t-\n", service)
@@ -291,6 +298,9 @@ type pinOutcome struct {
 	// AlreadyPinned is true when the service was already digest-pinned, so
 	// no pin (or would-be pin) happened.
 	AlreadyPinned bool
+	// Built is true when the service is built locally (build:) and so was
+	// skipped -- a local image's digest is not pullable anywhere else.
+	Built bool
 }
 
 func pinInFile(composeFile, service string, d dockerFuncs, dryRun bool) (pinOutcome, error) {
@@ -302,6 +312,19 @@ func pinInFile(composeFile, service string, d dockerFuncs, dryRun bool) (pinOutc
 	raw, err := compose.RawImage(composeFile, service)
 	if err != nil {
 		return pinOutcome{}, err
+	}
+
+	// A locally built image's digest is local to this daemon -- no registry
+	// serves it, so pinning one produces a reference no other host can pull.
+	built, err := compose.IsBuilt(composeFile, service)
+	if err != nil {
+		return pinOutcome{}, err
+	}
+	if built {
+		if !dryRun {
+			fmt.Printf("%s is built locally (build:), not pinning — the Dockerfile is the pin\n", service)
+		}
+		return pinOutcome{OldRaw: raw, NewRaw: raw, Tag: tag, Built: true}, nil
 	}
 
 	if !dryRun {
@@ -668,7 +691,10 @@ func upgradeAll(d dockerFuncs, dryRun bool, concurrency int) error {
 		for _, r := range results {
 			action := "none"
 			tag := tagOf(r.outcome.OldRaw)
-			if r.outcome.Changed {
+			switch {
+			case r.outcome.Built:
+				action = "built"
+			case r.outcome.Changed:
 				action = "upgrade"
 				if newTag := tagOf(r.outcome.NewRaw); newTag != tag {
 					tag = tag + " -> " + newTag
@@ -713,12 +739,30 @@ type upgradeOutcome struct {
 	Tag, Digest string
 	// Changed is true when the pin moved (or would move, in a dry run).
 	Changed bool
+	// Built is true when the service is built locally (build:) and so was
+	// skipped -- there is no registry to check for a newer image.
+	Built bool
 }
 
 // upgradeInFile pulls the target (or discovered moving) tag and pins service
 // to the pulled digest. With dryRun it does everything except rewrite the
 // compose file, printing what the upgrade would be instead.
 func upgradeInFile(composeFile, service, targetVersion string, d dockerFuncs, dryRun bool) (upgradeOutcome, error) {
+	// Nothing to upgrade for a locally built image: there is no registry to
+	// check, and pulling its local tag would fail (or worse, silently fetch an
+	// unrelated image of the same name from Docker Hub).
+	built, err := compose.IsBuilt(composeFile, service)
+	if err != nil {
+		return upgradeOutcome{}, err
+	}
+	if built {
+		raw, _ := compose.RawImage(composeFile, service)
+		if !dryRun {
+			fmt.Printf("%s is built locally (build:), nothing to upgrade\n", service)
+		}
+		return upgradeOutcome{OldRaw: raw, NewRaw: raw, Built: true}, nil
+	}
+
 	pullRef, targetVersion, err := resolvePullRef(composeFile, service, targetVersion, dryRun, false)
 	if err != nil {
 		return upgradeOutcome{}, err

@@ -554,3 +554,53 @@ func TestListInFile_AllPinnedQuiet(t *testing.T) {
 		t.Errorf("expected no output, got %q", buf.String())
 	}
 }
+
+// A locally built image must never be pinned: its repo digest exists only on
+// this daemon, so `myapp:local@sha256:...` is unpullable anywhere else --
+// precisely the reproducibility failure pinning exists to prevent.
+func TestPinInFile_SkipsLocallyBuilt(t *testing.T) {
+	f := writeTempCompose(t, `services:
+  app:
+    build: ./app
+    image: myapp:local
+`)
+	d := dockerFuncs{
+		runningDigest: func(dir, service, baseImage string) (string, error) {
+			return "", errors.New("should not be consulted for a built service")
+		},
+		getDigest: func(ref string) (string, error) { return "", errors.New("should not be called") },
+		pull:      func(ref string) error { return errors.New("should not be called") },
+	}
+	out, err := pinInFile(f, "app", d, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !out.Built {
+		t.Error("outcome should be marked Built")
+	}
+	if strings.Contains(readCompose(t, f), "@sha256:") {
+		t.Errorf("a built service must not be pinned, got:\n%s", readCompose(t, f))
+	}
+}
+
+func TestUpgradeInFile_SkipsLocallyBuilt(t *testing.T) {
+	f := writeTempCompose(t, `services:
+  app:
+    build: ./app
+    image: myapp:local
+`)
+	d := dockerFuncs{
+		getDigest: func(ref string) (string, error) { return "", errors.New("should not be called") },
+		pull:      func(ref string) error { return errors.New("should not be called") },
+	}
+	out, err := upgradeInFile(f, "app", "", d, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !out.Built || out.Changed {
+		t.Errorf("expected a skipped built service, got %+v", out)
+	}
+	if strings.Contains(readCompose(t, f), "@sha256:") {
+		t.Errorf("a built service must not be pinned, got:\n%s", readCompose(t, f))
+	}
+}

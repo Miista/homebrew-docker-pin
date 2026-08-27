@@ -116,7 +116,7 @@ docker tag "nginx@$OLD_DIGEST" nginx:pinsandbox
 docker pull -q nginx:latest >/dev/null
 NEW_DIGEST=$(docker image inspect nginx:latest --format '{{index .RepoDigests 0}}' | sed 's/^.*@//')
 docker tag nginx:latest nginx:pinsandbox   # tag now points somewhere newer
-trap 'cd "$PROJECT" 2>/dev/null && docker compose down >/dev/null 2>&1; docker rmi nginx:pinsandbox >/dev/null 2>&1; rm -rf "$ROOT" "$PROJECT" "$BIN"' EXIT
+trap 'cd "$PROJECT" 2>/dev/null && docker compose down >/dev/null 2>&1; docker rmi nginx:pinsandbox e2e-pin-built:local >/dev/null 2>&1; rm -rf "$ROOT" "$PROJECT" "$BIN"' EXIT
 
 (cd "$PROJECT" && "$BIN" pin web) | sed 's/^/   | /'
 line=$(image_line "$PROJECT/docker-compose.yml")
@@ -176,6 +176,27 @@ done
 
 unchanged=0; [ "$before" = "$(cat "$PROJECT/docker-compose.yml")" ] && unchanged=1
 check "no compose file was touched by any of them" "$unchanged"
+
+# --- locally built services are skipped --------------------------------
+# A built image's repo digest is local to this daemon; pinning it produces a
+# reference no other host can pull.
+echo "== locally built service is not pinned"
+mkdir -p "$PROJECT/app"
+printf 'FROM nginx:1.26.3\n' > "$PROJECT/app/Dockerfile"
+cat > "$PROJECT/docker-compose.yml" <<'EOF2'
+services:
+  app:
+    build: ./app
+    image: e2e-pin-built:local
+EOF2
+(cd "$PROJECT" && docker compose build -q >/dev/null 2>&1)
+
+(cd "$PROJECT" && "$BIN" pin app) | sed 's/^/   | /'
+line=$(image_line "$PROJECT/docker-compose.yml")
+echo "   -> $line"
+
+skipped=0; [[ "$line" == "e2e-pin-built:local" ]] && skipped=1
+check "built service left unpinned" "$skipped"
 
 echo "== e2e: $pass passed, $fail failed"
 exit $((fail > 0))
