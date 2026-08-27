@@ -1,6 +1,9 @@
 package main
 
 import (
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -579,5 +582,213 @@ func TestApp_BaselineAdvancesOnlyWhenApplied(t *testing.T) {
 
 	if st.Baseline[svc.Name] != baseline {
 		t.Error("a failed apply must not advance the baseline, or the move is forgotten")
+	}
+}
+
+// --- approving from the page -------------------------------------------
+//
+// The UI tests use a fake Applier, so these cover duva's own: that approving
+// runs the real transaction, and that the queue and state reflect the result.
+
+// storeWith builds a store holding one queued update, as the page would see
+// after a check found something needing approval.
+func storeWith(t *testing.T, f *fixture.Fixture, r *recorder) (*store, fixture.Service) {
+	t.Helper()
+	svc := f.WithAuto(f.WithUpdate(f.PinnedService(), fixture.BumpMajor), "patch")
+	file := f.Project(svc)
+
+	a := newApp(t, file)
+	st, err := watch.LoadState(a.state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Pending[svc.Name] = watch.Pending{
+		Service:    svc.Name,
+		File:       file,
+		Image:      svc.Image,
+		CurrentTag: svc.Tag,
+		Kind:       watch.KindTag,
+		Candidate:  svc.AvailableTags[len(svc.AvailableTags)-1],
+		Why:        "major exceeds duva.auto: patch",
+	}
+	st.Notified[svc.Name] = st.Pending[svc.Name].Candidate
+
+	return &store{state: st, act: func(fd watch.Finding) Result {
+		return apply(fd, r.docker, r.git, applyOptions{Host: "testhost"})
+	}}, svc
+}
+
+// Approving applies the update and the row stops waiting -- it reached the
+// container, so there is nothing left to approve.
+func TestStoreApply_AppliesAndClearsTheRow(t *testing.T) {
+	f := fixture.New(t)
+	r := newRecorder()
+	s, svc := storeWith(t, f, r)
+
+	msg, err := s.Apply(svc.Name)
+	if err != nil {
+		t.Fatalf("unexpected failure: %v", err)
+	}
+	if msg == "" {
+		t.Error("the result should say what happened")
+	}
+	if !r.did("up") || !r.did("commit") {
+		t.Errorf("the transaction should have run: %v", r.calls)
+	}
+	if _, still := s.state.Pending[svc.Name]; still {
+		t.Error("an applied update is no longer waiting")
+	}
+	if _, still := s.state.Notified[svc.Name]; still {
+		t.Error("the notification record should be cleared too")
+	}
+}
+
+// A failure leaves the row in place: it still needs a human, and the next
+// visit to the page should still offer it.
+func TestStoreApply_FailureKeepsTheRow(t *testing.T) {
+	f := fixture.New(t)
+	r := newRecorder()
+	r.docker.ComposeUp = func(string, string) error { return errBoundary }
+	s, svc := storeWith(t, f, r)
+
+	if _, err := s.Apply(svc.Name); err == nil {
+		t.Fatal("expected a failure")
+	}
+	if _, still := s.state.Pending[svc.Name]; !still {
+		t.Error("a failed update is still waiting for a human")
+	}
+}
+
+func TestStoreApply_UnknownService(t *testing.T) {
+	f := fixture.New(t)
+	s, _ := storeWith(t, f, newRecorder())
+
+	if _, err := s.Apply("nosuchservice"); err == nil {
+		t.Error("approving something that is not queued must be an error")
+	}
+}
+
+// A read-only duva has no actor, so approving must refuse rather than panic.
+func TestStoreApply_RefusesWhenNotConfiguredToApply(t *testing.T) {
+	f := fixture.New(t)
+	s, svc := storeWith(t, f, newRecorder())
+	s.act = nil
+
+	_, err := s.Apply(svc.Name)
+	if err == nil {
+		t.Fatal("expected a refusal")
+	}
+	if !strings.Contains(err.Error(), "DUVA_APPLY") {
+		t.Errorf("the refusal should say how to enable it: %v", err)
+	}
+}
+
+// Approving a moving-tag update advances the baseline, since the container
+// now runs that digest.
+func TestStoreApply_MovingTagAdvancesTheBaseline(t *testing.T) {
+	f := fixture.New(t)
+	svc := f.MovingTagService(true)
+	file := f.Project(svc)
+	a := newApp(t, file)
+	st, err := watch.LoadState(a.state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Baseline[svc.Name] = svc.Digest
+	st.Pending[svc.Name] = watch.Pending{
+		Service: svc.Name, File: file, Image: svc.Image,
+		CurrentTag: svc.Tag, Kind: watch.KindDigest, Candidate: svc.AvailableDigest,
+	}
+
+	r := newRecorder()
+	s := &store{state: st, act: func(fd watch.Finding) Result {
+		return apply(fd, r.docker, r.git, applyOptions{Host: "h"})
+	}}
+
+	if _, err := s.Apply(svc.Name); err != nil {
+		t.Fatal(err)
+	}
+	if st.Baseline[svc.Name] != svc.AvailableDigest {
+		t.Error("the baseline should advance once the container runs the new digest")
+	}
+}
+
+// --- notifications ------------------------------------------------------
+
+// notifyingConfig points duva at a receiver that records what it was sent.
+func notifyingConfig(t *testing.T) (envConfig, *[]string) {
+	t.Helper()
+	var got []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		got = append(got, r.Header.Get("Title")+"|"+string(body))
+	}))
+	t.Cleanup(srv.Close)
+	return envConfig{NtfyURL: srv.URL, NtfyTopic: "test", Hostname: "testhost"}, &got
+}
+
+// An applied update is announced, naming what it moved between.
+func TestNotify_AppliedUpdate(t *testing.T) {
+	f := fixture.New(t)
+	cfg, got := notifyingConfig(t)
+	svc := f.WithAuto(f.WithUpdate(f.PinnedService(), fixture.BumpPatch), "patch")
+	r := newRecorder()
+
+	a := newApp(t, f.Project(svc))
+	composeDir, stateFile = filepath.Dir(a.project), a.state
+	st, _ := watch.LoadState(a.state)
+	if _, err := checkWith(cfg, watch.Registry{
+		ListMatchingTags: f.Registry(svc).ListMatchingTags,
+		TagCreated:       f.Registry(svc).TagCreated,
+	}, st, time.Now(), func(fd watch.Finding) Result {
+		return apply(fd, r.docker, r.git, applyOptions{Host: "testhost"})
+	}, r.docker, r.git); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(*got) != 1 {
+		t.Fatalf("expected one notification, got %d: %v", len(*got), *got)
+	}
+	if !strings.Contains((*got)[0], "updated") {
+		t.Errorf("the notification should say it was updated: %q", (*got)[0])
+	}
+	if !strings.Contains((*got)[0], svc.Name) {
+		t.Errorf("it should name the service: %q", (*got)[0])
+	}
+}
+
+// A failed update is announced too, and says which step failed -- "compose up
+// failed" and "push failed" call for different responses.
+func TestNotify_FailedUpdateNamesTheStep(t *testing.T) {
+	f := fixture.New(t)
+	cfg, got := notifyingConfig(t)
+	svc := f.WithAuto(f.WithUpdate(f.PinnedService(), fixture.BumpPatch), "patch")
+	r := newRecorder()
+	r.docker.ComposeUp = func(string, string) error { return errBoundary }
+
+	a := newApp(t, f.Project(svc))
+	composeDir, stateFile = filepath.Dir(a.project), a.state
+	st, _ := watch.LoadState(a.state)
+	if _, err := checkWith(cfg, watch.Registry{
+		ListMatchingTags: f.Registry(svc).ListMatchingTags,
+		TagCreated:       f.Registry(svc).TagCreated,
+	}, st, time.Now(), func(fd watch.Finding) Result {
+		return apply(fd, r.docker, r.git, applyOptions{Host: "testhost"})
+	}, r.docker, r.git); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(*got) != 1 {
+		t.Fatalf("expected one notification, got %d: %v", len(*got), *got)
+	}
+	msg := (*got)[0]
+	if !strings.Contains(msg, "FAILED") {
+		t.Errorf("a failure should be marked as one: %q", msg)
+	}
+	if !strings.Contains(msg, string(StepRecreate)) {
+		t.Errorf("it should name the step that failed: %q", msg)
+	}
+	if !strings.Contains(msg, "put back") {
+		t.Errorf("it should say the file was restored: %q", msg)
 	}
 }
