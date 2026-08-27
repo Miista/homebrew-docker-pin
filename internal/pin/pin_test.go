@@ -131,3 +131,76 @@ func TestDigestOfTagOfShortDigest(t *testing.T) {
 		t.Errorf("ShortDigest should pass through short input, got %q", got)
 	}
 }
+
+// --- error paths ---------------------------------------------------------
+
+func TestCompute_UnknownService(t *testing.T) {
+	f := writeCompose(t, "services:\n  web:\n    image: nginx:latest\n")
+	d := Docker{GetDigest: func(string) (string, error) { return "sha256:x", nil }}
+	if _, err := Compute(f, "nope", "nginx:latest", d); err == nil {
+		t.Error("an unknown service must be an error, not an empty outcome")
+	}
+}
+
+func TestCompute_MissingComposeFile(t *testing.T) {
+	d := Docker{GetDigest: func(string) (string, error) { return "sha256:x", nil }}
+	if _, err := Compute(filepath.Join(t.TempDir(), "nope.yml"), "web", "nginx:latest", d); err == nil {
+		t.Error("a missing compose file must be an error")
+	}
+}
+
+// The image is expected to be present locally by now -- Compute runs after the
+// pull. A failure here means something is wrong, and must not be mistaken for
+// "no change".
+func TestCompute_DigestLookupFailure(t *testing.T) {
+	f := writeCompose(t, "services:\n  web:\n    image: nginx:latest@sha256:old\n")
+	d := Docker{GetDigest: func(string) (string, error) { return "", errors.New("no such image") }}
+
+	out, err := Compute(f, "web", "nginx:latest", d)
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if out.Changed {
+		t.Error("a failed lookup must not report a change")
+	}
+}
+
+func TestApply_UnknownService(t *testing.T) {
+	f := writeCompose(t, "services:\n  web:\n    image: nginx:latest\n")
+	err := Apply(f, "nope", Outcome{NewRaw: "nginx:latest@sha256:x"})
+	if err == nil {
+		t.Error("applying to an unknown service must be an error")
+	}
+}
+
+// An unpinned service has no digest to compare against, so anything the
+// registry offers is a change.
+func TestCompute_UnpinnedServiceIsAlwaysAChange(t *testing.T) {
+	f := writeCompose(t, "services:\n  web:\n    image: nginx:1.26.0\n")
+	d := Docker{GetDigest: func(string) (string, error) { return "sha256:new", nil }}
+
+	out, err := Compute(f, "web", "nginx:1.26.0", d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !out.Changed || out.NewRaw != "nginx:1.26.0@sha256:new" {
+		t.Errorf("got %+v", out)
+	}
+}
+
+// A registry with a port in the host must not have it mistaken for a tag.
+func TestCompute_RegistryWithPort(t *testing.T) {
+	f := writeCompose(t, "services:\n  web:\n    image: registry.example.com:5000/app:1.0.0@sha256:old\n")
+	d := Docker{GetDigest: func(string) (string, error) { return "sha256:new", nil }}
+
+	out, err := Compute(f, "web", "registry.example.com:5000/app:1.0.0", d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Tag != "1.0.0" {
+		t.Errorf("Tag = %q, want 1.0.0 -- the port is part of the host", out.Tag)
+	}
+	if out.NewRaw != "registry.example.com:5000/app:1.0.0@sha256:new" {
+		t.Errorf("NewRaw = %q", out.NewRaw)
+	}
+}
