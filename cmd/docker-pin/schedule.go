@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"strings"
 	"text/tabwriter"
@@ -15,7 +14,7 @@ import (
 	"github.com/Miista/homebrew-docker-pin/internal/compose"
 	"github.com/Miista/homebrew-docker-pin/internal/croncal"
 	"github.com/Miista/homebrew-docker-pin/internal/notify"
-	"github.com/Miista/homebrew-docker-pin/internal/registry"
+	pinpkg "github.com/Miista/homebrew-docker-pin/internal/pin"
 	"github.com/Miista/homebrew-docker-pin/internal/schedule"
 )
 
@@ -545,64 +544,27 @@ func tagAndDigest(raw string) (tag, digest string) {
 	return tag, digest
 }
 
-// maxDelayChecks bounds how many candidate publish dates one service may
-// query per run when walking past too-fresh releases.
-const maxDelayChecks = 10
-
-// constrainedTarget picks the upgrade target for a service with a tags regex:
-// the newest registry tag matching the regex (and not matching the optional
-// exclude) that is newer than the current tag — and, with a delay configured,
-// the newest such tag that has been published for at least that long. Returns
-// "" when nothing qualifies, with hold explaining why in one human-readable
-// clause. Unlike the unconstrained flow it never falls back to a moving tag,
-// so the constraint can't be silently escaped.
+// constrainedTarget picks the upgrade target for a service with a tags regex,
+// via pin.SelectCandidate. Returns "" when nothing qualifies, with hold
+// explaining why. The per-tag "too fresh" lines are printed here rather than
+// in the engine, which is deliberately silent.
 func constrainedTarget(composeFile string, service schedule.Service, d dockerFuncs) (target, hold string, err error) {
-	baseImage, currentTag, err := compose.ParseImage(composeFile, service.Name)
+	c, err := pinpkg.SelectCandidate(composeFile, service.Name, pinpkg.Rules{
+		Include: service.Tags,
+		Exclude: service.Exclude,
+		Delay:   service.Delay,
+	}, pinpkg.Registry{
+		ListMatchingTags: d.listMatchingTags,
+		TagCreated:       d.tagCreated,
+	})
 	if err != nil {
 		return "", "", err
 	}
-	include, err := regexp.Compile(service.Tags)
-	if err != nil {
-		return "", "", err
-	}
-	var exclude *regexp.Regexp
-	if service.Exclude != "" {
-		if exclude, err = regexp.Compile(service.Exclude); err != nil {
-			return "", "", err
-		}
-	}
-	tags, err := d.listMatchingTags(baseImage, include, exclude, currentTag)
-	if err != nil {
-		return "", "", fmt.Errorf("listing tags for %s: %w", baseImage, err)
-	}
-	candidates := registry.MatchingCandidates(tags, include, exclude, currentTag)
-	if len(candidates) == 0 {
-		return "", fmt.Sprintf("no tag newer than %s matches %s", currentTag, service.Tags), nil
-	}
-	if service.Delay == "" {
-		return candidates[0], "", nil
-	}
-
-	delay, err := schedule.ParseDelay(service.Delay)
-	if err != nil {
-		return "", "", err
-	}
-	if len(candidates) > maxDelayChecks {
-		candidates = candidates[:maxDelayChecks]
-	}
-	for _, tag := range candidates {
-		created, err := d.tagCreated(baseImage, tag)
-		if err != nil {
-			return "", "", fmt.Errorf("publish date for %s:%s: %w", baseImage, tag, err)
-		}
-		age := time.Since(created)
-		if age >= delay {
-			return tag, "", nil
-		}
+	for _, f := range c.TooFresh {
 		fmt.Printf("%s: %s is only %s old (delay %s); skipping\n",
-			service.Name, tag, age.Round(time.Hour), service.Delay)
+			service.Name, f.Tag, f.Age.Round(time.Hour), service.Delay)
 	}
-	return "", fmt.Sprintf("%d newer tag(s) match %s but none is %s old yet", len(candidates), service.Tags, service.Delay), nil
+	return c.Tag, c.Hold, nil
 }
 
 // notifyUpgraded announces one service's successful upgrade via ntfy; note

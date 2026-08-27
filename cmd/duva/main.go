@@ -19,8 +19,8 @@ import (
 	"github.com/Miista/homebrew-docker-pin/internal/compose"
 	"github.com/Miista/homebrew-docker-pin/internal/croncal"
 	"github.com/Miista/homebrew-docker-pin/internal/notify"
+	pinpkg "github.com/Miista/homebrew-docker-pin/internal/pin"
 	"github.com/Miista/homebrew-docker-pin/internal/registry"
-	"github.com/Miista/homebrew-docker-pin/internal/schedule"
 )
 
 var version = "dev"
@@ -233,39 +233,18 @@ func checkService(rootFile string, svc serviceRules, reg regFuncs, st map[string
 		return checkMovingTag(baseImage, currentTag, reg, svc.Name, st)
 	}
 
-	include, exclude, err := compileTagFilters(svc)
+	c, err := pinpkg.SelectCandidate(serviceFile, svc.Name, pinpkg.Rules{
+		Include: svc.Include,
+		Exclude: svc.Exclude,
+		Delay:   svc.Delay,
+	}, pinpkg.Registry{
+		ListMatchingTags: reg.listMatchingTags,
+		TagCreated:       registry.TagCreated,
+	})
 	if err != nil {
 		return "", err
 	}
-	tags, err := reg.listMatchingTags(baseImage, include, exclude, currentTag)
-	if err != nil {
-		return "", fmt.Errorf("listing tags for %s: %w", baseImage, err)
-	}
-	candidates := registry.MatchingCandidates(tags, include, exclude, currentTag)
-	if len(candidates) == 0 {
-		return "", nil
-	}
-	if svc.Delay == "" {
-		return candidates[0], nil
-	}
-
-	delay, err := schedule.ParseDelay(svc.Delay)
-	if err != nil {
-		return "", err
-	}
-	if len(candidates) > maxDelayChecks {
-		candidates = candidates[:maxDelayChecks]
-	}
-	for _, tag := range candidates {
-		created, err := registry.TagCreated(baseImage, tag)
-		if err != nil {
-			return "", fmt.Errorf("publish date for %s:%s: %w", baseImage, tag, err)
-		}
-		if time.Since(created) >= delay {
-			return tag, nil
-		}
-	}
-	return "", nil
+	return c.Tag, nil
 }
 
 // checkMovingTag fetches the remote manifest digest for a moving tag (no
@@ -287,10 +266,6 @@ func checkMovingTag(baseImage, tag string, reg regFuncs, serviceName string, st 
 	}
 	return digest, nil
 }
-
-// maxDelayChecks bounds how many candidate publish dates one service may
-// query per run when walking past too-fresh releases.
-const maxDelayChecks = 10
 
 // notifyAvailable reports a newly-seen newer tag via ntfy. Notification
 // failures only warn — a lost notification must not fail the check.
