@@ -74,7 +74,7 @@
         <td>
           <code>{{.CurrentTag}}</code><span class="arrow">&rarr;</span><code>{{.Candidate}}</code>
         </td>
-        <td><span class="kind kind-{{.Reason}}">{{.Reason}}</span></td>
+        <td><span class="kind kind-{{.Kind}}">{{.Kind}}</span>{{if .Why}}<div class="image">{{.Why}}</div>{{end}}</td>
         <td class="image">{{.FirstSeen}}</td>
       </tr>
       {{end}}

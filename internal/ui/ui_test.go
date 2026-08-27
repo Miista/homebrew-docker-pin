@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Miista/homebrew-docker-pin/internal/registry"
 	"github.com/Miista/homebrew-docker-pin/internal/watch"
 )
 
@@ -26,7 +27,8 @@ func get(t *testing.T, s *Server, path string) *httptest.ResponseRecorder {
 func TestIndex_RendersPendingRows(t *testing.T) {
 	s := &Server{Source: fakeSource{pending: []watch.Pending{
 		{Service: "app", Image: "example.com/app", CurrentTag: "1.2.0",
-			Kind: watch.KindTag, Candidate: "1.3.0", Reason: "minor",
+			Kind: watch.KindTag, Candidate: "1.3.0", Bump: registry.KindMinor,
+			Why:       "minor exceeds duva.auto: patch",
 			FirstSeen: "2026-01-01T00:00:00Z"},
 	}}, Host: "testhost", Version: "test"}
 
@@ -92,5 +94,21 @@ func TestIndex_EscapesContent(t *testing.T) {
 	body := get(t, s, "/").Body.String()
 	if strings.Contains(body, "<script>alert(1)</script>") {
 		t.Error("service name rendered unescaped")
+	}
+}
+
+// The row must say why it is waiting, not just how big the change is: "minor"
+// alone does not tell you whether the threshold was too low or absent.
+func TestIndex_ShowsWhyItIsWaiting(t *testing.T) {
+	s := &Server{Source: fakeSource{pending: []watch.Pending{
+		{Service: "app", Kind: watch.KindTag, Candidate: "2.0.0",
+			Bump: registry.KindMajor, Why: "major exceeds duva.auto: patch"},
+	}}}
+	body := get(t, s, "/").Body.String()
+	if !strings.Contains(body, "major exceeds duva.auto: patch") {
+		t.Errorf("explanation missing from the row:\n%s", body)
+	}
+	if !strings.Contains(body, "kind-major") {
+		t.Error("kind class missing")
 	}
 }

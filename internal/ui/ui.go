@@ -56,7 +56,8 @@ type row struct {
 	Image      string
 	CurrentTag string
 	Candidate  string
-	Reason     string
+	Kind       string
+	Why        string
 	FirstSeen  string
 }
 
@@ -75,7 +76,8 @@ func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 			Image:      p.Image,
 			CurrentTag: p.CurrentTag,
 			Candidate:  display(p),
-			Reason:     reason(p),
+			Kind:       kindLabel(p),
+			Why:        p.Why,
 			FirstSeen:  p.FirstSeen,
 		})
 	}
@@ -102,10 +104,10 @@ func display(p watch.Pending) string {
 	return p.Candidate
 }
 
-// reason is the label shown in the Kind column: how big the change is for a
-// tag candidate, or "digest" for a moving tag, which has no version pair to
+// kindLabel is the label shown in the Kind column: how big the change is for
+// a tag candidate, or "digest" for a moving tag, which has no version pair to
 // compare and so can never be classified.
-func reason(p watch.Pending) string {
+func kindLabel(p watch.Pending) string {
 	if p.Kind == watch.KindDigest {
 		return "digest"
 	}
