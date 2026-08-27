@@ -150,31 +150,61 @@ func maybeHelp(args []string) bool {
 	return true
 }
 
+// rejectUnknownFlags exits with an error on any leftover argument that looks
+// like a flag. Without it a typo in a flag is silently treated as a positional
+// argument -- and `pin --all --dry-riun` then runs for real, rewriting every
+// compose file, because --all is matched before the argument count is checked.
+// A mistyped safety flag must never become a live run.
+func rejectUnknownFlags(args []string, usage ...string) {
+	for _, a := range args {
+		if len(a) > 1 && strings.HasPrefix(a, "-") {
+			fmt.Fprintf(os.Stderr, "Error: unknown flag %q\n", a)
+			for _, u := range usage {
+				fmt.Fprintln(os.Stderr, u)
+			}
+			os.Exit(1)
+		}
+	}
+}
+
 // pin
 
 func runPin(args []string, d dockerFuncs) error {
-	dryRun := false
+	dryRun, all := false, false
 	filtered := args[:0:0]
 	for _, a := range args {
-		if a == "--dry-run" || a == "-n" {
+		switch a {
+		case "--dry-run", "-n":
 			dryRun = true
-			continue
+		case "--all", "-a":
+			all = true
+		default:
+			filtered = append(filtered, a)
 		}
-		filtered = append(filtered, a)
 	}
 	args = filtered
 
-	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Usage: docker pin <service>")
-		fmt.Fprintln(os.Stderr, "       docker pin --all")
-		os.Exit(1)
+	usage := []string{
+		"Usage: docker pin <service>",
+		"       docker pin --all [--dry-run]",
 	}
-	if args[0] == "--all" || args[0] == "-a" {
+	// Everything left is a service name, so anything flag-shaped is a typo.
+	// This has to happen before the --all branch: --all used to be matched
+	// ahead of any argument-count check, so `pin --all --dry-riun` silently
+	// dropped the mistyped flag and ran for real against every service.
+	rejectUnknownFlags(args, usage...)
+
+	if all {
+		if len(args) > 0 {
+			fmt.Fprintln(os.Stderr, "Error: --all cannot be combined with a service name")
+			os.Exit(1)
+		}
 		return pinAll(d, dryRun)
 	}
 	if len(args) != 1 {
-		fmt.Fprintln(os.Stderr, "Usage: docker pin <service>")
-		fmt.Fprintln(os.Stderr, "       docker pin --all")
+		for _, u := range usage {
+			fmt.Fprintln(os.Stderr, u)
+		}
 		os.Exit(1)
 	}
 	_, err := pin(args[0], d, dryRun)
@@ -441,7 +471,7 @@ func shortDigest(digest string) string {
 // upgrade
 
 func runUpgrade(args []string, d dockerFuncs) error {
-	dryRun := false
+	dryRun, all := false, false
 	concurrency := upgradeAllConcurrency
 	filtered := args[:0:0]
 	for i := 0; i < len(args); i++ {
@@ -461,29 +491,35 @@ func runUpgrade(args []string, d dockerFuncs) error {
 				os.Exit(1)
 			}
 			concurrency = n
+		case a == "--all" || a == "-a":
+			all = true
 		default:
 			filtered = append(filtered, a)
 		}
 	}
 	args = filtered
 
-	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Usage: docker pin upgrade <service> [version]")
-		fmt.Fprintln(os.Stderr, "       docker pin upgrade --all [--concurrency N]")
-		os.Exit(1)
+	usage := []string{
+		"Usage: docker pin upgrade <service> [version]",
+		"       docker pin upgrade --all [--concurrency N]",
 	}
+	// What is left is a service name and maybe a version, so anything
+	// flag-shaped is a typo -- without this it would be taken as the version
+	// and pulled as a tag.
+	rejectUnknownFlags(args, usage...)
 
-	if args[0] == "--all" || args[0] == "-a" {
-		if len(args) != 1 {
-			fmt.Fprintln(os.Stderr, "Error: --all cannot be combined with a version")
+	if all {
+		if len(args) != 0 {
+			fmt.Fprintln(os.Stderr, "Error: --all cannot be combined with a service or version")
 			os.Exit(1)
 		}
 		return upgradeAll(d, dryRun, concurrency)
 	}
 
-	if len(args) > 2 {
-		fmt.Fprintln(os.Stderr, "Usage: docker pin upgrade <service> [version]")
-		fmt.Fprintln(os.Stderr, "       docker pin upgrade --all")
+	if len(args) == 0 || len(args) > 2 {
+		for _, u := range usage {
+			fmt.Fprintln(os.Stderr, u)
+		}
 		os.Exit(1)
 	}
 
