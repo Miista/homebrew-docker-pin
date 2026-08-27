@@ -108,23 +108,26 @@ pull → pin → compose up -d <service> → commit → pull --rebase && push
 - **Recreate** with `docker compose up -d <service>` rather than the Docker
   API, so the container stays compose-native. A container created outside
   compose gets recreated again by the next `compose up`.
-- **Commit**, then `git pull --rebase && git push` — the same motion as the
-  `gpp` alias. On a rebase conflict: abort, leave the commit local, notify.
-  Never resolve a conflicted tree automatically.
-- Commit subject follows the fleet convention, `<box>/<service>: <subject>`,
-  with the box from `DUVA_HOSTNAME`. No `--no-verify`: the commit-msg hook
-  lives in the mounted tree and rejecting a malformed subject is correct.
+- **Commit**, then `git pull --rebase && git push` — rebase first, so a
+  concurrent push from another host is absorbed rather than rejected. On a
+  rebase conflict: abort, leave the commit local, notify. Never resolve a
+  conflicted tree automatically.
+- Commit subject is `<host>/<service>: <subject>`, with the host from
+  `DUVA_HOSTNAME`. No `--no-verify`: a repo's commit-msg hook lives in the
+  mounted tree, and rejecting a malformed subject is correct.
 
 **Verification is the exit code, nothing more.** If `compose up -d` reports
 success, duva is done. A container that starts and then crash-loops, or comes
-up unhealthy, is caught by monitoring (gatus, autoheal) — not by duva. Watching
+up unhealthy, is the job of whatever monitors and restarts services — not
+duva. Watching
 for that here would mean choosing an arbitrary wait and inventing a health
 notion for services that define none.
 
 **No rollback.** If the container starts and later misbehaves, the file and git
 both say what is intended, and recovery is a human pinning the old digest back
-(the digest is in the commit). Rehearsing upgrades on cloned stacks — what
-`watchkeep` does — is a better answer to this than an after-the-fact revert.
+(the digest is in the commit). Rehearsing an upgrade on a cloned stack before
+promoting it is a better answer to this than an after-the-fact revert, and
+belongs in a separate tool.
 
 **Exception — `compose up -d` returns non-zero.** Bad image, port clash,
 invalid config: compose rejected the change, so the container never took the
@@ -160,9 +163,10 @@ their record.
   update, and the page reports the result. One write path, not two.
 - The row disappears once applied.
 
-duva exposes an HTTP port; how it is fronted is the operator's business. On
-this fleet that means Caddy + Authelia and no published port, but nothing
-Authelia-specific belongs in the tool.
+duva exposes an HTTP port; how it is fronted is the operator's business —
+typically a reverse proxy with authentication in front, and no published port.
+Nothing proxy- or auth-specific belongs in the tool. The endpoint triggers
+updates, so it must not be exposed unauthenticated.
 
 ## State
 
@@ -180,12 +184,12 @@ superseded, or when the service stops being watched.
 | `/compose` | the compose project **directory**, now **rw** (was `:ro`). Directory, not a single file: `include:` resolves relative to it, and rename-on-write orphans a single-file bind |
 | `/data` | writable — state |
 | docker socket | required; honours `DOCKER_HOST`, so a socket proxy works |
-| ssh key + `known_hosts` | mounted `:ro`. Must be owned by the container uid with `0600`, so run as that uid with `HOME` pointing at the mount (as hemma-agent does) |
+| ssh key + `known_hosts` | mounted `:ro`. Must be owned by the container uid with `0600` (git refuses otherwise), so run as that uid with `HOME` pointing at the mount |
 | image | self-contained: docker CLI, compose plugin, git, openssh baked in |
 
-**Blast radius.** This container rewrites compose files, restarts services, and
-pushes to the infra repo — the same trust level hemma-agent already has here,
-and worth stating plainly rather than discovering later. `git config --global
+**Blast radius.** This container rewrites compose files, restarts services and
+pushes to the repository holding them. That is a lot of authority for one
+container, and worth stating plainly rather than discovering later. `git config --global
 --add safe.directory` will be needed for the mounted tree (dubious-ownership
 refusal).
 
@@ -226,8 +230,8 @@ button, no acting.
 *Stop here:* you can see what duva sees, in a browser.
 
 **M2 — classification.** `Classify` as a pure function, unit-tested against the
-fleet's real tag schemes (`1.26.3`, `2026.07.2`, `17.10-alpine`, `1.14.7-ls166`,
-`v1.2.3`). The UI shows the kind per row. Still no acting.
+tag schemes actually in use (`1.26.3`, `2026.07.2`, `17.10-alpine`,
+`1.14.7-ls166`, `v1.2.3`). The UI shows the kind per row. Still no acting.
 *Stop here:* verdicts can be checked against reality before anything acts on them.
 
 **M3 — policy.** Parse and enforce `duva.auto`; ntfy for anything needing
