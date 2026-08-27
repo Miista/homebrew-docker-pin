@@ -53,7 +53,10 @@ test-e2e:
 cover:
 	@rm -rf $(COVER_DIR) && mkdir -p $(COVER_DIR)/unit $(COVER_DIR)/e2e $(COVER_DIR)/merged
 	@echo "== unit"
-	@go test ./... -cover -args -test.gocoverdir=$(COVER_DIR)/unit >/dev/null
+	@# -coverpkg=./... attributes coverage to the package a statement lives in,
+	@# not the package whose test ran it. Without it, cmd/duva's tests
+	@# exercising internal/watch count for nothing and the report lies.
+	@go test ./... -coverpkg=./... -cover -args -test.gocoverdir=$(COVER_DIR)/unit >/dev/null
 	@go tool covdata percent -i=$(COVER_DIR)/unit | sort
 	@echo
 	@echo "== e2e"
