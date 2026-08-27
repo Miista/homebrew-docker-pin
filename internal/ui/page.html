@@ -76,7 +76,7 @@
   <div class="wrap">
   <table>
     <thead>
-      <tr><th>Service</th><th>Current</th><th>Available</th><th>Kind</th>{{if $.CanApply}}<th></th>{{end}}</tr>
+      <tr><th>Service</th><th>Current</th><th>Available</th><th>Kind</th><th>Policy</th>{{if $.CanApply}}<th></th>{{end}}</tr>
     </thead>
     <tbody>
       {{range .Pending}}
@@ -90,6 +90,7 @@
           <code>{{.Candidate}}</code>
         </td>
         <td><span class="kind kind-{{.Kind}}">{{.Kind}}</span>{{if .Why}}<div class="image">{{.Why}}</div>{{end}}</td>
+        <td><code>{{if .Auto}}{{.Auto}}{{else}}none{{end}}</code><div class="image">duva.auto</div></td>
         {{if $.CanApply}}
         <td>
           <form method="post" action="/apply">
@@ -108,7 +109,7 @@
   {{end}}
 
   <footer>
-    duva {{.Version}} &middot; checked {{.LastCheck}}
+    duva {{.Version}} &middot; checked <span title="{{.LastCheckExact}}">{{.LastCheck}}</span>
   </footer>
 </main>
 </body>

@@ -48,6 +48,9 @@ type Pending struct {
 	// Why says why this needs a human rather than being applied: the
 	// classification against the service's duva.auto threshold.
 	Why string `json:"why"`
+	// Auto is that threshold itself, so the queue can show the rule and not
+	// just the verdict it produced.
+	Auto string `json:"auto"`
 	// FirstSeen is when this candidate first showed up. Recorded but not
 	// currently displayed: a raw timestamp told the reader less than it
 	// seemed to, being neither the release's age nor a relative one, and
@@ -175,6 +178,7 @@ func (s *State) Reconcile(needApproval []Finding, seen []Finding, now string) {
 			Candidate:     f.Candidate,
 			Bump:          f.Bump,
 			Why:           f.Why,
+			Auto:          string(f.Auto),
 			FirstSeen:     firstSeen,
 		}
 	}

@@ -35,6 +35,12 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	// The timezone database, embedded in the binary. Go reads TZ on its own,
+	// but resolves a name like Europe/Copenhagen against the host's
+	// /usr/share/zoneinfo -- which docker:cli does not carry, so TZ was
+	// silently ignored and every timestamp stayed UTC. ~450KB to make the
+	// setting mean what it says without depending on the base image.
+	_ "time/tzdata"
 
 	"github.com/Miista/homebrew-docker-pin/internal/compose"
 	"github.com/Miista/homebrew-docker-pin/internal/croncal"
@@ -381,7 +387,45 @@ func (s *store) LastCheck() string {
 	if s.lastCheck.IsZero() {
 		return "not yet"
 	}
-	return s.lastCheck.UTC().Format(time.RFC3339)
+	return since(s.lastCheck, time.Now())
+}
+
+// since renders a time as an age. "21:08:27Z" makes the reader do arithmetic
+// to answer the only question they had -- is this recent -- so the answer is
+// given directly. The exact time is still available: the page carries it as a
+// tooltip.
+func since(t, now time.Time) string {
+	d := now.Sub(t)
+	switch {
+	case d < 0:
+		// Clock skew, or a state file written by a host running ahead.
+		return "just now"
+	case d < time.Minute:
+		return "just now"
+	case d < 2*time.Minute:
+		return "1 minute ago"
+	case d < time.Hour:
+		return fmt.Sprintf("%d minutes ago", int(d.Minutes()))
+	case d < 2*time.Hour:
+		return "1 hour ago"
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%d hours ago", int(d.Hours()))
+	case d < 48*time.Hour:
+		return "yesterday"
+	default:
+		return fmt.Sprintf("%d days ago", int(d.Hours()/24))
+	}
+}
+
+// LastCheckExact is the same moment in the host's timezone, for the tooltip.
+// Local honours TZ, which is why the tzdata import above is needed.
+func (s *store) LastCheckExact() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.lastCheck.IsZero() {
+		return ""
+	}
+	return s.lastCheck.Local().Format("2006-01-02 15:04:05 MST")
 }
 
 // serve loops forever, running the same check as `run` on cfg.Schedule (a
@@ -426,19 +470,11 @@ func serve(reg watch.Registry, out io.Writer) error {
 		}()
 	}
 
-	// Check once at startup rather than waiting for the first tick. A daily
+	// Once at startup, rather than waiting for the first tick: a daily
 	// schedule would otherwise leave duva idle for up to a day, showing a
 	// queue from some earlier run under a footer saying it had not looked yet.
-	if _, err := checkWith(cfg, reg, s.state, time.Now(), s.act, realDocker, realGit); err != nil {
-		fmt.Fprintf(os.Stderr, "duva: %v\n", err)
-	} else {
-		s.mu.Lock()
-		s.lastCheck = time.Now()
-		s.mu.Unlock()
-		if err := s.saveState(); err != nil {
-			fmt.Fprintf(os.Stderr, "duva: %v\n", err)
-		}
-	}
+	// It is also what makes restarting duva a way to ask for a check now.
+	checkOnce(cfg, reg, s, out)
 
 	for {
 		next, err := croncal.Next(cfg.Schedule, time.Now())
@@ -446,7 +482,11 @@ func serve(reg watch.Registry, out io.Writer) error {
 			return err
 		}
 		wait := time.Until(next)
-		fmt.Fprintf(out, "duva: next check at %s (in %s)\n", next.Format(time.RFC3339), wait.Round(time.Second))
+		// Local, with the zone named: an operator reading this wants to know
+		// when it fires in their own time. TZ selects the zone, which needs
+		// the embedded database -- see the tzdata import.
+		fmt.Fprintf(out, "duva: next check at %s (in %s)\n",
+			next.Local().Format("2006-01-02 15:04:05 MST"), wait.Round(time.Second))
 
 		timer := time.NewTimer(wait)
 		select {
@@ -457,22 +497,30 @@ func serve(reg watch.Registry, out io.Writer) error {
 		case <-timer.C:
 		}
 
-		now := time.Now()
-		s.mu.Lock()
-		findings, err := checkWith(cfg, reg, s.state, now, actor(cfg), realDocker, realGit)
-		if err == nil {
-			s.lastCheck = now
-		}
-		s.mu.Unlock()
+		checkOnce(cfg, reg, s, out)
+	}
+}
 
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "duva: check failed: %v\n", err)
-			continue
-		}
-		report(out, findings)
-		if err := s.saveState(); err != nil {
-			fmt.Fprintf(os.Stderr, "duva: saving state: %v\n", err)
-		}
+// checkOnce runs one check and reports it, for both the startup check and
+// every scheduled one. They were separate blocks that drifted: the startup
+// one recorded its findings but never printed them, so duva looked like it
+// had found nothing.
+func checkOnce(cfg envConfig, reg watch.Registry, s *store, out io.Writer) {
+	now := time.Now()
+	s.mu.Lock()
+	findings, err := checkWith(cfg, reg, s.state, now, s.act, realDocker, realGit)
+	if err == nil {
+		s.lastCheck = now
+	}
+	s.mu.Unlock()
+
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "duva: check failed: %v\n", err)
+		return
+	}
+	report(out, findings)
+	if err := s.saveState(); err != nil {
+		fmt.Fprintf(os.Stderr, "duva: saving state: %v\n", err)
 	}
 }
 
