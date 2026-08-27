@@ -36,8 +36,9 @@ Flags:
                   "Would pin ..." instead.
 
 Rewrites the service's image to <image>:<tag>@sha256:<digest>, pulling the
-image first if it is not available locally. A moving tag like 'latest' is
-resolved to the concrete version tag when the registry allows it.`},
+image first if it is not available locally. The tag is kept exactly as
+written: it is the tag to follow, and the digest records what is running.
+A service on 'latest' stays on 'latest'.`},
 
 	{"upgrade", `docker pin upgrade — move a pinned service to a newer version and re-pin
 
@@ -56,8 +57,8 @@ a plain version (2.11.4) follows 'latest'; a version-variant (2.11.4-alpine)
 follows the variant's moving tag discovered in the registry (alpine,
 latest-alpine or alpine-latest — errors if none or several exist); any other
 tag (alpine, stable, v1.2.3-ls45) is treated as moving already and re-pulled
-as-is, so it only picks up digest changes. The pulled digest is then resolved
-back to a concrete version tag where the registry allows it.
+as-is, so it only picks up digest changes. The tag written back is always the
+tag that was pulled — never a different one guessed from the digest.
 Already-up-to-date services are left untouched.
 
 This is also how you follow a tag that moved upstream: run upgrade to

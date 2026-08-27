@@ -41,8 +41,6 @@ func chdirTemp(t *testing.T, composeContent, pinContent string) string {
 	return wd
 }
 
-// noResolve is a resolve fake that keeps the pulled tag, avoiding network.
-func noResolve(baseImage, pullTag, digest, service string) string { return pullTag }
 
 func fakeSys(goos string, euid int) sysFuncs {
 	return sysFuncs{
@@ -127,7 +125,6 @@ func TestScheduleRun_UpgradesListedAndRunsHooks(t *testing.T) {
 	d := dockerFuncs{
 		getDigest: func(ref string) (string, error) { return "sha256:new1", nil },
 		pull:      func(ref string) error { pulled = append(pulled, ref); return nil },
-		resolve:   noResolve,
 	}
 	composeUps, shells := 0, 0
 	sys := fakeSys("linux", 1000)
@@ -177,7 +174,6 @@ func TestScheduleRun_NoChangeSkipsHooks(t *testing.T) {
 			return digests[strings.SplitN(ref, ":", 2)[0]], nil
 		},
 		pull:    func(ref string) error { return nil },
-		resolve: noResolve,
 	}
 	sys := fakeSys("linux", 1000)
 	sys.composeUp = func(file, service string) error { t.Error("composeUp should not run"); return nil }
@@ -196,7 +192,6 @@ func TestScheduleRun_TagConstraint(t *testing.T) {
 	d := dockerFuncs{
 		getDigest: func(ref string) (string, error) { return "sha256:new1", nil },
 		pull:      func(ref string) error { pulled = append(pulled, ref); return nil },
-		resolve:   noResolve,
 		listMatchingTags: func(baseImage string, include, exclude *regexp.Regexp, current string) ([]string, error) {
 			return []string{"latest", "2.7.6", "2.8.4", "3.0.0", "2.8.4-beta.1"}, nil
 		},
@@ -233,7 +228,6 @@ func TestScheduleRun_ExcludeAndDelay(t *testing.T) {
 	d := dockerFuncs{
 		getDigest: func(ref string) (string, error) { return "sha256:new1", nil },
 		pull:      func(ref string) error { pulled = append(pulled, ref); return nil },
-		resolve:   noResolve,
 		listMatchingTags: func(baseImage string, include, exclude *regexp.Regexp, current string) ([]string, error) {
 			return []string{"2.9.0", "2.9.0-beta.2", "2.8.4", "2.7.6"}, nil
 		},
@@ -267,7 +261,6 @@ func TestScheduleRun_DelayAllTooFresh(t *testing.T) {
 	d := dockerFuncs{
 		getDigest: func(ref string) (string, error) { t.Error("getDigest should not run"); return "", nil },
 		pull:      func(ref string) error { t.Error("pull should not run"); return nil },
-		resolve:   noResolve,
 		listMatchingTags: func(baseImage string, include, exclude *regexp.Regexp, current string) ([]string, error) {
 			return []string{"2.9.0", "2.8.4"}, nil
 		},
@@ -290,7 +283,6 @@ func TestScheduleRun_TagConstraintUpToDate(t *testing.T) {
 	d := dockerFuncs{
 		getDigest: func(ref string) (string, error) { t.Error("getDigest should not run"); return "", nil },
 		pull:      func(ref string) error { t.Error("pull should not run"); return nil },
-		resolve:   noResolve,
 		listMatchingTags: func(baseImage string, include, exclude *regexp.Regexp, current string) ([]string, error) {
 			return []string{"2.7.6", "2.6.0"}, nil // current 2.7.6 is already newest
 		},
@@ -311,7 +303,6 @@ func TestScheduleRun_ComposeUpFailureRollsBack(t *testing.T) {
 	d := dockerFuncs{
 		getDigest: func(ref string) (string, error) { return "sha256:new1", nil },
 		pull:      func(ref string) error { return nil },
-		resolve:   noResolve,
 	}
 	sys := fakeSys("linux", 1000)
 	composeUps := 0
@@ -351,7 +342,6 @@ func TestScheduleRun_DryRun(t *testing.T) {
 	d := dockerFuncs{
 		getDigest: func(ref string) (string, error) { return "sha256:new1", nil },
 		pull:      func(ref string) error { pulls++; return nil },
-		resolve:   noResolve,
 	}
 	sys := fakeSys("linux", 1000)
 	sys.composeUp = func(file, service string) error { t.Error("composeUp must not run in dry run"); return nil }
@@ -375,7 +365,6 @@ func TestScheduleRun_OneRollbackDoesNotBlockOthers(t *testing.T) {
 	d := dockerFuncs{
 		getDigest: func(ref string) (string, error) { return "sha256:new-" + strings.SplitN(ref, ":", 2)[0], nil },
 		pull:      func(ref string) error { return nil },
-		resolve:   noResolve,
 	}
 	sys := fakeSys("linux", 1000)
 	sys.composeUp = func(file, service string) error {
@@ -413,7 +402,6 @@ func TestScheduleRun_OnChangeFailureIsNonFatal(t *testing.T) {
 	d := dockerFuncs{
 		getDigest: func(ref string) (string, error) { return "sha256:new1", nil },
 		pull:      func(ref string) error { return nil },
-		resolve:   noResolve,
 	}
 	sys := fakeSys("linux", 1000)
 	sys.shell = func(dir, command string, extraEnv []string) error { return fmt.Errorf("push rejected") }
@@ -436,7 +424,6 @@ func TestScheduleRun_CollectsFailures(t *testing.T) {
 			}
 			return nil
 		},
-		resolve: noResolve,
 	}
 	sys := fakeSys("linux", 1000)
 	composeUps := 0

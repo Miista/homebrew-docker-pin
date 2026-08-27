@@ -72,6 +72,32 @@ func TestPinInFile_LocalImage(t *testing.T) {
 	}
 }
 
+// The tag is the tag to FOLLOW, so pinning must write it back verbatim.
+// Resolving `latest` to whatever version tag happens to carry the same digest
+// would freeze the service on that version line: the concrete tag never moves,
+// so it would silently stop receiving updates.
+func TestPinInFile_KeepsMovingTag(t *testing.T) {
+	f := writeTempCompose(t, `services:
+  web:
+    image: nginx:latest
+`)
+	d := dockerFuncs{
+		getDigest: func(ref string) (string, error) { return "sha256:localhash", nil },
+		pull:      func(ref string) error { return errors.New("should not be called") },
+	}
+	out, err := pinInFile(f, "web", d, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out.Tag != "latest" {
+		t.Errorf("tag should stay latest, got %q", out.Tag)
+	}
+	got := readCompose(t, f)
+	if !strings.Contains(got, "nginx:latest@sha256:localhash") {
+		t.Errorf("expected latest to be kept as the followed tag, got:\n%s", got)
+	}
+}
+
 func TestPinInFile_DryRun(t *testing.T) {
 	f := writeTempCompose(t, `services:
   web:

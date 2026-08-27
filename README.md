@@ -10,7 +10,7 @@ Docker CLI plugins to pin container images in a Compose file to an exact tag and
 
 Two plugins:
 
-- **`docker pin`** — pins a service to its current digest. Pulls the image if not local. If the tag is `latest`, resolves it to the most specific immutable version tag (e.g. `5.8.0-ga1b2c3d`) so the pin is meaningful, not just `latest@sha256:...`.
+- **`docker pin`** — pins a service to its current digest. Pulls the image if not local. The tag is written back verbatim: it is the tag to *follow*, and the digest is the record of what is running, so `latest@sha256:...` stays on `latest`.
 - **`docker pin upgrade`** — pulls fresh, then re-pins to the new digest. Same version-tag resolution.
 - **`docker unpin`** — strips the digest, leaving just `image: postgres:16`.
 
@@ -89,12 +89,17 @@ services:
     image: postgres:16.3@sha256:a3dc6b...
 ```
 
-If the tag is `latest`, the plugin resolves it to the most specific immutable version tag available in the registry:
+The tag is kept exactly as written — it is the tag to **follow**, while the
+digest records what is actually running. A service on `latest` stays on
+`latest` and keeps tracking it:
 
 ```yaml
   gatus:
-    image: ghcr.io/miista/gatus-wrapper:5.8.0-ga1b2c3d@sha256:...
+    image: ghcr.io/miista/gatus-wrapper:latest@sha256:...
 ```
+
+Only `docker pin upgrade <service> <version>` changes the tag, because that is
+what it was asked to do.
 
 ### Upgrade a service
 
