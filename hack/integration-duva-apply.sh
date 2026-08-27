@@ -11,6 +11,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 . hack/lib/context.sh
 . hack/lib/registry.sh
+. hack/scenario.sh
 
 ctx_init integration-duva-apply
 registry_setup
@@ -73,25 +74,6 @@ victim() {
     --filter "label=com.docker.compose.service=app" | head -1
 }
 
-# start <scenario> -- lay out a scenario's world and bring the watched service
-# up on its current image.
-#
-# The fixture carries a plain tag; docker pin writes the digest, so the
-# starting state is produced by the real tool rather than forged here. duva
-# then has something to recreate: it replaces a container, it does not create
-# one from nothing.
-start() {
-  WORK="$(ctx_dir work)"
-  DATA="$(ctx_dir data)"; chmod 777 "$DATA"
-  ctx_fixture "$1" "$WORK"
-
-  (cd "$WORK" && "$(ctx_docker_pin)" pin app >/dev/null)
-  git -C "$WORK" add -A
-  git -C "$WORK" -c user.name=t -c user.email=t@t commit -qm "pin app"
-
-  ctx_compose_up "$WORK" app
-}
-
 # queued <data-dir> -- the services duva recorded as needing approval.
 queued() { "$(ctx_statequery)" "$1/duva.json" pending; }
 
@@ -103,7 +85,7 @@ registry_start
 push_runnable app 1.0.0 first
 push_runnable app 1.0.1 second
 
-start within-policy
+scenario_up within-policy
 before_container=$(victim "$WORK")
 
 duva_apply "$WORK"
@@ -134,7 +116,7 @@ registry_start
 push_runnable app 1.0.0 first
 push_runnable app 2.0.0 second
 
-start beyond-policy
+scenario_up beyond-policy
 before=$(image_line "$WORK/docker-compose.yml")
 
 duva_apply "$WORK"
@@ -161,7 +143,7 @@ docker build -q -t "${REGISTRY_HOST}/app:1.0.1" "$REGISTRY_CTX" >/dev/null
 docker push -q "${REGISTRY_HOST}/app:1.0.1" >/dev/null
 ctx_image "${REGISTRY_HOST}/app:1.0.1"
 
-start refused-image
+scenario_up refused-image
 before=$(image_line "$WORK/docker-compose.yml")
 
 duva_apply "$WORK"
@@ -181,7 +163,7 @@ registry_start
 push_runnable app 1.0.0 first
 push_runnable app 1.0.1 second
 
-start relative-bind
+scenario_up relative-bind
 
 # Read from the daemon's side: these images are FROM scratch with a static
 # binary and have no shell to exec into.
