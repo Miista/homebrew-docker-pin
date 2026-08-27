@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -29,16 +30,16 @@ var version = "dev"
 
 type dockerFuncs struct {
 	getDigest        func(ref string) (string, error)
+	runningDigest    func(composeDir, service, baseImage string) (string, error)
 	pull             func(ref string) error
-	resolve          func(baseImage, pullTag, digest, service string) string
 	listMatchingTags func(baseImage string, include, exclude *regexp.Regexp, current string) ([]string, error)
 	tagCreated       func(baseImage, tag string) (time.Time, error)
 }
 
 var realDocker = dockerFuncs{
 	getDigest:        docker.GetDigest,
+	runningDigest:    docker.RunningDigest,
 	pull:             docker.Pull,
-	resolve:          registry.ResolveOrWarn,
 	listMatchingTags: registry.ListMatchingTags,
 	tagCreated:       registry.TagCreated,
 }
@@ -149,31 +150,61 @@ func maybeHelp(args []string) bool {
 	return true
 }
 
+// rejectUnknownFlags exits with an error on any leftover argument that looks
+// like a flag. Without it a typo in a flag is silently treated as a positional
+// argument -- and `pin --all --dry-riun` then runs for real, rewriting every
+// compose file, because --all is matched before the argument count is checked.
+// A mistyped safety flag must never become a live run.
+func rejectUnknownFlags(args []string, usage ...string) {
+	for _, a := range args {
+		if len(a) > 1 && strings.HasPrefix(a, "-") {
+			fmt.Fprintf(os.Stderr, "Error: unknown flag %q\n", a)
+			for _, u := range usage {
+				fmt.Fprintln(os.Stderr, u)
+			}
+			os.Exit(1)
+		}
+	}
+}
+
 // pin
 
 func runPin(args []string, d dockerFuncs) error {
-	dryRun := false
+	dryRun, all := false, false
 	filtered := args[:0:0]
 	for _, a := range args {
-		if a == "--dry-run" || a == "-n" {
+		switch a {
+		case "--dry-run", "-n":
 			dryRun = true
-			continue
+		case "--all", "-a":
+			all = true
+		default:
+			filtered = append(filtered, a)
 		}
-		filtered = append(filtered, a)
 	}
 	args = filtered
 
-	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Usage: docker pin <service>")
-		fmt.Fprintln(os.Stderr, "       docker pin --all")
-		os.Exit(1)
+	usage := []string{
+		"Usage: docker pin <service>",
+		"       docker pin --all [--dry-run]",
 	}
-	if args[0] == "--all" || args[0] == "-a" {
+	// Everything left is a service name, so anything flag-shaped is a typo.
+	// This has to happen before the --all branch: --all used to be matched
+	// ahead of any argument-count check, so `pin --all --dry-riun` silently
+	// dropped the mistyped flag and ran for real against every service.
+	rejectUnknownFlags(args, usage...)
+
+	if all {
+		if len(args) > 0 {
+			fmt.Fprintln(os.Stderr, "Error: --all cannot be combined with a service name")
+			os.Exit(1)
+		}
 		return pinAll(d, dryRun)
 	}
 	if len(args) != 1 {
-		fmt.Fprintln(os.Stderr, "Usage: docker pin <service>")
-		fmt.Fprintln(os.Stderr, "       docker pin --all")
+		for _, u := range usage {
+			fmt.Fprintln(os.Stderr, u)
+		}
 		os.Exit(1)
 	}
 	_, err := pin(args[0], d, dryRun)
@@ -206,16 +237,28 @@ func pinAll(d dockerFuncs, dryRun bool) error {
 	}
 
 	if dryRun {
+		// Services come out in compose-file order; alphabetical is easier to
+		// scan and to diff between runs.
+		sort.Slice(results, func(i, j int) bool { return results[i].service < results[j].service })
+		sort.Strings(failed)
+
 		fmt.Println()
 		fmt.Println("Summary:")
 		w := tabwriter.NewWriter(os.Stdout, 2, 8, 2, ' ', 0)
 		fmt.Fprintln(w, "SERVICE\tACTION\tSHA")
 		for _, r := range results {
 			action := "pin"
-			if r.outcome.AlreadyPinned {
+			switch {
+			case r.outcome.Built:
+				action = "built"
+			case r.outcome.AlreadyPinned:
 				action = "none"
 			}
-			fmt.Fprintf(w, "%s\t%s\t%s\n", r.service, action, r.outcome.Digest)
+			digest := r.outcome.Digest
+			if digest == "" {
+				digest = "-"
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\n", r.service, action, digest)
 		}
 		for _, service := range failed {
 			fmt.Fprintf(w, "%s\tFAILED\t-\n", service)
@@ -255,6 +298,9 @@ type pinOutcome struct {
 	// AlreadyPinned is true when the service was already digest-pinned, so
 	// no pin (or would-be pin) happened.
 	AlreadyPinned bool
+	// Built is true when the service is built locally (build:) and so was
+	// skipped -- a local image's digest is not pullable anywhere else.
+	Built bool
 }
 
 func pinInFile(composeFile, service string, d dockerFuncs, dryRun bool) (pinOutcome, error) {
@@ -266,6 +312,19 @@ func pinInFile(composeFile, service string, d dockerFuncs, dryRun bool) (pinOutc
 	raw, err := compose.RawImage(composeFile, service)
 	if err != nil {
 		return pinOutcome{}, err
+	}
+
+	// A locally built image's digest is local to this daemon -- no registry
+	// serves it, so pinning one produces a reference no other host can pull.
+	built, err := compose.IsBuilt(composeFile, service)
+	if err != nil {
+		return pinOutcome{}, err
+	}
+	if built {
+		if !dryRun {
+			fmt.Printf("%s is built locally (build:), not pinning — the Dockerfile is the pin\n", service)
+		}
+		return pinOutcome{OldRaw: raw, NewRaw: raw, Tag: tag, Built: true}, nil
 	}
 
 	if !dryRun {
@@ -281,33 +340,57 @@ func pinInFile(composeFile, service string, d dockerFuncs, dryRun bool) (pinOutc
 	}
 
 	pullRef := baseImage + ":" + tag
-	digest, err := d.getDigest(pullRef)
-	if err != nil {
-		fmt.Printf("Image not found locally, pulling %s ...\n", pullRef)
-		if err := d.pull(pullRef); err != nil {
-			return pinOutcome{}, fmt.Errorf("pull failed: %w", err)
-		}
-		digest, err = d.getDigest(pullRef)
+
+	// What is actually running wins over what the tag currently resolves to
+	// locally. Pinning usually happens after a stack has been up a while --
+	// bring it up, live with it, then pin what you decided you want -- and in
+	// that window the moving tag may have been re-pulled by something else.
+	// Preferring the local image there would record a digest that never ran.
+	var digest string
+	if d.runningDigest != nil {
+		digest, err = d.runningDigest(filepath.Dir(composeFile), service, baseImage)
 		if err != nil {
 			return pinOutcome{}, err
 		}
+	}
+	if digest != "" {
 		if !dryRun {
-			fmt.Printf("Using digest from pulled image: %s\n", digest)
+			fmt.Printf("Using digest from running container: %s\n", digest)
+			// The tag having moved under a running container is worth saying
+			// out loud: the next `compose up` would change what runs, and
+			// this pin is what stops that happening silently.
+			if local, lerr := d.getDigest(pullRef); lerr == nil && local != digest {
+				fmt.Printf("Note: %s now resolves to %s locally — pinning what is running, not that.\n", pullRef, local)
+			}
 		}
-	} else if !dryRun {
-		fmt.Printf("Using digest from local image: %s\n", digest)
+	} else {
+		digest, err = d.getDigest(pullRef)
+		if err != nil {
+			fmt.Printf("Image not found locally, pulling %s ...\n", pullRef)
+			if err := d.pull(pullRef); err != nil {
+				return pinOutcome{}, fmt.Errorf("pull failed: %w", err)
+			}
+			digest, err = d.getDigest(pullRef)
+			if err != nil {
+				return pinOutcome{}, err
+			}
+			if !dryRun {
+				fmt.Printf("Using digest from pulled image: %s\n", digest)
+			}
+		} else if !dryRun {
+			fmt.Printf("Using digest from local image: %s\n", digest)
+		}
 	}
 
-	// Resolving `latest` to a version tag is purely cosmetic (the digest
-	// pinned is the same either way), so skip the registry round-trip in
-	// dry-run mode -- it's only worth paying for when we're about to write.
-	pinnedTag := tag
-	if tag == "latest" && !dryRun {
-		pinnedTag = d.resolve(baseImage, tag, digest, service)
-	}
-
-	pinned := fmt.Sprintf("%s:%s@%s", baseImage, pinnedTag, digest)
-	outcome := pinOutcome{OldRaw: raw, NewRaw: pinned, Tag: pinnedTag, Digest: digest}
+	// The tag is the tag to FOLLOW, not a record of what is running -- the
+	// digest is that record. So it is written back verbatim: a service on
+	// `latest` stays on `latest`, and only the digest after @sha256: moves.
+	// (Until 2026-08, plain pin resolved `latest` to whatever version tag
+	// carried the same digest. That silently converted "track latest" into
+	// "pinned to the 1.26 line forever" -- the concrete tag never moves, so
+	// the service stopped receiving updates the moment it was pinned.)
+	pinned := fmt.Sprintf("%s:%s@%s", baseImage, tag, digest)
+	outcome := pinOutcome{OldRaw: raw, NewRaw: pinned, Tag: tag, Digest: digest}
 	if dryRun {
 		return outcome, nil
 	}
@@ -416,7 +499,7 @@ func shortDigest(digest string) string {
 // upgrade
 
 func runUpgrade(args []string, d dockerFuncs) error {
-	dryRun := false
+	dryRun, all := false, false
 	concurrency := upgradeAllConcurrency
 	filtered := args[:0:0]
 	for i := 0; i < len(args); i++ {
@@ -436,29 +519,35 @@ func runUpgrade(args []string, d dockerFuncs) error {
 				os.Exit(1)
 			}
 			concurrency = n
+		case a == "--all" || a == "-a":
+			all = true
 		default:
 			filtered = append(filtered, a)
 		}
 	}
 	args = filtered
 
-	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Usage: docker pin upgrade <service> [version]")
-		fmt.Fprintln(os.Stderr, "       docker pin upgrade --all [--concurrency N]")
-		os.Exit(1)
+	usage := []string{
+		"Usage: docker pin upgrade <service> [version]",
+		"       docker pin upgrade --all [--concurrency N]",
 	}
+	// What is left is a service name and maybe a version, so anything
+	// flag-shaped is a typo -- without this it would be taken as the version
+	// and pulled as a tag.
+	rejectUnknownFlags(args, usage...)
 
-	if args[0] == "--all" || args[0] == "-a" {
-		if len(args) != 1 {
-			fmt.Fprintln(os.Stderr, "Error: --all cannot be combined with a version")
+	if all {
+		if len(args) != 0 {
+			fmt.Fprintln(os.Stderr, "Error: --all cannot be combined with a service or version")
 			os.Exit(1)
 		}
 		return upgradeAll(d, dryRun, concurrency)
 	}
 
-	if len(args) > 2 {
-		fmt.Fprintln(os.Stderr, "Usage: docker pin upgrade <service> [version]")
-		fmt.Fprintln(os.Stderr, "       docker pin upgrade --all")
+	if len(args) == 0 || len(args) > 2 {
+		for _, u := range usage {
+			fmt.Fprintln(os.Stderr, u)
+		}
 		os.Exit(1)
 	}
 
@@ -590,6 +679,11 @@ func upgradeAll(d dockerFuncs, dryRun bool, concurrency int) error {
 	}
 
 	if dryRun {
+		// Results arrive in goroutine-completion order, so without this the
+		// summary is differently ordered every run.
+		sort.Slice(results, func(i, j int) bool { return results[i].service < results[j].service })
+		sort.Strings(failed)
+
 		fmt.Println()
 		fmt.Println("Summary:")
 		w := tabwriter.NewWriter(os.Stdout, 2, 8, 2, ' ', 0)
@@ -597,7 +691,10 @@ func upgradeAll(d dockerFuncs, dryRun bool, concurrency int) error {
 		for _, r := range results {
 			action := "none"
 			tag := tagOf(r.outcome.OldRaw)
-			if r.outcome.Changed {
+			switch {
+			case r.outcome.Built:
+				action = "built"
+			case r.outcome.Changed:
 				action = "upgrade"
 				if newTag := tagOf(r.outcome.NewRaw); newTag != tag {
 					tag = tag + " -> " + newTag
@@ -642,12 +739,30 @@ type upgradeOutcome struct {
 	Tag, Digest string
 	// Changed is true when the pin moved (or would move, in a dry run).
 	Changed bool
+	// Built is true when the service is built locally (build:) and so was
+	// skipped -- there is no registry to check for a newer image.
+	Built bool
 }
 
 // upgradeInFile pulls the target (or discovered moving) tag and pins service
 // to the pulled digest. With dryRun it does everything except rewrite the
 // compose file, printing what the upgrade would be instead.
 func upgradeInFile(composeFile, service, targetVersion string, d dockerFuncs, dryRun bool) (upgradeOutcome, error) {
+	// Nothing to upgrade for a locally built image: there is no registry to
+	// check, and pulling its local tag would fail (or worse, silently fetch an
+	// unrelated image of the same name from Docker Hub).
+	built, err := compose.IsBuilt(composeFile, service)
+	if err != nil {
+		return upgradeOutcome{}, err
+	}
+	if built {
+		raw, _ := compose.RawImage(composeFile, service)
+		if !dryRun {
+			fmt.Printf("%s is built locally (build:), nothing to upgrade\n", service)
+		}
+		return upgradeOutcome{OldRaw: raw, NewRaw: raw, Built: true}, nil
+	}
+
 	pullRef, targetVersion, err := resolvePullRef(composeFile, service, targetVersion, dryRun, false)
 	if err != nil {
 		return upgradeOutcome{}, err
