@@ -1,38 +1,85 @@
-// duva checks whether a newer registry tag exists for each configured
-// compose service and sends an ntfy notification the first time a given
-// newer tag is seen — it never rewrites the compose file, pulls an image,
-// or restarts a container. State (the last tag notified about, per service)
-// persists to a small JSON file so the same tag is never reported twice.
+// duva watches the pinned services in a compose project and reports what has
+// a newer version waiting.
+//
+// It watches only services that are digest-pinned: pin status is the opt-in.
+// `docker pin <service>` starts duva watching it, `docker unpin <service>`
+// stops. That is the sharper question than generic drift-watching — "has the
+// registry moved past the exact digest I deliberately locked to" — and it is
+// only meaningful where a versioning decision was actually made.
+//
+// Per-service rules live as labels on the service in the compose file, not in
+// a separate config: config that governs a service should live with that
+// service, so there is one file to check and nothing to drift when services
+// are added, renamed or removed.
+//
+//	services:
+//	  radarr:
+//	    image: ghcr.io/example/radarr:latest@sha256:...
+//	    labels:
+//	      duva.include: '^\d+\.\d+\.\d+$'
+//	      duva.exclude: '(alpha|beta|rc)'
+//	      duva.delay: 7d
+//
+// Everything else (schedule, notification target, UI port) comes from env
+// vars — see envConfig.
 package main
 
 import (
 	"context"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/signal"
-	"regexp"
-	"strings"
+	"sort"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/Miista/homebrew-docker-pin/internal/compose"
 	"github.com/Miista/homebrew-docker-pin/internal/croncal"
 	"github.com/Miista/homebrew-docker-pin/internal/notify"
-	pinpkg "github.com/Miista/homebrew-docker-pin/internal/pin"
 	"github.com/Miista/homebrew-docker-pin/internal/registry"
+	"github.com/Miista/homebrew-docker-pin/internal/ui"
+	"github.com/Miista/homebrew-docker-pin/internal/watch"
 )
 
 var version = "dev"
 
-// regFuncs seams out registry access so run/serve can be tested without
-// network calls, mirroring docker-pin's dockerFuncs pattern.
-type regFuncs struct {
-	listMatchingTags func(baseImage string, include, exclude *regexp.Regexp, current string) ([]string, error)
-	remoteDigest     func(baseImage, tag string) (string, error)
+// duva's container contract is fixed mount paths plus env vars — no
+// working-directory tricks, no search logic:
+//
+//	/compose  the compose project DIRECTORY
+//	/data     small writable volume for state
+//
+// /compose MUST be the directory, never the compose file alone: include:'d
+// nested compose files resolve relative to it, and a single-file bind mount
+// silently pins the old inode when the host file is replaced by rename (as
+// editors and docker-pin do).
+//
+// The paths are overridable with DUVA_COMPOSE_DIR / DUVA_STATE_FILE, so the
+// binary can be run outside a container -- against a scratch project while
+// developing, or on a host that mounts things elsewhere. In the container the
+// defaults are the contract and nothing needs setting.
+//
+// Package variables (not constants) so tests can point them at fixtures.
+var (
+	composeDir = envOr("DUVA_COMPOSE_DIR", "/compose")
+	stateFile  = envOr("DUVA_STATE_FILE", "/data/duva.json")
+)
+
+func envOr(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
 }
 
-var realReg = regFuncs{listMatchingTags: registry.ListMatchingTags, remoteDigest: registry.RemoteDigest}
+var realRegistry = watch.Registry{
+	ListMatchingTags: registry.ListMatchingTags,
+	TagCreated:       registry.TagCreated,
+	RemoteDigest:     registry.RemoteDigest,
+}
 
 func main() {
 	if len(os.Args) < 2 {
@@ -43,12 +90,12 @@ func main() {
 	case "version", "--version", "-v":
 		fmt.Println("duva", version)
 	case "run":
-		if err := runOnce(realReg, os.Stdout); err != nil {
+		if err := runOnce(realRegistry, os.Stdout); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
 	case "serve":
-		if err := serve(realReg, os.Stdout); err != nil {
+		if err := serve(realRegistry, os.Stdout); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
@@ -62,46 +109,15 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "Usage: duva <run|serve|version>")
 }
 
-// duva's container contract is fixed mount paths plus env vars — no
-// working-directory tricks, no search logic:
-//
-//	/compose  the compose project DIRECTORY, mounted read-only
-//	/data     small writable volume for the dedup state
-//
-// /compose MUST be the directory, never the compose file alone: include:'d
-// nested compose files resolve relative to it, and a single-file bind mount
-// silently pins the old inode when the host file is replaced by rename (as
-// editors and docker-pin do).
-//
-// composeDir is a package variable only so tests can point it at a fixture.
-var composeDir = "/compose"
-
-// duva only watches services that are pinned (image: has @sha256:...) —
-// pin status is the opt-in/opt-out: `docker pin <service>` starts duva
-// watching it, `docker unpin <service>` stops it. Unpinned services are
-// skipped with a log line, never notified about, never state-tracked.
-//
-// Per-service rules (tags/exclude/delay) live as labels on the service in
-// the compose file, not in a separate config file — config that governs a
-// service should live with that service, so there's one file to check and
-// nothing to drift when services are added/renamed/removed:
-//
-//	services:
-//	  radarr:
-//	    image: ghcr.io/linuxserver/radarr:latest@sha256:...
-//	    labels:
-//	      duva.include: '^\d+\.\d+\.\d+$'
-//	      duva.exclude: '(alpha|beta|rc)'
-//	      duva.delay: 7d
-//
-// Everything else (schedule, notify, hostname) comes from env vars — see
-// loadEnvConfig.
 type envConfig struct {
 	Schedule  string
 	Hostname  string
 	NtfyURL   string
 	NtfyTopic string
 	NtfyToken string
+	// UIAddr is the listen address for the approval queue, e.g. ":8080".
+	// Empty disables the UI entirely — no listener at all.
+	UIAddr string
 }
 
 func loadEnvConfig() envConfig {
@@ -111,178 +127,13 @@ func loadEnvConfig() envConfig {
 		NtfyURL:   os.Getenv("DUVA_NTFY_URL"),
 		NtfyTopic: os.Getenv("DUVA_NTFY_TOPIC"),
 		NtfyToken: os.Getenv("DUVA_NTFY_TOKEN"),
+		UIAddr:    os.Getenv("DUVA_UI_ADDR"),
 	}
 }
 
-// serviceRules is a pinned service's include/exclude/delay, read from its
-// compose labels.
-type serviceRules struct {
-	Name    string
-	Include string
-	Exclude string
-	Delay   string
-}
-
-func loadServiceRules(composeFile, name string) (serviceRules, error) {
-	labels, err := compose.Labels(composeFile, name)
-	if err != nil {
-		return serviceRules{}, err
-	}
-	return serviceRules{
-		Name:    name,
-		Include: labels["duva.include"],
-		Exclude: labels["duva.exclude"],
-		Delay:   labels["duva.delay"],
-	}, nil
-}
-
-// runOnce checks every pinned service once and reports what it found.
-func runOnce(reg regFuncs, out io.Writer) error {
-	cfg := loadEnvConfig()
-	composeFile, err := compose.FindFile(composeDir)
-	if err != nil {
-		return err
-	}
-
-	statePath := stateFile
-	st, err := loadState(statePath)
-	if err != nil {
-		return fmt.Errorf("loading state: %w", err)
-	}
-
-	names, err := compose.ListServices(composeFile)
-	if err != nil {
-		return err
-	}
-
-	changed := false
-	for _, name := range names {
-		serviceFile, err := compose.ResolveServiceIn(composeFile, name)
-		if err != nil {
-			fmt.Fprintf(out, "%s: error: %v\n", name, err)
-			continue
-		}
-		raw, err := compose.RawImage(serviceFile, name)
-		if err != nil {
-			fmt.Fprintf(out, "%s: error: %v\n", name, err)
-			continue
-		}
-		if !strings.Contains(raw, "@sha256:") {
-			fmt.Fprintf(out, "%s: not pinned, skipping\n", name)
-			continue
-		}
-
-		svc, err := loadServiceRules(composeFile, name)
-		if err != nil {
-			fmt.Fprintf(out, "%s: error: %v\n", name, err)
-			continue
-		}
-
-		before := st[name]
-		candidate, err := checkService(composeFile, svc, reg, st)
-		if err != nil {
-			fmt.Fprintf(out, "%s: error: %v\n", name, err)
-			continue
-		}
-		if st[name] != before {
-			changed = true // checkService recorded a moving-tag baseline
-		}
-		if candidate == "" {
-			fmt.Fprintf(out, "%s: up to date\n", name)
-			continue
-		}
-		if st[name] == candidate {
-			fmt.Fprintf(out, "%s: %s available (already notified)\n", name, candidate)
-			continue
-		}
-		fmt.Fprintf(out, "%s: %s available\n", name, candidate)
-		notifyAvailable(cfg, name, candidate)
-		st[name] = candidate
-		changed = true
-	}
-
-	if changed {
-		if err := saveState(statePath, st); err != nil {
-			return fmt.Errorf("saving state: %w", err)
-		}
-	}
-	return nil
-}
-
-// checkService returns what's newly available for svc: for a service with a
-// tags constraint, the newest matching registry tag newer than the one
-// currently pinned; for an unconstrained service (moving tag such as
-// "latest"), the remote manifest digest once it differs from st[svc.Name].
-// An empty result means nothing new to report. For a moving-tag service,
-// checkService may update st[svc.Name] itself even when it returns no
-// candidate: the very first check has no baseline to compare the digest
-// against, so it records one silently rather than notifying (otherwise
-// every newly-watched service would fire once on day one regardless of
-// whether anything actually changed).
-func checkService(rootFile string, svc serviceRules, reg regFuncs, st map[string]string) (string, error) {
-	serviceFile, err := compose.ResolveServiceIn(rootFile, svc.Name)
-	if err != nil {
-		return "", err
-	}
-	baseImage, currentTag, err := compose.ParseImage(serviceFile, svc.Name)
-	if err != nil {
-		return "", err
-	}
-
-	if svc.Include == "" {
-		return checkMovingTag(baseImage, currentTag, reg, svc.Name, st)
-	}
-
-	c, err := pinpkg.SelectCandidate(serviceFile, svc.Name, pinpkg.Rules{
-		Include: svc.Include,
-		Exclude: svc.Exclude,
-		Delay:   svc.Delay,
-	}, pinpkg.Registry{
-		ListMatchingTags: reg.listMatchingTags,
-		TagCreated:       registry.TagCreated,
-	})
-	if err != nil {
-		return "", err
-	}
-	return c.Tag, nil
-}
-
-// checkMovingTag fetches the remote manifest digest for a moving tag (no
-// pull) and reports it as the candidate whenever it differs from the
-// recorded baseline in st. On the first check for a service (no recorded
-// baseline yet) it records the current digest in st and reports nothing.
-func checkMovingTag(baseImage, tag string, reg regFuncs, serviceName string, st map[string]string) (string, error) {
-	digest, err := reg.remoteDigest(baseImage, tag)
-	if err != nil {
-		return "", fmt.Errorf("fetching remote digest for %s:%s: %w", baseImage, tag, err)
-	}
-	lastKnown := st[serviceName]
-	if lastKnown == "" {
-		st[serviceName] = digest
-		return "", nil
-	}
-	if digest == lastKnown {
-		return "", nil
-	}
-	return digest, nil
-}
-
-// notifyAvailable reports a newly-seen newer tag via ntfy. Notification
-// failures only warn — a lost notification must not fail the check.
-func notifyAvailable(cfg envConfig, service, tag string) {
-	if cfg.NtfyURL == "" || cfg.NtfyTopic == "" {
-		return
-	}
-	n := notify.Ntfy{URL: cfg.NtfyURL, Topic: cfg.NtfyTopic, Token: cfg.NtfyToken}
-	title := fmt.Sprintf("duva@%s: %s has an update", hostLabel(cfg), service)
-	if err := n.Send(title, fmt.Sprintf("%s: newer tag %s is available", service, tag), notify.PriorityDefault); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: notification failed: %v\n", err)
-	}
-}
-
-// hostLabel identifies this box in notifications, so several hosts can
-// share one ntfy topic: DUVA_HOSTNAME when set, otherwise the short OS
-// hostname.
+// hostLabel identifies this box in notifications and in the UI header, so
+// several hosts can share one ntfy topic: DUVA_HOSTNAME when set, otherwise
+// the short OS hostname.
 func hostLabel(cfg envConfig) string {
 	if cfg.Hostname != "" {
 		return cfg.Hostname
@@ -294,16 +145,169 @@ func hostLabel(cfg envConfig) string {
 	return h
 }
 
-// serve loops forever, running the same check as `run` on cfg.Schedule
-// (a 5-field cron expression), until SIGTERM/SIGINT.
-func serve(reg regFuncs, out io.Writer) error {
+// check runs detection once and folds the result into state: pending updates
+// are reconciled, and anything newly available is notified about. It returns
+// the findings so callers can report them.
+//
+// Everything needing approval is pending for now. Deciding what may be applied
+// unattended arrives with the policy work; until then duva reports and does
+// not act, which is what it has always done.
+func check(cfg envConfig, reg watch.Registry, st *watch.State, now time.Time) ([]watch.Finding, error) {
+	rootFile, err := compose.FindFile(composeDir)
+	if err != nil {
+		return nil, err
+	}
+
+	findings, err := watch.Project(rootFile, reg, st.Baseline)
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(findings, func(i, j int) bool { return findings[i].Service < findings[j].Service })
+
+	var available []watch.Finding
+	for _, f := range findings {
+		if f.Available() {
+			available = append(available, f)
+		}
+	}
+
+	st.Reconcile(available, findings, now.UTC().Format(time.RFC3339))
+
+	// Notify once per candidate, not once per run.
+	for _, f := range available {
+		if st.Notified[f.Service] == f.Candidate {
+			continue
+		}
+		notifyAvailable(cfg, f)
+		st.Notified[f.Service] = f.Candidate
+	}
+	// Forget notifications for services with nothing outstanding, so the
+	// same candidate reappearing later is announced again.
+	for _, f := range findings {
+		if !f.Available() && f.Status != watch.StatusError {
+			delete(st.Notified, f.Service)
+		}
+	}
+
+	return findings, nil
+}
+
+// runOnce performs a single check and prints what it found.
+func runOnce(reg watch.Registry, out io.Writer) error {
+	cfg := loadEnvConfig()
+	st, err := watch.LoadState(stateFile)
+	if err != nil {
+		return fmt.Errorf("loading state: %w", err)
+	}
+
+	findings, err := check(cfg, reg, st, time.Now())
+	if err != nil {
+		return err
+	}
+	report(out, findings)
+
+	if err := st.Save(stateFile); err != nil {
+		return fmt.Errorf("saving state: %w", err)
+	}
+	return nil
+}
+
+func report(out io.Writer, findings []watch.Finding) {
+	for _, f := range findings {
+		switch f.Status {
+		case watch.StatusAvailable:
+			fmt.Fprintf(out, "%s: %s available\n", f.Service, f.Candidate)
+		case watch.StatusSkipped:
+			fmt.Fprintf(out, "%s: %s, skipping\n", f.Service, f.Reason)
+		case watch.StatusError:
+			fmt.Fprintf(out, "%s: error: %s\n", f.Service, f.Reason)
+		default:
+			fmt.Fprintf(out, "%s: up to date\n", f.Service)
+		}
+	}
+}
+
+// notifyAvailable reports one newly-seen update via ntfy. Notification
+// failures only warn — a lost notification must not fail the check.
+func notifyAvailable(cfg envConfig, f watch.Finding) {
+	if cfg.NtfyURL == "" || cfg.NtfyTopic == "" {
+		return
+	}
+	n := notify.Ntfy{URL: cfg.NtfyURL, Topic: cfg.NtfyTopic, Token: cfg.NtfyToken}
+	title := fmt.Sprintf("duva@%s: %s has an update", hostLabel(cfg), f.Service)
+
+	body := fmt.Sprintf("%s: newer tag %s is available", f.Service, f.Candidate)
+	if f.Kind == watch.KindDigest {
+		body = fmt.Sprintf("%s: %s:%s now points at a new image", f.Service, f.Image, f.CurrentTag)
+	}
+	if err := n.Send(title, body, notify.PriorityDefault); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: notification failed: %v\n", err)
+	}
+}
+
+// store holds the state the scheduled checks write and the UI reads. The UI
+// runs on its own goroutine, so access is guarded.
+type store struct {
+	mu        sync.RWMutex
+	state     *watch.State
+	lastCheck time.Time
+}
+
+func (s *store) Pending() []watch.Pending {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.state.PendingList()
+}
+
+func (s *store) LastCheck() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.lastCheck.IsZero() {
+		return "not yet"
+	}
+	return s.lastCheck.UTC().Format(time.RFC3339)
+}
+
+// serve loops forever, running the same check as `run` on cfg.Schedule (a
+// 5-field cron expression), until SIGTERM/SIGINT. With DUVA_UI_ADDR set it
+// also serves the approval queue.
+func serve(reg watch.Registry, out io.Writer) error {
 	cfg := loadEnvConfig()
 	if _, err := croncal.Next(cfg.Schedule, time.Now()); err != nil {
 		return fmt.Errorf("schedule %q: %w", cfg.Schedule, err)
 	}
 
+	st, err := watch.LoadState(stateFile)
+	if err != nil {
+		return fmt.Errorf("loading state: %w", err)
+	}
+	s := &store{state: st}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	if cfg.UIAddr != "" {
+		srv := &http.Server{
+			Addr: cfg.UIAddr,
+			Handler: (&ui.Server{
+				Source:  s,
+				Host:    hostLabel(cfg),
+				Version: version,
+			}).Handler(),
+			ReadHeaderTimeout: 10 * time.Second,
+		}
+		go func() {
+			fmt.Fprintf(out, "duva: approval queue on %s\n", cfg.UIAddr)
+			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				fmt.Fprintf(os.Stderr, "duva: ui: %v\n", err)
+			}
+		}()
+		defer func() {
+			shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			srv.Shutdown(shutdown)
+		}()
+	}
 
 	for {
 		next, err := croncal.Next(cfg.Schedule, time.Now())
@@ -322,8 +326,27 @@ func serve(reg regFuncs, out io.Writer) error {
 		case <-timer.C:
 		}
 
-		if err := runOnce(reg, out); err != nil {
+		now := time.Now()
+		s.mu.Lock()
+		findings, err := check(cfg, reg, s.state, now)
+		if err == nil {
+			s.lastCheck = now
+		}
+		s.mu.Unlock()
+
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "duva: check failed: %v\n", err)
+			continue
+		}
+		report(out, findings)
+		if err := s.saveState(); err != nil {
+			fmt.Fprintf(os.Stderr, "duva: saving state: %v\n", err)
 		}
 	}
+}
+
+func (s *store) saveState() error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.state.Save(stateFile)
 }
