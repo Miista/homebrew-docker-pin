@@ -78,10 +78,18 @@ trailing comment), not because anything depends on them today.
 
 ## Command semantics
 
-- **`docker pin <service>`**: no-op if the image is already digest-pinned. Uses the
-  *local* digest, pulling only if the image isn't present locally. Writes
-  `base:tag@sha256:...` with the tag **exactly as written in the compose file** —
-  see "The tag is the tag to follow" below.
+- **`docker pin <service>`**: no-op if the image is already digest-pinned. Digest
+  source, in order: the **running container's** image (`docker.RunningDigest`,
+  found via compose's own `com.docker.compose.service` +
+  `project.working_dir` labels), else the local image, else a pull. Preferring
+  the running container matters because pinning happens *after* a stack has been
+  up a while, and in that window something else can re-pull the moving tag —
+  pinning the local image would then record a digest that never ran here. When
+  the two disagree it prints a "Note:" line. A `runningDigest` error is fatal
+  (never silently fall through to a different digest); "no container" and "no
+  repo digest" (locally built / pruned) both return empty and fall through.
+  Writes `base:tag@sha256:...` with the tag **exactly as written in the compose
+  file** — see "The tag is the tag to follow" below.
 - **`docker pin upgrade <service> [version]`**: *always* pulls — `version` if
   given, otherwise the moving tag `registry.MovingPullTag` derives from the
   service's current tag (e.g. a service pinned at `1.4.2` checks `1.4`; one

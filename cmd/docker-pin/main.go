@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -29,6 +30,7 @@ var version = "dev"
 
 type dockerFuncs struct {
 	getDigest        func(ref string) (string, error)
+	runningDigest    func(composeDir, service, baseImage string) (string, error)
 	pull             func(ref string) error
 	listMatchingTags func(baseImage string, include, exclude *regexp.Regexp, current string) ([]string, error)
 	tagCreated       func(baseImage, tag string) (time.Time, error)
@@ -36,6 +38,7 @@ type dockerFuncs struct {
 
 var realDocker = dockerFuncs{
 	getDigest:        docker.GetDigest,
+	runningDigest:    docker.RunningDigest,
 	pull:             docker.Pull,
 	listMatchingTags: registry.ListMatchingTags,
 	tagCreated:       registry.TagCreated,
@@ -279,21 +282,46 @@ func pinInFile(composeFile, service string, d dockerFuncs, dryRun bool) (pinOutc
 	}
 
 	pullRef := baseImage + ":" + tag
-	digest, err := d.getDigest(pullRef)
-	if err != nil {
-		fmt.Printf("Image not found locally, pulling %s ...\n", pullRef)
-		if err := d.pull(pullRef); err != nil {
-			return pinOutcome{}, fmt.Errorf("pull failed: %w", err)
-		}
-		digest, err = d.getDigest(pullRef)
+
+	// What is actually running wins over what the tag currently resolves to
+	// locally. Pinning usually happens after a stack has been up a while --
+	// bring it up, live with it, then pin what you decided you want -- and in
+	// that window the moving tag may have been re-pulled by something else.
+	// Preferring the local image there would record a digest that never ran.
+	var digest string
+	if d.runningDigest != nil {
+		digest, err = d.runningDigest(filepath.Dir(composeFile), service, baseImage)
 		if err != nil {
 			return pinOutcome{}, err
 		}
+	}
+	if digest != "" {
 		if !dryRun {
-			fmt.Printf("Using digest from pulled image: %s\n", digest)
+			fmt.Printf("Using digest from running container: %s\n", digest)
+			// The tag having moved under a running container is worth saying
+			// out loud: the next `compose up` would change what runs, and
+			// this pin is what stops that happening silently.
+			if local, lerr := d.getDigest(pullRef); lerr == nil && local != digest {
+				fmt.Printf("Note: %s now resolves to %s locally — pinning what is running, not that.\n", pullRef, local)
+			}
 		}
-	} else if !dryRun {
-		fmt.Printf("Using digest from local image: %s\n", digest)
+	} else {
+		digest, err = d.getDigest(pullRef)
+		if err != nil {
+			fmt.Printf("Image not found locally, pulling %s ...\n", pullRef)
+			if err := d.pull(pullRef); err != nil {
+				return pinOutcome{}, fmt.Errorf("pull failed: %w", err)
+			}
+			digest, err = d.getDigest(pullRef)
+			if err != nil {
+				return pinOutcome{}, err
+			}
+			if !dryRun {
+				fmt.Printf("Using digest from pulled image: %s\n", digest)
+			}
+		} else if !dryRun {
+			fmt.Printf("Using digest from local image: %s\n", digest)
+		}
 	}
 
 	// The tag is the tag to FOLLOW, not a record of what is running -- the

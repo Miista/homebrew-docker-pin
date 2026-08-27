@@ -72,6 +72,76 @@ func TestPinInFile_LocalImage(t *testing.T) {
 	}
 }
 
+// The reason runningDigest exists: pin is normally run after a stack has been
+// up a while, and in that window something else can re-pull the moving tag.
+// The local image for `latest` then points somewhere newer than the container
+// is actually running, and pinning that would record a digest that never ran.
+func TestPinInFile_PrefersRunningContainer(t *testing.T) {
+	f := writeTempCompose(t, `services:
+  web:
+    image: nginx:latest
+`)
+	d := dockerFuncs{
+		runningDigest: func(dir, service, baseImage string) (string, error) {
+			if service != "web" || baseImage != "nginx" {
+				t.Errorf("unexpected lookup: service=%q baseImage=%q", service, baseImage)
+			}
+			return "sha256:whatisrunning", nil
+		},
+		getDigest: func(ref string) (string, error) { return "sha256:newerlocal", nil },
+		pull:      func(ref string) error { return errors.New("should not be called") },
+	}
+	if _, err := pinInFile(f, "web", d, false); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got := readCompose(t, f)
+	if !strings.Contains(got, "nginx:latest@sha256:whatisrunning") {
+		t.Errorf("expected the running container's digest to win, got:\n%s", got)
+	}
+}
+
+// No container for the service (never brought up, or it belongs to another
+// host) falls back to the local image.
+func TestPinInFile_FallsBackToLocalWhenNotRunning(t *testing.T) {
+	f := writeTempCompose(t, `services:
+  web:
+    image: nginx:latest
+`)
+	d := dockerFuncs{
+		runningDigest: func(dir, service, baseImage string) (string, error) { return "", nil },
+		getDigest:     func(ref string) (string, error) { return "sha256:localhash", nil },
+		pull:          func(ref string) error { return errors.New("should not be called") },
+	}
+	if _, err := pinInFile(f, "web", d, false); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(readCompose(t, f), "nginx:latest@sha256:localhash") {
+		t.Errorf("expected fallback to the local image, got:\n%s", readCompose(t, f))
+	}
+}
+
+// A container running an image with no usable repo digest (locally built, or
+// pruned after the tag moved) must not block pinning -- fall through.
+func TestPinInFile_RunningLookupFailureIsFatal(t *testing.T) {
+	f := writeTempCompose(t, `services:
+  web:
+    image: nginx:latest
+`)
+	d := dockerFuncs{
+		runningDigest: func(dir, service, baseImage string) (string, error) {
+			return "", errors.New("docker daemon unreachable")
+		},
+		getDigest: func(ref string) (string, error) { return "sha256:localhash", nil },
+		pull:      func(ref string) error { return errors.New("should not be called") },
+	}
+	if _, err := pinInFile(f, "web", d, false); err == nil {
+		t.Fatal("expected a docker failure to surface rather than silently pinning something else")
+	}
+	if strings.Contains(readCompose(t, f), "@sha256:") {
+		t.Error("compose file should be untouched when the running lookup errors")
+	}
+}
+
 // The tag is the tag to FOLLOW, so pinning must write it back verbatim.
 // Resolving `latest` to whatever version tag happens to carry the same digest
 // would freeze the service on that version line: the concrete tag never moves,

@@ -35,10 +35,15 @@ Flags:
                   needs it) except rewrite the compose file: prints
                   "Would pin ..." instead.
 
-Rewrites the service's image to <image>:<tag>@sha256:<digest>, pulling the
-image first if it is not available locally. The tag is kept exactly as
-written: it is the tag to follow, and the digest records what is running.
-A service on 'latest' stays on 'latest'.`},
+Rewrites the service's image to <image>:<tag>@sha256:<digest>.
+
+Pins what is actually running: the digest comes from the service's running
+container if there is one, else the local image for the tag, else a pull.
+The tag is kept exactly as written -- it is the tag to follow, and the digest
+records what runs -- so a service on 'latest' stays on 'latest'.
+
+If the tag has moved since the container started, pin says so and records the
+running digest; use 'docker pin upgrade' to move to what the tag points at.`},
 
 	{"upgrade", `docker pin upgrade — move a pinned service to a newer version and re-pin
 

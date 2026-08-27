@@ -10,7 +10,7 @@ Docker CLI plugins to pin container images in a Compose file to an exact tag and
 
 Two plugins:
 
-- **`docker pin`** — pins a service to its current digest. Pulls the image if not local. The tag is written back verbatim: it is the tag to *follow*, and the digest is the record of what is running, so `latest@sha256:...` stays on `latest`.
+- **`docker pin`** — pins a service to the digest it is *actually running* (falling back to the local image, then a pull). The tag is written back verbatim: it is the tag to *follow*, and the digest is the record of what runs, so `latest@sha256:...` stays on `latest`.
 - **`docker pin upgrade`** — pulls fresh, then re-pins to the new digest. Same version-tag resolution.
 - **`docker unpin`** — strips the digest, leaving just `image: postgres:16`.
 
@@ -73,7 +73,7 @@ docker pin <service>
 docker pin --all
 ```
 
-No-op if the service is already pinned. Pulls the image if it isn't present locally.
+No-op if the service is already pinned.
 
 Before:
 ```yaml
@@ -86,8 +86,33 @@ After:
 ```yaml
 services:
   db:
-    image: postgres:16.3@sha256:a3dc6b...
+    image: postgres:16@sha256:a3dc6b...
 ```
+
+#### Which digest gets pinned
+
+The intended workflow is: bring the stack up, live with it, decide this is what
+you want, *then* pin. So `pin` records **what is actually running**, in this
+order:
+
+1. **The running container's image** — if a container for the service is up.
+2. **The local image** for the tag — if the service isn't running.
+3. **A pull** — only if the image isn't present locally at all (first pin on a
+   fresh host, after a prune, or a service that runs on another box).
+
+The order matters because of the gap between "up" and "pinned". In that window
+something else may re-pull the moving tag — a sibling service on the same base
+image, a build, a manual `docker pull` — so the local image for `nginx:latest`
+can be *newer* than the container is running. Pinning that would record a
+digest that has never run on this host. When the two disagree, `pin` says so
+and pins the running one:
+
+```
+Using digest from running container: sha256:41b1944...
+Note: nginx:latest now resolves to sha256:b34848e... locally — pinning what is running, not that.
+```
+
+To move to what the tag points at now, that is what `upgrade` is for.
 
 The tag is kept exactly as written — it is the tag to **follow**, while the
 digest records what is actually running. A service on `latest` stays on
