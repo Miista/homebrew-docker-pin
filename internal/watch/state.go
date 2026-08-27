@@ -48,8 +48,12 @@ type Pending struct {
 	// Why says why this needs a human rather than being applied: the
 	// classification against the service's duva.auto threshold.
 	Why string `json:"why"`
-	// FirstSeen is when this candidate first showed up, so the UI can show
-	// how long something has been waiting. RFC 3339.
+	// FirstSeen is when this candidate first showed up. Recorded but not
+	// currently displayed: a raw timestamp told the reader less than it
+	// seemed to, being neither the release's age nor a relative one, and
+	// duva.delay already answers staleness from the tag's real publish date.
+	// Kept because it is one string per entry and the only place the answer
+	// to "how long has this waited" survives a restart. RFC 3339.
 	FirstSeen string `json:"first_seen"`
 }
 
