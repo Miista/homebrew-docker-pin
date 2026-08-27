@@ -70,8 +70,7 @@ duva_apply() {
     --add-host=localhost:host-gateway \
     -v "$REGISTRY_CERT:/etc/ssl/certs/ca-certificates.crt:ro" \
     $COVER_MOUNT \
-    -e DUVA_APPLY=true -e DUVA_HOSTNAME=integration \
-    -e DUVA_REQUIRE_CLEAN_REPO=false \
+    -e DUVA_HOSTNAME=integration \
     -v /var/run/docker.sock:/var/run/docker.sock \
     -v "$1:$1" -v "$2:/data" \
     -w "$1" \

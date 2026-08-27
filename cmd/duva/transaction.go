@@ -63,17 +63,15 @@ type applyOptions struct {
 	// container that already holds the docker socket, for value a human's
 	// next push delivers anyway.
 	Push bool
-	// RequireCleanRepo refuses to act when the compose file's repository has
-	// uncommitted changes, so duva's commit cannot sweep up someone's
-	// half-finished edit.
-	RequireCleanRepo bool
 }
 
 // apply runs the transaction for one finding.
 func apply(f watch.Finding, d Docker, g Git, opts applyOptions) Result {
 	res := Result{Service: f.Service}
 
-	if opts.RequireCleanRepo && g.IsClean != nil {
+	// A clean repository is a precondition, not a setting: duva commits, and
+	// committing on top of someone's half-finished edit is never wanted.
+	if g.IsClean != nil {
 		clean, err := g.IsClean(dirOf(f.File))
 		if err != nil {
 			return fail(res, StepWrite, fmt.Errorf("checking the repository: %w", err))

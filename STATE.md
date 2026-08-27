@@ -36,8 +36,13 @@ and the dead tag resolver deleted (444 lines).
 - **Everything after the container is record-keeping** and cannot make the
   update untrue: a failed commit leaves an uncommitted change `git status`
   shows; a failed push is a note.
-- `DUVA_APPLY` and `DUVA_GIT_PUSH` default off. duva refuses to act on a
-  repository with uncommitted changes.
+- **Acting is not optional.** What duva may act on is decided per service by
+  `duva.auto`, which defaults to `none` -- so a service is only updated
+  because someone said so. A global switch would be a second brake on the same
+  pedal. `DUVA_GIT_PUSH` is the one remaining toggle (default off): pushing
+  needs a key in a container that already holds the docker socket.
+- A **clean repository is a precondition, not a setting**: duva commits, and
+  committing on top of a half-finished edit is never wanted.
 - **The moving-tag baseline advances only on apply**, never on detection —
   otherwise a move that could not be applied is forgotten and the service
   silently stops being offered it.
