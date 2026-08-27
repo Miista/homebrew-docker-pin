@@ -649,3 +649,43 @@ func splitLines(s string) []string {
 	}
 	return lines
 }
+
+func TestIsBuilt(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "compose.yml")
+	writeFile(t, f, `services:
+  pulled:
+    image: nginx:1.25
+  builtShort:
+    build: ./app
+  builtLong:
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+  builtWithImage:
+    build: ./app
+    image: myapp:local
+`)
+	for _, tc := range []struct {
+		service string
+		want    bool
+	}{
+		{"pulled", false},
+		{"builtShort", true},
+		{"builtLong", true},
+		// `image:` alongside `build:` names the tag the build is written to --
+		// it is still a local build, not something a registry serves.
+		{"builtWithImage", true},
+	} {
+		got, err := IsBuilt(f, tc.service)
+		if err != nil {
+			t.Fatalf("IsBuilt(%s): %v", tc.service, err)
+		}
+		if got != tc.want {
+			t.Errorf("IsBuilt(%s) = %v, want %v", tc.service, got, tc.want)
+		}
+	}
+
+	if _, err := IsBuilt(f, "nope"); err == nil {
+		t.Error("expected an error for an unknown service")
+	}
+}
