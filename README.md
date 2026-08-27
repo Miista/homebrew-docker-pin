@@ -358,16 +358,66 @@ exits.
 - Two tags can point to byte-identical `linux/amd64` images but have different index digests if their manifest lists carry different platform sets (e.g. `latest` includes Windows images, `alpine` does not). The "already up to date" check will therefore treat them as different — this is correct, not a bug.
 - The digest shown in the Docker Hub "Digest" column is the per-arch manifest digest and may differ from the index digest recorded by this tool. This is expected.
 
-## Version tag resolution
+## The tag is the tag to follow
 
-When a service is on `latest` (or you upgrade to `latest`), the plugin queries the registry for all version-like tags and matches their manifest digests against the freshly pulled image. It picks the most specific matching tag — most dots, then longest — so a `-g<sha>` build tag wins over a bare `1.2`.
+In `image: <name>:<tag>@sha256:<digest>`, the **tag is an instruction** — which
+stream of releases this service tracks — and the **digest is the record** of
+what is actually running. One field cannot be both, so the tag is never
+rewritten to describe what got pinned:
 
-If no version tag matches the local digest (the image is orphaned — a newer build replaced the tag), the plugin warns and falls back to pinning with the pull tag unchanged. It also suggests `docker pin upgrade <service>` to get back onto a tagged version.
+| Command | Tag |
+|---|---|
+| `docker pin <service>` | written back verbatim |
+| `docker pin upgrade <service>` | unchanged; only the digest moves |
+| `docker pin upgrade <service> <version>` | becomes `<version>` — the one operation that changes it, because that is what was asked |
 
-Resolution is supported for:
-- **Docker Hub** — public images, no auth required
-- **GHCR** — `ghcr.io/` images
-- **Any OCI-compliant registry** — bearer auth discovered via `WWW-Authenticate` challenge
+Earlier versions resolved a moving tag to whatever concrete version tag carried
+the same digest, so that the file read `radarr:5.28.1@sha256:…` instead of
+`radarr:latest@sha256:…`. That was actively harmful: a concrete tag never
+moves, so the service silently stopped receiving updates the moment it was
+pinned. If you have services pinned by an older version, check for ones whose
+tag you did not choose yourself.
+
+The registry tag-listing code is still used to find upgrade candidates
+(`docker pin upgrade`, `schedule`, and duva); it just no longer decides what
+tag a pin is written under. Supported registries: **Docker Hub**, **GHCR**, and
+any **OCI-compliant registry** (bearer auth discovered via the
+`WWW-Authenticate` challenge).
+
+## Unknown flags are rejected
+
+Every command parses the flags it knows and treats anything else that looks
+like a flag as an error, rather than silently passing it through as a
+positional argument:
+
+```
+$ docker pin --all --dry-riun
+Error: unknown flag "--dry-riun"
+Usage: docker pin <service>
+       docker pin --all [--dry-run]
+```
+
+This matters because `--all` combined with a mistyped `--dry-run` would
+otherwise run for real against every service. A typo in a safety flag must
+never become a live run.
+
+## Dry-run summaries
+
+`--dry-run` on any `--all` command prints a summary table instead of changing
+anything. Rows are sorted alphabetically by service, so the output is stable
+between runs and easy to diff:
+
+```
+$ docker pin --all --dry-run
+Summary:
+SERVICE  ACTION  SHA
+alpha    pin     sha256:...
+mango    none    sha256:...
+web      pin     sha256:...
+```
+
+`ACTION` is `pin`/`upgrade`/`unpin` for services that would change, `none` for
+those already in the desired state, and `FAILED` for ones that errored.
 
 ### GHCR/OCI tag listing cost
 

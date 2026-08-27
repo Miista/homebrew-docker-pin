@@ -213,6 +213,19 @@ This means:
 
 ## Conventions
 
+- **Parse flags, then reject what's left over if it's flag-shaped.** Each
+  command consumes its known flags into variables (`--dry-run`/`-n`,
+  `--all`/`-a`, `--concurrency`/`-j`) and everything else falls through to a
+  `filtered` slice of positional args; `rejectUnknownFlags` then errors on any
+  of those starting with `-`. Never sniff `args[0] == "--all"` before checking
+  argument counts — that is what let `pin --all --dry-riun` drop the mistyped
+  flag and rewrite every compose file for real.
+- **`--all` dry-run summaries are sorted by service name** (`sort.Slice` on
+  results, `sort.Strings` on failures) in all three tables: `pinAll`,
+  `upgradeAll`, unpin's `runAll`. `upgradeAll`'s was otherwise in
+  goroutine-completion order, i.e. different every run. Covered by
+  `Test*_SummaryIsSorted` in both commands' `main_test.go`, which capture
+  stdout via the local `captureStdout` helper.
 - New subcommand on `docker pin` = new `case` in `cmd/docker-pin/main.go`'s `main()` switch.
 - New top-level plugin = new `cmd/docker-<name>` package; register in `Makefile` `BINARIES`,
   `.goreleaser.yaml` `builds`/`archives`, and the formula `install` line.

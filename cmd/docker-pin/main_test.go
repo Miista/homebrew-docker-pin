@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -348,6 +349,143 @@ func TestPinAll(t *testing.T) {
 	}
 	if strings.Count(got, "@sha256:") != 2 {
 		t.Errorf("expected 2 pinned services, got:\n%s", got)
+	}
+}
+
+// chdir switches to dir for the duration of the test (t.Chdir needs go1.24,
+// and this module targets 1.22).
+func chdir(t *testing.T, dir string) {
+	t.Helper()
+	prev, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chdir(prev) })
+}
+
+// captureStdout runs fn with os.Stdout redirected and returns what it wrote.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	orig := os.Stdout
+	os.Stdout = w
+	done := make(chan string)
+	go func() {
+		var b strings.Builder
+		io.Copy(&b, r)
+		done <- b.String()
+	}()
+	fn()
+	w.Close()
+	os.Stdout = orig
+	return <-done
+}
+
+// summaryOrder returns the service column of a "Summary:" table, in the order
+// printed.
+func summaryOrder(t *testing.T, out string) []string {
+	t.Helper()
+	var got []string
+	seenHeader := false
+	for _, line := range strings.Split(out, "\n") {
+		f := strings.Fields(line)
+		if len(f) == 0 {
+			continue
+		}
+		if f[0] == "SERVICE" {
+			seenHeader = true
+			continue
+		}
+		if seenHeader {
+			got = append(got, f[0])
+		}
+	}
+	return got
+}
+
+// The dry-run summary is a report a human reads and diffs between runs, so it
+// is sorted rather than left in compose-file order (pin) or goroutine
+// completion order (upgrade --all, which was nondeterministic).
+func TestPinAll_SummaryIsSorted(t *testing.T) {
+	dir := t.TempDir()
+	// deliberately not alphabetical in the file
+	if err := os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte(`services:
+  web:
+    image: nginx:1.25
+  alpha:
+    image: alpine:3.20
+  mango:
+    image: redis:7
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	chdir(t, dir)
+
+	d := dockerFuncs{
+		getDigest: func(ref string) (string, error) { return "sha256:" + ref, nil },
+		pull:      func(ref string) error { return nil },
+	}
+	out := captureStdout(t, func() {
+		if err := pinAll(d, true); err != nil {
+			t.Errorf("pinAll: %v", err)
+		}
+	})
+
+	got := summaryOrder(t, out)
+	want := []string{"alpha", "mango", "web"}
+	if len(got) != len(want) {
+		t.Fatalf("expected %d rows, got %d:\n%s", len(want), len(got), out)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("summary not sorted: got %v, want %v", got, want)
+		}
+	}
+}
+
+// upgrade --all resolves and pulls concurrently, so before sorting the
+// summary came out in goroutine-completion order -- a different order every
+// run, for a report meant to be diffed.
+func TestUpgradeAll_SummaryIsSorted(t *testing.T) {
+	dir := t.TempDir()
+	// `latest` keeps MovingPullTag off the network; not alphabetical in file.
+	if err := os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte(`services:
+  web:
+    image: nginx:latest@sha256:old1
+  alpha:
+    image: alpine:latest@sha256:old2
+  mango:
+    image: redis:latest@sha256:old3
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	chdir(t, dir)
+
+	d := dockerFuncs{
+		getDigest: func(ref string) (string, error) { return "sha256:new-" + ref, nil },
+		pull:      func(ref string) error { return nil },
+	}
+	out := captureStdout(t, func() {
+		if err := upgradeAll(d, true, 4); err != nil {
+			t.Errorf("upgradeAll: %v", err)
+		}
+	})
+
+	got := summaryOrder(t, out)
+	want := []string{"alpha", "mango", "web"}
+	if len(got) != len(want) {
+		t.Fatalf("expected %d rows, got %d:\n%s", len(want), len(got), out)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("summary not sorted: got %v, want %v", got, want)
+		}
 	}
 }
 
