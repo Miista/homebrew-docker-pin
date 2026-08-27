@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -110,5 +111,133 @@ func TestIndex_ShowsWhyItIsWaiting(t *testing.T) {
 	}
 	if !strings.Contains(body, "kind-major") {
 		t.Error("kind class missing")
+	}
+}
+
+// --- applying from the page ---------------------------------------------
+
+type fakeApplier struct {
+	applied []string
+	note    string
+	err     error
+}
+
+func (f *fakeApplier) Apply(service string) (string, error) {
+	f.applied = append(f.applied, service)
+	return f.note, f.err
+}
+
+func post(t *testing.T, s *Server, form string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/apply", strings.NewReader(form))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	return rec
+}
+
+func queueWith(applier Applier) *Server {
+	return &Server{
+		Source: fakeSource{pending: []watch.Pending{
+			{Service: "app", Kind: watch.KindTag, Candidate: "2.0.0", Bump: registry.KindMajor},
+		}},
+		Applier: applier,
+	}
+}
+
+func TestApply_RunsTheUpdate(t *testing.T) {
+	fa := &fakeApplier{note: "updated to 2.0.0"}
+	rec := post(t, queueWith(fa), "service=app")
+
+	if len(fa.applied) != 1 || fa.applied[0] != "app" {
+		t.Fatalf("applied = %v, want [app]", fa.applied)
+	}
+	// A redirect rather than a rendered page, so refreshing does not repeat
+	// the update.
+	if rec.Code != http.StatusSeeOther {
+		t.Errorf("status = %d, want 303", rec.Code)
+	}
+	if loc := rec.Header().Get("Location"); !strings.Contains(loc, "updated+to+2.0.0") {
+		t.Errorf("the result should be carried back to the page: %q", loc)
+	}
+}
+
+func TestApply_ReportsFailure(t *testing.T) {
+	fa := &fakeApplier{err: errors.New("recreate failed")}
+	rec := post(t, queueWith(fa), "service=app")
+
+	loc := rec.Header().Get("Location")
+	if !strings.Contains(loc, "level=error") {
+		t.Errorf("a failure should be marked as one: %q", loc)
+	}
+	if !strings.Contains(loc, "recreate+failed") {
+		t.Errorf("the cause should be carried back: %q", loc)
+	}
+}
+
+// The banner names the service and says what happened, so the page is not
+// silently identical after a click.
+func TestIndex_ShowsTheApplyResult(t *testing.T) {
+	s := queueWith(&fakeApplier{})
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+		"/?service=app&level=ok&message=updated+to+2.0.0", nil))
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "updated to 2.0.0") {
+		t.Errorf("the result should be shown:\n%s", body)
+	}
+}
+
+// A link a browser might prefetch must never restart a container.
+func TestApply_RefusesGET(t *testing.T) {
+	fa := &fakeApplier{}
+	s := queueWith(fa)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/apply?service=app", nil))
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("status = %d, want 405", rec.Code)
+	}
+	if len(fa.applied) != 0 {
+		t.Error("a GET must not apply anything")
+	}
+}
+
+func TestApply_RequiresAService(t *testing.T) {
+	fa := &fakeApplier{}
+	if rec := post(t, queueWith(fa), ""); rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+	if len(fa.applied) != 0 {
+		t.Error("nothing should have been applied")
+	}
+}
+
+// With no Applier the endpoint is absent, not merely refusing: an endpoint
+// that restarts containers should not exist on a duva meant only to report.
+func TestApply_EndpointAbsentWhenReadOnly(t *testing.T) {
+	s := queueWith(nil)
+	if rec := post(t, s, "service=app"); rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", rec.Code)
+	}
+}
+
+// And the button is not offered either, so the page does not suggest an
+// action that cannot happen.
+func TestIndex_NoButtonWhenReadOnly(t *testing.T) {
+	body := get(t, queueWith(nil), "/").Body.String()
+	if strings.Contains(body, "Apply") {
+		t.Errorf("a read-only queue should offer no Apply button:\n%s", body)
+	}
+}
+
+func TestIndex_ButtonWhenApplierPresent(t *testing.T) {
+	body := get(t, queueWith(&fakeApplier{}), "/").Body.String()
+	if !strings.Contains(body, "Apply") {
+		t.Error("the Apply button should be offered")
+	}
+	if !strings.Contains(body, `action="/apply"`) {
+		t.Error("the form should post to /apply")
 	}
 }

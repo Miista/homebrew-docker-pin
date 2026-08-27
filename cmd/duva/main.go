@@ -333,12 +333,69 @@ type store struct {
 	mu        sync.RWMutex
 	state     *watch.State
 	lastCheck time.Time
+	// act applies an update, or is nil when duva only reports.
+	act func(watch.Finding) Result
 }
 
 func (s *store) Pending() []watch.Pending {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.state.PendingList()
+}
+
+// Apply performs a queued update, so the page and a scheduled run reach the
+// container by the same path -- a click cannot do something an unattended run
+// would not.
+//
+// The queue row carries everything needed, so approving does not depend on a
+// check having run since the page was loaded.
+func (s *store) Apply(service string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	p, ok := s.state.Pending[service]
+	if !ok {
+		return "", fmt.Errorf("%s is not waiting for approval", service)
+	}
+	if s.act == nil {
+		return "", fmt.Errorf("this duva is not configured to apply updates (DUVA_APPLY)")
+	}
+
+	f := watch.Finding{
+		Service:       p.Service,
+		File:          p.File,
+		Image:         p.Image,
+		CurrentTag:    p.CurrentTag,
+		CurrentDigest: p.CurrentDigest,
+		Kind:          p.Kind,
+		Candidate:     p.Candidate,
+		Bump:          p.Bump,
+		Status:        watch.StatusAvailable,
+	}
+
+	res := s.act(f)
+	if res.Failed() {
+		return "", fmt.Errorf("%s failed: %v", res.FailedAt, res.Err)
+	}
+
+	// It reached the container, so it is no longer waiting.
+	delete(s.state.Pending, service)
+	delete(s.state.Notified, service)
+	if f.Kind == watch.KindDigest {
+		s.state.Baseline[service] = f.Candidate
+	}
+	if err := s.state.Save(stateFile); err != nil {
+		return "", fmt.Errorf("applied, but saving state failed: %w", err)
+	}
+
+	msg := fmt.Sprintf("updated to %s", res.Outcome.Tag)
+	if res.Note != "" {
+		msg += " (" + res.Note + ")"
+	}
+	if res.FailedAt != "" {
+		msg += fmt.Sprintf(" — but %s failed: %v", res.FailedAt, res.Err)
+	}
+	return msg, nil
 }
 
 func (s *store) LastCheck() string {
@@ -363,7 +420,7 @@ func serve(reg watch.Registry, out io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("loading state: %w", err)
 	}
-	s := &store{state: st}
+	s := &store{state: st, act: actor(cfg)}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -375,6 +432,10 @@ func serve(reg watch.Registry, out io.Writer) error {
 				Source:  s,
 				Host:    hostLabel(cfg),
 				Version: version,
+				// Read-only unless duva may act at all: an endpoint that
+				// restarts containers should not exist on an instance that
+				// is only meant to report.
+				Applier: applierFor(s, cfg),
 			}).Handler(),
 			ReadHeaderTimeout: 10 * time.Second,
 		}
@@ -499,4 +560,13 @@ func notifyFailed(cfg envConfig, f watch.Finding, res Result) {
 	if err := n.Send(title, body, notify.PriorityHigh); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: notification failed: %v\n", err)
 	}
+}
+
+// applierFor returns the store as an Applier when duva may act, and nil
+// otherwise, so the endpoint is absent rather than merely refusing.
+func applierFor(s *store, cfg envConfig) ui.Applier {
+	if !cfg.Apply {
+		return nil
+	}
+	return s
 }
