@@ -30,7 +30,6 @@ var version = "dev"
 type dockerFuncs struct {
 	getDigest        func(ref string) (string, error)
 	pull             func(ref string) error
-	resolve          func(baseImage, pullTag, digest, service string) string
 	listMatchingTags func(baseImage string, include, exclude *regexp.Regexp, current string) ([]string, error)
 	tagCreated       func(baseImage, tag string) (time.Time, error)
 }
@@ -38,7 +37,6 @@ type dockerFuncs struct {
 var realDocker = dockerFuncs{
 	getDigest:        docker.GetDigest,
 	pull:             docker.Pull,
-	resolve:          registry.ResolveOrWarn,
 	listMatchingTags: registry.ListMatchingTags,
 	tagCreated:       registry.TagCreated,
 }
@@ -298,16 +296,15 @@ func pinInFile(composeFile, service string, d dockerFuncs, dryRun bool) (pinOutc
 		fmt.Printf("Using digest from local image: %s\n", digest)
 	}
 
-	// Resolving `latest` to a version tag is purely cosmetic (the digest
-	// pinned is the same either way), so skip the registry round-trip in
-	// dry-run mode -- it's only worth paying for when we're about to write.
-	pinnedTag := tag
-	if tag == "latest" && !dryRun {
-		pinnedTag = d.resolve(baseImage, tag, digest, service)
-	}
-
-	pinned := fmt.Sprintf("%s:%s@%s", baseImage, pinnedTag, digest)
-	outcome := pinOutcome{OldRaw: raw, NewRaw: pinned, Tag: pinnedTag, Digest: digest}
+	// The tag is the tag to FOLLOW, not a record of what is running -- the
+	// digest is that record. So it is written back verbatim: a service on
+	// `latest` stays on `latest`, and only the digest after @sha256: moves.
+	// (Until 2026-08, plain pin resolved `latest` to whatever version tag
+	// carried the same digest. That silently converted "track latest" into
+	// "pinned to the 1.26 line forever" -- the concrete tag never moves, so
+	// the service stopped receiving updates the moment it was pinned.)
+	pinned := fmt.Sprintf("%s:%s@%s", baseImage, tag, digest)
+	outcome := pinOutcome{OldRaw: raw, NewRaw: pinned, Tag: tag, Digest: digest}
 	if dryRun {
 		return outcome, nil
 	}
