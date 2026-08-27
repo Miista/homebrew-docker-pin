@@ -74,8 +74,12 @@ ctx_sweep() {
   leftovers=$(find "${CTX_ROOT}" -maxdepth 1 -type d -name ".${CTX_SUITE}-*" 2>/dev/null || true)
   if [ -n "$leftovers" ]; then
     echo "   (sweeping ${CTX_SUITE} directories from a previous run)"
-    printf '%s\n' "$leftovers" | while read -r d; do [ -n "$d" ] && rm -rf "$d"; done
+    # `read` fails at EOF, and that status would be the loop's -- and, as the
+    # last statement here, ctx_sweep's own -- aborting the suite under set -e
+    # precisely when there was something to sweep.
+    printf '%s\n' "$leftovers" | while read -r d; do [ -n "$d" ] && rm -rf "$d"; done || true
   fi
+  return 0
 }
 
 # ctx_dir [suffix] -- a working directory that is removed on teardown.
@@ -223,54 +227,20 @@ ctx_statequery() {
   printf '%s' "$CTX_STATEQUERY"
 }
 
-# ctx_build_duva_image <tag> -- builds a duva image without pulling anything.
+# ctx_build_duva_image <tag> -- builds duva from the shipped Dockerfile.
 #
-# The shipped Dockerfile builds inside golang:1.22-alpine and lands on
-# distroless -- correct for a release, but it means every suite run depends on
-# Docker Hub being reachable and not rate-limiting. Here the binary is built on
-# the host (Go is already required to build what is under test) and copied into
-# a scratch image, so the suite pulls nothing.
+# The real one, deliberately: a suite that builds its own image tests an
+# artifact nobody ships, and the two drift. That is not hypothetical -- while
+# the test image was FROM scratch and the shipped one was not, duva gained a
+# runtime dependency on git and only the shipped image would have shown it.
 #
-# The result differs from the shipped image in one way that matters: no CA
-# bundle. Suites that need one mount it, which they do anyway to trust the test
-# registry's certificate.
+# The base images are pulled once and cached; after that this is a no-op.
 ctx_build_duva_image() {
-  local tag="$1" dir
-  dir="$(ctx_run_dir duvaimg)"
-
-  local flags=(-trimpath)
+  local tag="$1" cover=""
   if [ -n "${GOCOVERDIR:-}" ]; then
-    flags+=(-cover -coverpkg=./...)
-  else
-    flags+=(-ldflags "-s -w")
+    cover="--build-arg COVER=1"
   fi
-
-  (cd "$CTX_ROOT" && CGO_ENABLED=0 GOOS=linux go build "${flags[@]}" -o "$dir/duva" ./cmd/duva)
-  printf 'FROM scratch\nCOPY duva /duva\nENTRYPOINT ["/duva"]\nCMD ["serve"]\n' > "$dir/Dockerfile"
-  docker build -q -t "$tag" "$dir" >/dev/null
-  ctx_run_image "$tag"
-}
-
-# ctx_build_duva_applier <tag> -- a duva image that can apply updates.
-#
-# Applying needs the docker CLI, compose and git, so this cannot be FROM
-# scratch like the reporting image. It is built on docker:cli, which carries
-# all three, rather than assembling them: the point is to exercise duva
-# against the real binaries, and a hand-built image would only be a slower way
-# of getting the same ones.
-ctx_build_duva_applier() {
-  local tag="$1" dir
-  dir="$(ctx_run_dir applier)"
-
-  local flags=(-trimpath)
-  if [ -n "${GOCOVERDIR:-}" ]; then
-    flags+=(-cover -coverpkg=./...)
-  else
-    flags+=(-ldflags "-s -w")
-  fi
-  (cd "$CTX_ROOT" && CGO_ENABLED=0 GOOS=linux go build "${flags[@]}" -o "$dir/duva" ./cmd/duva)
-
-  printf 'FROM docker:cli\nCOPY duva /duva\nENTRYPOINT ["/duva"]\nCMD ["run"]\n' > "$dir/Dockerfile"
-  docker build -q -t "$tag" "$dir" >/dev/null
+  # shellcheck disable=SC2086
+  docker build -q $cover -f cmd/duva/Dockerfile -t "$tag" "$CTX_ROOT" >/dev/null
   ctx_run_image "$tag"
 }

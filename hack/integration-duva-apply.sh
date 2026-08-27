@@ -26,7 +26,7 @@ if [ -n "${GOCOVERDIR:-}" ]; then
   chmod 777 "$GOCOVERDIR"
   COVER_MOUNT="-v $GOCOVERDIR:/covdata -e GOCOVERDIR=/covdata"
 fi
-ctx_build_duva_applier "$IMAGE"
+ctx_build_duva_image "$IMAGE"
 
 pass=0; fail=0
 check() { # check <description> <0|1>
@@ -64,6 +64,11 @@ project() {
 # duva drives the host's daemon through the mounted socket, so every image
 # reference it writes or pulls has to be one that daemon can resolve. Reaching
 # the published port from inside the container needs the host gateway.
+#
+# The project is mounted twice: at /compose, which is where duva looks and is
+# not configurable, and at its host path, because `docker compose` runs against
+# the host's daemon and is handed the path duva saw -- so that path has to mean
+# the same thing on both sides.
 # shellcheck disable=SC2046,SC2086
 duva_apply() {
   docker run --rm \
@@ -72,9 +77,7 @@ duva_apply() {
     $COVER_MOUNT \
     -e DUVA_HOSTNAME=integration \
     -v /var/run/docker.sock:/var/run/docker.sock \
-    -v "$1:$1" -v "$2:/data" \
-    -w "$1" \
-    -e DUVA_COMPOSE_DIR="$1" \
+    -v "$1:/compose" -v "$1:$1" -v "$2:/data" \
     "$IMAGE" run 2>&1
 }
 

@@ -1,17 +1,20 @@
-# duva is a static Go binary that only reads: it parses compose files
-# and its config from mounted volumes and queries container registries over
-# HTTPS. It never touches the Docker socket, never shells out to the
-# docker CLI, and never mutates anything it's given — so the final image
-# needs nothing beyond the binary and CA certs for TLS.
+# duva watches pinned compose services and applies the updates each service's
+# policy allows: it pulls the image, rewrites the pin, recreates the container
+# and commits the change. That needs the docker CLI, compose and git at
+# runtime, so the final image cannot be distroless-static as it was while duva
+# only reported.
+#
+# docker:cli carries all three. Assembling them by hand would only be a slower
+# way of getting the same binaries.
 
 FROM golang:1.22-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-# COVER=1 builds a coverage-instrumented binary, so the e2e suites -- which
-# exercise duva as a real container against real registries -- can report
-# coverage that unit tests structurally cannot reach
+# COVER=1 builds a coverage-instrumented binary, so the integration suites --
+# which exercise duva as a real container against a real registry -- can
+# report coverage that unit tests structurally cannot reach
 # (go.dev/blog/integration-test-coverage). Run it with GOCOVERDIR pointed at a
 # mounted directory. Unset, this is an ordinary build.
 ARG COVER=0
@@ -20,14 +23,12 @@ RUN if [ "$COVER" = "1" ]; then \
     else \
       CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/duva ./cmd/duva; \
     fi
-# /data must exist in the image owned by nonroot: a named volume mounted
-# there inherits this ownership on first use, so `- duva-state:/data` works
-# without any user:/chown ceremony. (An absent dir would make Docker create
-# the volume root-owned, and nonroot couldn't write the state file.)
-RUN mkdir /out/data && chown 65532:65532 /out/data
 
-FROM gcr.io/distroless/static-debian12:nonroot
-COPY --from=build --chown=65532:65532 /out/data /data
+FROM docker:cli
+# /data must exist in the image: a named volume mounted there inherits this
+# directory's ownership on first use, so `- duva-state:/data` works without
+# any chown ceremony.
+RUN mkdir -p /data
 COPY --from=build /out/duva /duva
 # The approval queue. Reachable only if the operator publishes it; duva always
 # listens, since a container's port is invisible until someone maps it.
