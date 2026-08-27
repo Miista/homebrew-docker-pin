@@ -69,32 +69,44 @@ ctx_sweep() {
     docker rm -f $stale >/dev/null 2>&1 || true
   fi
 
-  # ctx_dir names every directory ".<suite>-<suffix>.XXXXXX" under CTX_ROOT.
-  local leftovers
-  leftovers=$(find "${CTX_ROOT}" -maxdepth 1 -type d -name ".${CTX_SUITE}-*" 2>/dev/null || true)
-  if [ -n "$leftovers" ]; then
-    echo "   (sweeping ${CTX_SUITE} directories from a previous run)"
-    # `read` fails at EOF, and that status would be the loop's -- and, as the
-    # last statement here, ctx_sweep's own -- aborting the suite under set -e
-    # precisely when there was something to sweep.
-    printf '%s\n' "$leftovers" | while read -r d; do [ -n "$d" ] && rm -rf "$d"; done || true
+  # Compose containers carry no CTX_LABEL: compose stamps its own labels on
+  # what it creates, and it is duva -- inside its own container -- that runs
+  # the `compose up`. A killed run leaves them behind with the directory still
+  # on disk, so each one is brought down from inside itself, where compose
+  # names the project exactly as it did originally.
+  local dir
+  for dir in "${CTX_ROOT}"/testbed/"${CTX_SUITE}"*/; do
+    [ -f "$dir/docker-compose.yml" ] || continue
+    (cd "$dir" && docker compose down --remove-orphans --volumes --timeout 3 >/dev/null 2>&1) || true
+  done
+
+  if [ -d "${CTX_ROOT}/testbed" ]; then
+    echo "   (sweeping ${CTX_SUITE} testbed from a previous run)"
+    rm -rf "${CTX_ROOT}/testbed/${CTX_SUITE}"*
   fi
   return 0
 }
 
 # ctx_dir [suffix] -- a working directory that is removed on teardown.
 #
-# Under the repo, not $TMPDIR. On macOS $TMPDIR lives beneath /var, which is a
-# symlink to /private/var, so docker records a resolved path in
+# Under the repo in testbed/, not $TMPDIR. On macOS $TMPDIR lives beneath /var,
+# which is a symlink to /private/var, so docker records a resolved path in
 # com.docker.compose.project.working_dir that never matches the unresolved one
 # a script holds -- and any lookup by working_dir silently finds nothing. The
 # repo path has no such indirection.
 #
+# The name is fixed, never mktemp'd. Compose derives a project name from the
+# directory holding the compose file, so a random directory means a project
+# name nothing can predict -- and therefore a project that teardown cannot
+# find and clean up. Runs are sequential and each scenario clears the previous
+# one, so there is nothing for a unique name to protect against.
+#
 # Safe to nest here because the repo root has no compose file of its own, so
 # compose.FindFile walking upwards cannot stray out of the project.
 ctx_dir() {
-  local dir
-  dir="$(mktemp -d "${CTX_ROOT}/.${CTX_SUITE}${1:+-$1}.XXXXXX")"
+  local dir="${CTX_ROOT}/testbed/${CTX_SUITE}${1:+-$1}"
+  rm -rf "$dir"
+  mkdir -p "$dir"
   CTX_DIRS+=("$dir")
   printf '%s' "$dir"
 }
@@ -111,8 +123,9 @@ ctx_run_image() {
 }
 
 ctx_run_dir() {
-  local dir
-  dir="$(mktemp -d "${CTX_ROOT}/.${CTX_SUITE}${1:+-$1}.XXXXXX")"
+  local dir="${CTX_ROOT}/testbed/${CTX_SUITE}${1:+-$1}"
+  rm -rf "$dir"
+  mkdir -p "$dir"
   CTX_RUN_DIRS+=("$dir")
   printf '%s' "$dir"
 }
@@ -163,9 +176,14 @@ ctx_network() {
 ctx_release() {
   local dir name ref net
 
+  # Run from inside the directory, so compose derives the same project name it
+  # derived on the way up -- the directory's own name, which is fixed. Naming
+  # the project explicitly from outside would need compose to be told where
+  # the file is too, and getting that wrong invents an empty project rather
+  # than failing.
   for dir in "${CTX_PROJECTS[@]:-}"; do
     [ -n "$dir" ] && [ -d "$dir" ] &&
-      (cd "$dir" && docker compose down --remove-orphans --timeout 3 >/dev/null 2>&1) || true
+      (cd "$dir" && docker compose down --remove-orphans --volumes --timeout 3 >/dev/null 2>&1) || true
   done
 
   for name in "${CTX_CONTAINERS[@]:-}"; do

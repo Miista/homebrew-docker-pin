@@ -68,8 +68,17 @@ var realDocker = Docker{
 		}
 		return "", fmt.Errorf("no repo digest for %s", ref)
 	},
+	// The project is named explicitly rather than derived. duva sees every
+	// compose file at the same mount point, so compose would name every stack
+	// after that mount and fail to find the container it was asked to replace
+	// -- starting a second one beside it. See project.go.
 	ComposeUp: func(composeFile, service string) error {
-		return run(exec.Command("docker", "compose", "-f", composeFile, "up", "-d", service))
+		name, err := project(realSelf)
+		if err != nil {
+			return err
+		}
+		return run(exec.Command("docker", "compose",
+			"--project-name", name, "-f", composeFile, "up", "-d", service))
 	},
 }
 
