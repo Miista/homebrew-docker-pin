@@ -21,15 +21,38 @@ ctx_init() {
   CTX_SUITE="$1"
   # Working directories live under the repo; see ctx_dir.
   CTX_ROOT="${CTX_ROOT:-$PWD}"
-  CTX_DIRS=()
-  CTX_PROJECTS=()
-  CTX_CONTAINERS=()
-  CTX_IMAGES=()
+  CTX_SCENARIO=""
+  CTX_RUN_DIRS=()
+  ctx_reset_registers
 
   # Anything left by a run that died before its trap fired.
   ctx_sweep
 
   trap ctx_teardown EXIT INT TERM
+}
+
+ctx_reset_registers() {
+  CTX_DIRS=()
+  CTX_PROJECTS=()
+  CTX_CONTAINERS=()
+  CTX_IMAGES=()
+  CTX_NETWORKS=()
+}
+
+# scenario <description> -- begin a scenario.
+#
+# Every scenario starts from nothing and leaves nothing: whatever the previous
+# one created -- containers, compose projects, images, networks, directories --
+# is removed before this one begins. Isolation is then a property of the
+# harness rather than a convention about picking distinct names, and no
+# scenario can pass because of state another left behind.
+#
+# The cost is small: the images are FROM scratch and the registry is on
+# loopback, so a full teardown and rebuild is a fraction of a second.
+scenario() {
+  ctx_release
+  CTX_SCENARIO="$1"
+  echo "== $1"
 }
 
 # ctx_sweep removes anything belonging to this suite -- containers by label,
@@ -71,6 +94,16 @@ ctx_dir() {
   printf '%s' "$dir"
 }
 
+# ctx_run_dir [suffix] -- like ctx_dir, but survives scenario boundaries and
+# is removed only when the run ends. For artefacts that are the same for every
+# scenario, such as the registry certificate.
+ctx_run_dir() {
+  local dir
+  dir="$(mktemp -d "${CTX_ROOT}/.${CTX_SUITE}${1:+-$1}.XXXXXX")"
+  CTX_RUN_DIRS+=("$dir")
+  printf '%s' "$dir"
+}
+
 # ctx_container <name> -- register a container for removal. Callers should also
 # pass --label "$CTX_LABEL=$CTX_SUITE" to docker run, so a killed run is still
 # sweepable.
@@ -100,30 +133,56 @@ ctx_image() {
   CTX_IMAGES+=("$1")
 }
 
-# ctx_teardown removes everything registered, in the order that avoids
-# complaints (projects, then containers, then images, then directories).
-ctx_teardown() {
-  local status=$?
-  trap - EXIT INT TERM
+# ctx_network <name> -- create a network and register it for removal.
+ctx_network() {
+  local name="$1"
+  docker network rm "$name" >/dev/null 2>&1 || true
+  docker network create --label "${CTX_LABEL}=${CTX_SUITE}" "$name" >/dev/null
+  CTX_NETWORKS+=("$name")
+}
 
-  local dir
+# ctx_release removes everything registered so far, without ending the run.
+# This is what a scenario boundary uses; teardown calls it too.
+ctx_release() {
+  local dir name ref net
+
   for dir in "${CTX_PROJECTS[@]:-}"; do
     [ -n "$dir" ] && [ -d "$dir" ] &&
       (cd "$dir" && docker compose down --remove-orphans --timeout 3 >/dev/null 2>&1) || true
   done
 
-  local name
   for name in "${CTX_CONTAINERS[@]:-}"; do
     [ -n "$name" ] && docker rm -f "$name" >/dev/null 2>&1 || true
   done
 
-  local ref
+  # Local images too: the daemon's cache outlives the registry, so an image
+  # left under a repo:tag a later scenario reuses would be read instead of
+  # the one that scenario pushed.
   for ref in "${CTX_IMAGES[@]:-}"; do
     [ -n "$ref" ] && docker rmi -f "$ref" >/dev/null 2>&1 || true
   done
 
+  for net in "${CTX_NETWORKS[@]:-}"; do
+    [ -n "$net" ] && docker network rm "$net" >/dev/null 2>&1 || true
+  done
+
   for dir in "${CTX_DIRS[@]:-}"; do
     [ -n "$dir" ] && rm -rf "$dir"
+  done
+
+  ctx_reset_registers
+}
+
+# ctx_teardown removes everything registered and ends the run.
+ctx_teardown() {
+  local status=$?
+  trap - EXIT INT TERM
+
+  ctx_release
+
+  local rundir
+  for rundir in "${CTX_RUN_DIRS[@]:-}"; do
+    [ -n "$rundir" ] && rm -rf "$rundir"
   done
 
   # Belt and braces: anything labelled for this suite that was never

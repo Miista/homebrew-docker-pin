@@ -49,19 +49,18 @@ check() { # check <description> <0|1>
 
 image_line() { grep -E '^\s+image:' "$1" | head -1 | sed 's/^[[:space:]]*image:[[:space:]]*//'; }
 
-# The shape this suite needs: one repo with a moving tag and two versions.
-echo "== publishing test images"
-push_versions app 1.0.0 1.0.1
+# --- moving tag stays moving -------------------------------------------
+scenario "pinning a service on a moving tag"
+registry_start
+ROOT="$(ctx_dir project)"
 push_moving app latest first
 
-# --- moving tag stays moving -------------------------------------------
 cat > "$ROOT/docker-compose.yml" <<EOF
 services:
   web:
     image: $(image_ref app latest)
 EOF
 
-echo "== pinning a service on a moving tag"
 (cd "$ROOT" && "$BIN" pin web) | sed 's/^/   | /'
 line=$(image_line "$ROOT/docker-compose.yml")
 echo "   -> $line"
@@ -74,13 +73,17 @@ not_resolved=0; [[ "$line" != *":1.0."* ]] && not_resolved=1
 check "latest is not resolved to a concrete version tag" "$not_resolved"
 
 # --- concrete tag is preserved too --------------------------------------
+scenario "pinning a service on a concrete tag"
+registry_start
+ROOT="$(ctx_dir project)"
+push_versions app 1.0.0
+
 cat > "$ROOT/docker-compose.yml" <<EOF
 services:
   web:
     image: $(image_ref app 1.0.0)
 EOF
 
-echo "== pinning a service on a concrete tag"
 (cd "$ROOT" && "$BIN" pin web) | sed 's/^/   | /'
 line=$(image_line "$ROOT/docker-compose.yml")
 echo "   -> $line"
@@ -89,6 +92,12 @@ concrete=0; [[ "$line" == *":1.0.0@sha256:"* ]] && concrete=1
 check "a concrete tag is preserved" "$concrete"
 
 # --- upgrade re-pins under the same tag ---------------------------------
+scenario "upgrading a service on a moving tag"
+registry_start
+ROOT="$(ctx_dir project)"
+push_versions app 1.0.1
+push_moving app latest first
+
 # Start from the moving tag pinned at its first generation, then move it.
 STALE=$(digest_of app latest)
 cat > "$ROOT/docker-compose.yml" <<EOF
@@ -98,7 +107,6 @@ services:
 EOF
 push_moving app latest second   # the tag now points somewhere else
 
-echo "== upgrading a service on a moving tag"
 (cd "$ROOT" && "$BIN" upgrade web) | sed 's/^/   | /'
 line=$(image_line "$ROOT/docker-compose.yml")
 echo "   -> $line"
@@ -110,7 +118,18 @@ moved=0; [[ "$line" != *"@$STALE" ]] && moved=1
 check "upgrade moved the digest" "$moved"
 
 # --- explicit version IS a tag change -----------------------------------
-echo "== upgrading with an explicit version"
+scenario "upgrading with an explicit version"
+registry_start
+ROOT="$(ctx_dir project)"
+push_versions app 1.0.1
+push_moving app latest first
+
+cat > "$ROOT/docker-compose.yml" <<EOF
+services:
+  web:
+    image: $(image_ref app latest)@$(digest_of app latest)
+EOF
+
 (cd "$ROOT" && "$BIN" upgrade web 1.0.1) | sed 's/^/   | /'
 line=$(image_line "$ROOT/docker-compose.yml")
 echo "   -> $line"
@@ -125,7 +144,8 @@ check "an explicit version becomes the new followed tag" "$explicit"
 #
 # NOT under $ROOT: compose.FindFile walks up, and $ROOT has its own compose
 # file from the tests above that it would find instead.
-echo "== pinning a running service whose tag has since moved"
+scenario "pinning a running service whose tag has since moved"
+registry_start
 PROJECT="$(ctx_dir running)"
 
 # This scenario needs a container that actually runs, so the image carries a
@@ -166,7 +186,9 @@ not_newer=0; [[ "$line" != *"@$NEW_DIGEST" ]] && not_newer=1
 check "does not pin the newer digest sitting on the tag" "$not_newer"
 
 # --- --all is exactly "pin every service", same rules ------------------
+# Same scenario: it reuses the running container from above deliberately.
 echo "== pin --all mixes running and not-running services"
+push_versions app 1.0.0
 cat > "$PROJECT/docker-compose.yml" <<EOF
 services:
   web:
@@ -188,10 +210,13 @@ all_local=0; [[ "$idle_line" == *":1.0.0@sha256:"* ]] && all_local=1
 check "--all pins the stopped service from the local image" "$all_local"
 
 # --- unknown flags must puke, not run ----------------------------------
+scenario "unknown flags are rejected"
+registry_start
+PROJECT="$(ctx_dir flags)"
+push_versions app 1.0.0
 # The bug this guards: `pin --all --dry-riun` matched --all before checking
 # the argument count, dropped the mistyped flag, and rewrote every compose
 # file for real. A typo in a safety flag must never become a live run.
-echo "== unknown flags are rejected"
 cat > "$PROJECT/docker-compose.yml" <<EOF
 services:
   web:

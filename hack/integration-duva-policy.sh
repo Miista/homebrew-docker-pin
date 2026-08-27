@@ -9,9 +9,15 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-ROOT="$PWD/.e2e-duva-policy"
-IMAGE=duva:e2e-policy
-NAME=duva-e2e-policy
+. hack/lib/context.sh
+. hack/lib/registry.sh
+
+# Everything created here is a context resource, torn down when this exits
+# however it exits; see hack/lib/context.sh.
+ctx_init integration-duva-policy
+
+IMAGE=duva:integration-policy
+NAME=integration-duva-policy
 PORT=8098
 
 echo "== building $IMAGE"
@@ -30,11 +36,12 @@ if [ -n "${GOCOVERDIR:-}" ]; then
 fi
 docker build -q $COVER_ARGS -f cmd/duva/Dockerfile -t "$IMAGE" . >/dev/null
 
-rm -rf "$ROOT" && mkdir -p "$ROOT/compose" "$ROOT/data"
+echo "== starting a local registry"
+registry_start
+
+ROOT="$(ctx_dir project)"
+mkdir -p "$ROOT/compose" "$ROOT/data"
 chmod 777 "$ROOT/data"
-# stop before rm: SIGKILL would lose the instrumented binary's coverage,
-# which is only flushed on a clean exit.
-trap 'docker stop -t 5 "$NAME" >/dev/null 2>&1 || true; docker rm -f "$NAME" >/dev/null 2>&1 || true; rm -rf "$ROOT"' EXIT
 
 pass=0; fail=0
 check() { # check <description> <0|1>
@@ -42,41 +49,43 @@ check() { # check <description> <0|1>
   else echo "   FAIL $1"; fail=$((fail + 1)); fi
 }
 
-# Real nginx tags. 1.26.0 is stale within its own line (1.26.3 exists) and
-# far behind the newest 1.x, so the same image gives both a patch and a minor
-# depending only on the include regex.
-STALE=sha256:41b194461e4bae16f9b25d68b0976ed4735b89ca625c89aad88e1c1c3b7e8860
+# The shape this suite needs: one repo whose 1.x line has both a newer patch
+# and a newer minor, so the same image gives a different verdict per service
+# depending only on its include regex and threshold.
+echo "== publishing test images"
+push_versions app 1.26.0 1.26.3 1.31.4
+STALE=$(digest_of app 1.26.0)
 
 cat > "$ROOT/compose/docker-compose.yml" <<EOF
 services:
   # patch available, duva.auto: patch -> applied unattended, never queued
   autopatch:
-    image: nginx:1.26.0@$STALE
+    image: $(image_ref app 1.26.0)@$STALE
     labels:
       duva.include: '^1\.26\.\d+\$'
       duva.auto: patch
 
   # minor available, duva.auto: patch -> exceeds the threshold, queued
   exceeds:
-    image: nginx:1.26.0@$STALE
+    image: $(image_ref app 1.26.0)@$STALE
     labels:
       duva.include: '^1\.\d+\.\d+\$'
       duva.auto: patch
 
   # patch available, no duva.auto -> defaults to none, queued
   defaultnone:
-    image: nginx:1.26.0@$STALE
+    image: $(image_ref app 1.26.0)@$STALE
     labels:
       duva.include: '^1\.26\.\d+\$'
 
   # unpinned: not watched at all
   loose:
-    image: nginx:1.26.0
+    image: $(image_ref app 1.26.0)
 EOF
 
 run() { docker run --rm $COVER_MOUNT -v "$ROOT/compose:/compose:ro" -v "$ROOT/data:/data" "$IMAGE" run 2>&1; }
 
-echo "== first check against real registry data"
+echo "== first check"
 out=$(run)
 echo "$out" | sed 's/^/   | /'
 
@@ -122,14 +131,14 @@ import json,sys
 d=json.load(open('$ROOT/data/duva.json'))
 sys.exit(0 if d['pending']['defaultnone'].get('bump') == 'patch' else 1)
 " && c=1
-check "a real 1.26.0 -> 1.26.3 classifies as patch" "$c"
+check "1.26.0 -> 1.26.3 classifies as patch" "$c"
 
 c=0; python3 -c "
 import json,sys
 d=json.load(open('$ROOT/data/duva.json'))
 sys.exit(0 if d['pending']['exceeds'].get('bump') == 'minor' else 1)
 " && c=1
-check "a real 1.26.0 -> 1.3x classifies as minor" "$c"
+check "1.26.0 -> 1.31.4 classifies as minor" "$c"
 
 # --- state survives a restart ------------------------------------------
 before=$(queued)
@@ -139,9 +148,10 @@ check "a second run leaves the queue unchanged" "$c"
 
 # --- the UI serves what the state holds --------------------------------
 echo "== serving the queue"
-docker run -d --name "$NAME" $COVER_MOUNT -p "$PORT:8080" \
-  -e DUVA_SCHEDULE="0 3 * * *" -e DUVA_UI_ADDR=":8080" -e DUVA_HOSTNAME=e2e \
-  -v "$ROOT/compose:/compose:ro" -v "$ROOT/data:/data" "$IMAGE" serve >/dev/null
+# shellcheck disable=SC2086
+ctx_run "$NAME" $COVER_MOUNT -p "$PORT:8080" \
+  -e DUVA_SCHEDULE="0 3 * * *" -e DUVA_UI_ADDR=":8080" -e DUVA_HOSTNAME=integration \
+  -v "$ROOT/compose:/compose:ro" -v "$ROOT/data:/data" "$IMAGE" serve
 for _ in $(seq 20); do curl -sf "http://localhost:$PORT/healthz" >/dev/null 2>&1 && break; sleep 0.5; done
 
 page=$(curl -s "http://localhost:$PORT/")
@@ -157,5 +167,5 @@ check "auto-applied service never appears in the queue" "$c"
 c=0; ! echo "$page" | grep -q ">loose<" && c=1
 check "unwatched service never appears in the queue" "$c"
 
-echo "== e2e: $pass passed, $fail failed"
+echo "== integration: $pass passed, $fail failed"
 exit $((fail > 0))
