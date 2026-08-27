@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -86,5 +87,75 @@ func TestRun_DryRun(t *testing.T) {
 	got := readCompose(t, f)
 	if !strings.Contains(got, "@sha256:abc123") {
 		t.Errorf("dry run should not modify the compose file, got:\n%s", got)
+	}
+}
+
+// captureStdout runs fn with os.Stdout redirected and returns what it wrote.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	orig := os.Stdout
+	os.Stdout = w
+	done := make(chan string)
+	go func() {
+		var b strings.Builder
+		io.Copy(&b, r)
+		done <- b.String()
+	}()
+	fn()
+	w.Close()
+	os.Stdout = orig
+	return <-done
+}
+
+// The dry-run summary is sorted rather than left in compose-file order, so it
+// is easy to scan and to diff between runs.
+func TestRunAll_SummaryIsSorted(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte(`services:
+  web:
+    image: nginx:1.25@sha256:aaa
+  alpha:
+    image: alpine:3.20@sha256:bbb
+  mango:
+    image: redis:7@sha256:ccc
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	chdir(t, dir)
+
+	out := captureStdout(t, func() {
+		if err := runAll(true); err != nil {
+			t.Errorf("runAll: %v", err)
+		}
+	})
+
+	var got []string
+	seenHeader := false
+	for _, line := range strings.Split(out, "\n") {
+		f := strings.Fields(line)
+		if len(f) == 0 {
+			continue
+		}
+		if f[0] == "SERVICE" {
+			seenHeader = true
+			continue
+		}
+		if seenHeader {
+			got = append(got, f[0])
+		}
+	}
+
+	want := []string{"alpha", "mango", "web"}
+	if len(got) != len(want) {
+		t.Fatalf("expected %d rows, got %d:\n%s", len(want), len(got), out)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("summary not sorted: got %v, want %v", got, want)
+		}
 	}
 }

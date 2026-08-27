@@ -41,7 +41,6 @@ func chdirTemp(t *testing.T, composeContent, pinContent string) string {
 	return wd
 }
 
-
 func fakeSys(goos string, euid int) sysFuncs {
 	return sysFuncs{
 		goos:      goos,
@@ -173,7 +172,7 @@ func TestScheduleRun_NoChangeSkipsHooks(t *testing.T) {
 		getDigest: func(ref string) (string, error) {
 			return digests[strings.SplitN(ref, ":", 2)[0]], nil
 		},
-		pull:    func(ref string) error { return nil },
+		pull: func(ref string) error { return nil },
 	}
 	sys := fakeSys("linux", 1000)
 	sys.composeUp = func(file, service string) error { t.Error("composeUp should not run"); return nil }
@@ -318,7 +317,10 @@ func TestScheduleRun_ComposeUpFailureRollsBack(t *testing.T) {
 		}
 		return nil
 	}
-	sys.shell = func(dir, command string, extraEnv []string) error { t.Error("on_change must not run after rollback"); return nil }
+	sys.shell = func(dir, command string, extraEnv []string) error {
+		t.Error("on_change must not run after rollback")
+		return nil
+	}
 
 	err := scheduleRun(d, sys, false)
 	if err == nil || !strings.Contains(err.Error(), "failed to upgrade: caddy") {
@@ -345,7 +347,10 @@ func TestScheduleRun_DryRun(t *testing.T) {
 	}
 	sys := fakeSys("linux", 1000)
 	sys.composeUp = func(file, service string) error { t.Error("composeUp must not run in dry run"); return nil }
-	sys.shell = func(dir, command string, extraEnv []string) error { t.Error("on_change must not run in dry run"); return nil }
+	sys.shell = func(dir, command string, extraEnv []string) error {
+		t.Error("on_change must not run in dry run")
+		return nil
+	}
 
 	if err := scheduleRun(d, sys, true); err != nil {
 		t.Fatalf("unexpected error: %v", err)

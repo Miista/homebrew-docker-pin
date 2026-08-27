@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"text/tabwriter"
 
@@ -125,6 +126,11 @@ func runAll(dryRun bool) error {
 	}
 
 	if dryRun {
+		// Compose-file order is arbitrary to a reader; alphabetical is easier
+		// to scan and to diff between runs.
+		sort.Slice(results, func(i, j int) bool { return results[i].service < results[j].service })
+		sort.Strings(failed)
+
 		fmt.Println()
 		fmt.Println("Summary:")
 		w := tabwriter.NewWriter(os.Stdout, 2, 8, 2, ' ', 0)

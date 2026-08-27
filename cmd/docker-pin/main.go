@@ -237,6 +237,11 @@ func pinAll(d dockerFuncs, dryRun bool) error {
 	}
 
 	if dryRun {
+		// Services come out in compose-file order; alphabetical is easier to
+		// scan and to diff between runs.
+		sort.Slice(results, func(i, j int) bool { return results[i].service < results[j].service })
+		sort.Strings(failed)
+
 		fmt.Println()
 		fmt.Println("Summary:")
 		w := tabwriter.NewWriter(os.Stdout, 2, 8, 2, ' ', 0)
@@ -651,6 +656,11 @@ func upgradeAll(d dockerFuncs, dryRun bool, concurrency int) error {
 	}
 
 	if dryRun {
+		// Results arrive in goroutine-completion order, so without this the
+		// summary is differently ordered every run.
+		sort.Slice(results, func(i, j int) bool { return results[i].service < results[j].service })
+		sort.Strings(failed)
+
 		fmt.Println()
 		fmt.Println("Summary:")
 		w := tabwriter.NewWriter(os.Stdout, 2, 8, 2, ' ', 0)
