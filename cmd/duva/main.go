@@ -64,23 +64,13 @@ const uiAddr = ":8080"
 // silently pins the old inode when the host file is replaced by rename (as
 // editors and docker-pin do).
 //
-// The paths are overridable with DUVA_COMPOSE_DIR / DUVA_STATE_FILE, so the
-// binary can be run outside a container -- against a scratch project while
-// developing, or on a host that mounts things elsewhere. In the container the
-// defaults are the contract and nothing needs setting.
-//
 // Package variables (not constants) so tests can point them at fixtures.
+// Nothing else changes them: duva runs in a container, where these paths are
+// the contract.
 var (
-	composeDir = envOr("DUVA_COMPOSE_DIR", "/compose")
-	stateFile  = envOr("DUVA_STATE_FILE", "/data/duva.json")
+	composeDir = "/compose"
+	stateFile  = "/data/duva.json"
 )
-
-func envOr(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
-}
 
 var realRegistry = watch.Registry{
 	ListMatchingTags: registry.ListMatchingTags,
