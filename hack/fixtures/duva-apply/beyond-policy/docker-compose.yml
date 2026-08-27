@@ -1,0 +1,35 @@
+# A major is available but duva.auto allows only patches, so duva leaves the
+# stack alone and queues it for a human.
+#
+# The image carries no digest: the suite pins it with docker pin before duva
+# runs, so the starting state is produced the same way a real stack's is.
+#
+# Paths are ${CTX_ROOT}/testbed/... because the docker daemon needs absolute
+# ones and only the repo's location differs per machine. Everything a suite
+# creates -- projects, state, certificates -- lives under testbed/.
+services:
+  app:
+    image: localhost:5555/app:1.0.0
+    labels:
+      duva.include: '^\d+\.\d+\.\d+$'
+      duva.auto: patch
+
+  # duva watches from inside the stack, as in production: it reads its own
+  # container's compose project label to know which project to recreate
+  # containers in. Outside a project there is no label and it refuses to guess.
+  duva:
+    image: duva:integration-apply
+    command: run
+    environment:
+      DUVA_HOSTNAME: integration
+    volumes:
+      # The socket, because applying recreates a container. The compose mount
+      # is read-write, because applying rewrites the file.
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${CTX_ROOT}/testbed/integration-duva-apply-work:/compose
+      - ${CTX_ROOT}/testbed/integration-duva-apply-data:/data
+      - ${CTX_ROOT}/testbed/integration-duva-apply-certs/cert.pem:/etc/ssl/certs/ca-certificates.crt:ro
+    extra_hosts:
+      # duva drives the HOST's daemon through the socket, so the registry has
+      # to be named as that daemon can resolve it: the published port.
+      - localhost:host-gateway
