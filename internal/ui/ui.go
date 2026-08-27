@@ -102,15 +102,15 @@ func display(p watch.Pending) string {
 	return p.Candidate
 }
 
-// reason is the label shown in the Kind column. Until classification lands
-// (M2), a stored reason is used as-is and anything else falls back to the
-// kind, so the column always says something true.
+// reason is the label shown in the Kind column: how big the change is for a
+// tag candidate, or "digest" for a moving tag, which has no version pair to
+// compare and so can never be classified.
 func reason(p watch.Pending) string {
-	if p.Reason != "" {
-		return strings.ToLower(p.Reason)
-	}
 	if p.Kind == watch.KindDigest {
 		return "digest"
+	}
+	if p.Bump != "" {
+		return strings.ToLower(string(p.Bump))
 	}
 	return "tag"
 }

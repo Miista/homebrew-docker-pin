@@ -18,6 +18,7 @@ import (
 
 	"github.com/Miista/homebrew-docker-pin/internal/compose"
 	"github.com/Miista/homebrew-docker-pin/internal/pin"
+	"github.com/Miista/homebrew-docker-pin/internal/registry"
 )
 
 // Registry is the registry access detection needs, seamed for tests.
@@ -76,6 +77,11 @@ type Finding struct {
 	Kind Kind
 	// Candidate is the newer tag (KindTag) or the new digest (KindDigest).
 	Candidate string
+	// Bump is how big the change is, for a tag candidate. A digest candidate
+	// has no version pair to compare, so it is left empty -- that is a
+	// different thing from registry.KindUnknown, which means there IS a pair
+	// and it could not be read.
+	Bump registry.Kind
 }
 
 // Available reports whether this finding is something a human could act on.
@@ -193,6 +199,7 @@ func constrained(f Finding, rules Rules, reg Registry) Finding {
 		return f
 	}
 	f.Status, f.Kind, f.Candidate = StatusAvailable, KindTag, c.Tag
+	f.Bump = registry.Classify(f.CurrentTag, c.Tag)
 	return f
 }
 

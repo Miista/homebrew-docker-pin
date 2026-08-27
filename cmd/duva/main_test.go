@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Miista/homebrew-docker-pin/internal/registry"
 	"github.com/Miista/homebrew-docker-pin/internal/watch"
 )
 
@@ -311,5 +312,41 @@ func TestReport(t *testing.T) {
 		if !bytes.Contains(buf.Bytes(), []byte(want)) {
 			t.Errorf("missing %q in:\n%s", want, buf.String())
 		}
+	}
+}
+
+// --- classification reaches the finding and the queue ---
+
+func TestClassification_TagCandidatesCarryABump(t *testing.T) {
+	setupFixture(t, pinnedConstrainedService) // pinned at 1.2.0
+	for _, tc := range []struct {
+		newest string
+		want   registry.Kind
+	}{
+		{"1.2.1", registry.KindPatch},
+		{"1.3.0", registry.KindMinor},
+		{"2.0.0", registry.KindMajor},
+	} {
+		st := watch.NewState()
+		f := check1(t, tagReg([]string{"1.2.0", tc.newest}), st)
+		if f.Bump != tc.want {
+			t.Errorf("1.2.0 -> %s: Bump = %q, want %q", tc.newest, f.Bump, tc.want)
+		}
+		if st.Pending["app"].Bump != tc.want {
+			t.Errorf("1.2.0 -> %s: pending Bump = %q, want %q", tc.newest, st.Pending["app"].Bump, tc.want)
+		}
+	}
+}
+
+// A moving tag has no version pair, so it carries no bump at all. That is a
+// different thing from a pair that could not be classified.
+func TestClassification_DigestCandidatesHaveNoBump(t *testing.T) {
+	setupFixture(t, pinnedUnconstrainedService)
+	st := watch.NewState()
+	st.Baseline["app"] = "sha256:old"
+
+	f := check1(t, digestReg("sha256:new"), st)
+	if f.Bump != "" {
+		t.Errorf("Bump = %q, want empty for a digest candidate", f.Bump)
 	}
 }
