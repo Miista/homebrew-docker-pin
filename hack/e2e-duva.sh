@@ -28,7 +28,20 @@ ROOT="$PWD/.e2e-duva"
 IMAGE=duva:e2e
 
 echo "== building $IMAGE"
-docker build -q -f cmd/duva/Dockerfile -t "$IMAGE" . >/dev/null
+# With GOCOVERDIR set, build and run an instrumented binary so this suite's
+# coverage merges with the unit tests' (go.dev/blog/integration-test-coverage).
+COVER_ARGS=""
+COVER_MOUNT=""
+if [ -n "${GOCOVERDIR:-}" ]; then
+  mkdir -p "$GOCOVERDIR"
+  chmod 777 "$GOCOVERDIR"
+  COVER_ARGS="--build-arg COVER=1"
+  # Run as the invoking user: the image is distroless-nonroot, which cannot
+  # write to a host-mounted directory. (On macOS the directory must also be
+  # under a path Docker Desktop shares -- /tmp is not one.)
+  COVER_MOUNT="-v $GOCOVERDIR:/covdata -e GOCOVERDIR=/covdata --user $(id -u):$(id -g)"
+fi
+docker build -q $COVER_ARGS -f cmd/duva/Dockerfile -t "$IMAGE" . >/dev/null
 
 echo "== discovering the two newest redis x.y.z-alpine tags"
 read -r OLD_TAG NEW_TAG < <(

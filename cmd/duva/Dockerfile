@@ -9,7 +9,17 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/duva ./cmd/duva
+# COVER=1 builds a coverage-instrumented binary, so the e2e suites -- which
+# exercise duva as a real container against real registries -- can report
+# coverage that unit tests structurally cannot reach
+# (go.dev/blog/integration-test-coverage). Run it with GOCOVERDIR pointed at a
+# mounted directory. Unset, this is an ordinary build.
+ARG COVER=0
+RUN if [ "$COVER" = "1" ]; then \
+      CGO_ENABLED=0 go build -cover -coverpkg=./... -trimpath -o /out/duva ./cmd/duva; \
+    else \
+      CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/duva ./cmd/duva; \
+    fi
 # /data must exist in the image owned by nonroot: a named volume mounted
 # there inherits this ownership on first use, so `- duva-state:/data` works
 # without any user:/chown ceremony. (An absent dir would make Docker create
