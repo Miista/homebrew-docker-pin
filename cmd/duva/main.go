@@ -122,19 +122,10 @@ type envConfig struct {
 	NtfyURL   string
 	NtfyTopic string
 	NtfyToken string
-	// Apply lets duva act on what policy allows rather than only reporting
-	// it. Off by default: a build that can write must not start writing on a
-	// host where nobody has said it may, and duva has spent its life as a
-	// notify-only tool.
-	Apply bool
 	// Push publishes duva's commits. Off by default: pushing needs a key in a
 	// container that already holds the docker socket, for value a human's
 	// next push delivers anyway.
 	Push bool
-	// RequireCleanRepo refuses to act when the compose file's repository has
-	// uncommitted changes, so duva cannot commit on top of a half-finished
-	// edit. On by default.
-	RequireCleanRepo bool
 }
 
 func loadEnvConfig() envConfig {
@@ -145,16 +136,14 @@ func loadEnvConfig() envConfig {
 		NtfyTopic: os.Getenv("DUVA_NTFY_TOPIC"),
 		NtfyToken: os.Getenv("DUVA_NTFY_TOKEN"),
 
-		Apply:            boolEnv("DUVA_APPLY", false),
-		Push:             boolEnv("DUVA_GIT_PUSH", false),
-		RequireCleanRepo: boolEnv("DUVA_REQUIRE_CLEAN_REPO", true),
+		Push: boolEnv("DUVA_GIT_PUSH", false),
 	}
 }
 
 // boolEnv reads a boolean environment variable, treating anything unset as
-// the given default and anything unrecognised as a hard error: a typo in
-// DUVA_APPLY silently meaning "no" is the kind of thing discovered months
-// later, when nothing has been applied and nobody knows why.
+// the given default and anything unrecognised as a hard error: a typo
+// silently meaning "no" is the kind of thing discovered months later, when
+// something has not been happening and nobody knows why.
 func boolEnv(key string, fallback bool) bool {
 	raw, ok := os.LookupEnv(key)
 	if !ok || raw == "" {
@@ -168,16 +157,16 @@ func boolEnv(key string, fallback bool) bool {
 	return v
 }
 
-// actor returns the function that applies an update, or nil when duva is only
-// reporting.
+// actor returns the function that applies an update.
+//
+// Acting is not optional: it is what duva is for, and what it may act on is
+// already decided per service by duva.auto -- which defaults to none, so a
+// service is only ever updated because someone said so. A global switch on
+// top would be a second brake on the same pedal.
 func actor(cfg envConfig) func(watch.Finding) Result {
-	if !cfg.Apply {
-		return nil
-	}
 	opts := applyOptions{
-		Host:             hostLabel(cfg),
-		Push:             cfg.Push,
-		RequireCleanRepo: cfg.RequireCleanRepo,
+		Host: hostLabel(cfg),
+		Push: cfg.Push,
 	}
 	return func(f watch.Finding) Result {
 		return apply(f, realDocker, realGit, opts)
@@ -359,10 +348,6 @@ func (s *store) Apply(service string) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("%s is not waiting for approval", service)
 	}
-	if s.act == nil {
-		return "", fmt.Errorf("this duva is not configured to apply updates (DUVA_APPLY)")
-	}
-
 	f := watch.Finding{
 		Service:       p.Service,
 		File:          p.File,
@@ -434,10 +419,7 @@ func serve(reg watch.Registry, out io.Writer) error {
 				Source:  s,
 				Host:    hostLabel(cfg),
 				Version: version,
-				// Read-only unless duva may act at all: an endpoint that
-				// restarts containers should not exist on an instance that
-				// is only meant to report.
-				Applier: applierFor(s, cfg),
+				Applier: s,
 			}).Handler(),
 			ReadHeaderTimeout: 10 * time.Second,
 		}
@@ -562,13 +544,4 @@ func notifyFailed(cfg envConfig, f watch.Finding, res Result) {
 	if err := n.Send(title, body, notify.PriorityHigh); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: notification failed: %v\n", err)
 	}
-}
-
-// applierFor returns the store as an Applier when duva may act, and nil
-// otherwise, so the endpoint is absent rather than merely refusing.
-func applierFor(s *store, cfg envConfig) ui.Applier {
-	if !cfg.Apply {
-		return nil
-	}
-	return s
 }

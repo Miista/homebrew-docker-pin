@@ -282,7 +282,7 @@ func TestApply_RefusesADirtyRepository(t *testing.T) {
 	r := newRecorder()
 	r.git.IsClean = func(string) (bool, error) { return false, nil }
 
-	res := apply(finding, r.docker, r.git, applyOptions{Host: "h", RequireCleanRepo: true})
+	res := apply(finding, r.docker, r.git, applyOptions{Host: "h"})
 
 	if res.Err == nil {
 		t.Fatal("expected a refusal")

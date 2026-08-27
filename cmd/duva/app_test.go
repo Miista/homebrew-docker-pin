@@ -668,21 +668,6 @@ func TestStoreApply_UnknownService(t *testing.T) {
 	}
 }
 
-// A read-only duva has no actor, so approving must refuse rather than panic.
-func TestStoreApply_RefusesWhenNotConfiguredToApply(t *testing.T) {
-	f := fixture.New(t)
-	s, svc := storeWith(t, f, newRecorder())
-	s.act = nil
-
-	_, err := s.Apply(svc.Name)
-	if err == nil {
-		t.Fatal("expected a refusal")
-	}
-	if !strings.Contains(err.Error(), "DUVA_APPLY") {
-		t.Errorf("the refusal should say how to enable it: %v", err)
-	}
-}
-
 // Approving a moving-tag update advances the baseline, since the container
 // now runs that digest.
 func TestStoreApply_MovingTagAdvancesTheBaseline(t *testing.T) {
