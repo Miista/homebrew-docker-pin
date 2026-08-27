@@ -7,7 +7,7 @@
 # docker:cli carries all three. Assembling them by hand would only be a slower
 # way of getting the same binaries.
 
-FROM golang:1.22-alpine AS build
+FROM golang:1.26-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
