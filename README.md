@@ -119,8 +119,8 @@ digest records what is actually running. A service on `latest` stays on
 `latest` and keeps tracking it:
 
 ```yaml
-  gatus:
-    image: ghcr.io/miista/gatus-wrapper:latest@sha256:...
+  web:
+    image: nginx:latest@sha256:...
 ```
 
 Only `docker pin upgrade <service> <version>` changes the tag, because that is
@@ -216,7 +216,7 @@ receives `PIN_SERVICE`, `PIN_OLD_IMAGE` and `PIN_NEW_IMAGE` in its
 environment, so a hook like
 
 ```yaml
-on_change: git add docker-compose.yml && git commit -m "optiplex/$PIN_SERVICE: upgrade to $PIN_NEW_IMAGE" && git push
+on_change: git add docker-compose.yml && git commit -m "$PIN_SERVICE: upgrade to $PIN_NEW_IMAGE" && git push
 ```
 
 produces one revertable commit per service upgrade. The full set of hook
