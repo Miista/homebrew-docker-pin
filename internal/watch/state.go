@@ -45,9 +45,9 @@ type Pending struct {
 	// Bump is how big the version change is, for a tag candidate. Empty for a
 	// digest candidate, which has no version pair to compare.
 	Bump registry.Kind `json:"bump,omitempty"`
-	// Reason says why this needs a human rather than being applied: the
-	// classification, or that it could not be classified.
-	Reason string `json:"reason"`
+	// Why says why this needs a human rather than being applied: the
+	// classification against the service's duva.auto threshold.
+	Why string `json:"why"`
 	// FirstSeen is when this candidate first showed up, so the UI can show
 	// how long something has been waiting. RFC 3339.
 	FirstSeen string `json:"first_seen"`
@@ -170,7 +170,7 @@ func (s *State) Reconcile(needApproval []Finding, seen []Finding, now string) {
 			Kind:          f.Kind,
 			Candidate:     f.Candidate,
 			Bump:          f.Bump,
-			Reason:        f.Reason,
+			Why:           f.Why,
 			FirstSeen:     firstSeen,
 		}
 	}

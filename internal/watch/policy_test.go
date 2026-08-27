@@ -1,0 +1,116 @@
+package watch
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/Miista/homebrew-docker-pin/internal/registry"
+)
+
+func TestParseAuto(t *testing.T) {
+	for _, tc := range []struct {
+		in      string
+		want    Auto
+		wantErr bool
+	}{
+		{"", AutoNone, false}, // label absent
+		{"none", AutoNone, false},
+		{"patch", AutoPatch, false},
+		{"minor", AutoMinor, false},
+		{"major", AutoMajor, false},
+
+		// Compose labels are hand-written; be forgiving about shape.
+		{"  patch  ", AutoPatch, false},
+		{"PATCH", AutoPatch, false},
+		{"Minor", AutoMinor, false},
+
+		// A typo must not quietly mean "none". Silently doing nothing is
+		// discovered months later, when an update that should have applied
+		// itself never did.
+		{"pathc", AutoNone, true},
+		{"all", AutoNone, true},
+		{"true", AutoNone, true},
+		{"yes", AutoNone, true},
+	} {
+		got, err := ParseAuto(tc.in)
+		if (err != nil) != tc.wantErr {
+			t.Errorf("ParseAuto(%q) error = %v, wantErr %v", tc.in, err, tc.wantErr)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("ParseAuto(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// The whole ladder, every bump against every threshold.
+func TestDecide_TagCandidates(t *testing.T) {
+	for _, tc := range []struct {
+		bump registry.Kind
+		auto Auto
+		want Decision
+	}{
+		// none: nothing is ever applied unattended.
+		{registry.KindPatch, AutoNone, DecideApprove},
+		{registry.KindMinor, AutoNone, DecideApprove},
+		{registry.KindMajor, AutoNone, DecideApprove},
+		{registry.KindUnknown, AutoNone, DecideApprove},
+
+		// patch: only patches.
+		{registry.KindPatch, AutoPatch, DecideAuto},
+		{registry.KindMinor, AutoPatch, DecideApprove},
+		{registry.KindMajor, AutoPatch, DecideApprove},
+		{registry.KindUnknown, AutoPatch, DecideApprove},
+
+		// minor: patches and minors.
+		{registry.KindPatch, AutoMinor, DecideAuto},
+		{registry.KindMinor, AutoMinor, DecideAuto},
+		{registry.KindMajor, AutoMinor, DecideApprove},
+		{registry.KindUnknown, AutoMinor, DecideApprove},
+
+		// major: everything, including what could not be classified.
+		{registry.KindPatch, AutoMajor, DecideAuto},
+		{registry.KindMinor, AutoMajor, DecideAuto},
+		{registry.KindMajor, AutoMajor, DecideAuto},
+		{registry.KindUnknown, AutoMajor, DecideAuto},
+	} {
+		f := Finding{Status: StatusAvailable, Kind: KindTag, Bump: tc.bump}
+		got, why := Decide(f, tc.auto)
+		if got != tc.want {
+			t.Errorf("bump=%s auto=%s: %s, want %s (why: %s)", tc.bump, tc.auto, got, tc.want, why)
+		}
+		if why == "" {
+			t.Errorf("bump=%s auto=%s: decision came with no explanation", tc.bump, tc.auto)
+		}
+	}
+}
+
+// An unclassifiable change is treated as a major: if duva cannot tell how big
+// a change is, it is not one to make unattended. The explanation should say
+// so rather than claiming it exceeded a threshold.
+func TestDecide_UnknownExplainsItself(t *testing.T) {
+	f := Finding{Status: StatusAvailable, Kind: KindTag, Bump: registry.KindUnknown}
+	_, why := Decide(f, AutoMinor)
+	if !strings.Contains(why, "could not be classified") {
+		t.Errorf("why = %q, want it to mention the failed classification", why)
+	}
+}
+
+// Choosing a moving tag is itself the decision to ride the edge, so a digest
+// move applies unless the service explicitly opted out.
+func TestDecide_MovingTag(t *testing.T) {
+	f := Finding{Status: StatusAvailable, Kind: KindDigest}
+	for _, tc := range []struct {
+		auto Auto
+		want Decision
+	}{
+		{AutoNone, DecideApprove},
+		{AutoPatch, DecideAuto},
+		{AutoMinor, DecideAuto},
+		{AutoMajor, DecideAuto},
+	} {
+		if got, why := Decide(f, tc.auto); got != tc.want {
+			t.Errorf("digest with auto=%s: %s, want %s (why: %s)", tc.auto, got, tc.want, why)
+		}
+	}
+}

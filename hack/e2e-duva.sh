@@ -79,7 +79,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(length).decode(errors="replace")
         with open(log_path, "a") as f:
-            f.write(self.headers.get("Title", "") + "|" + body + "\n")
+            # One notification, one line: bodies are multi-line now (the
+            # message says what changed AND why), and the tests count lines.
+            f.write(self.headers.get("Title", "") + "|" + body.replace("\n", " ") + "\n")
         self.send_response(200)
         self.end_headers()
     def log_message(self, *a):
@@ -105,12 +107,17 @@ check() { # $1 = description, $2 = condition (already evaluated as 0/1)
 state_value() {
   python3 -c '
 import json, sys
+# State is {"baseline": {...}, "notified": {...}, "pending": {...}}. A
+# constrained service records its last-notified TAG under notified; a moving
+# tag records its digest baseline under baseline. Look in both, since callers
+# just ask "what does duva remember about this service".
 try:
     with open(sys.argv[1]) as f:
         data = json.load(f)
 except (FileNotFoundError, json.JSONDecodeError):
     sys.exit(0)
-print(data.get(sys.argv[2], ""), end="")
+key = sys.argv[2]
+print(data.get("notified", {}).get(key) or data.get("baseline", {}).get(key, ""), end="")
 ' "$1" "$2"
 }
 
@@ -180,7 +187,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(length).decode(errors="replace")
         with open(log_path, "a") as f:
-            f.write(self.headers.get("Title", "") + "|" + body + "\n")
+            # One notification, one line: bodies are multi-line now (the
+            # message says what changed AND why), and the tests count lines.
+            f.write(self.headers.get("Title", "") + "|" + body.replace("\n", " ") + "\n")
         self.send_response(200)
         self.end_headers()
     def log_message(self, *a):
@@ -241,7 +250,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(length).decode(errors="replace")
         with open(log_path, "a") as f:
-            f.write(self.headers.get("Title", "") + "|" + body + "\n")
+            # One notification, one line: bodies are multi-line now (the
+            # message says what changed AND why), and the tests count lines.
+            f.write(self.headers.get("Title", "") + "|" + body.replace("\n", " ") + "\n")
         self.send_response(200)
         self.end_headers()
     def log_message(self, *a):

@@ -82,6 +82,20 @@ type Finding struct {
 	// different thing from registry.KindUnknown, which means there IS a pair
 	// and it could not be read.
 	Bump registry.Kind
+	// Decision is whether policy allows duva to apply this itself, and Why
+	// says so in one clause fit for a notification or a table cell.
+	Decision Decision
+	Why      string
+}
+
+// NeedsApproval reports whether this finding is waiting on a human.
+func (f Finding) NeedsApproval() bool {
+	return f.Status == StatusAvailable && f.Decision == DecideApprove
+}
+
+// AutoApplies reports whether policy allows duva to apply this itself.
+func (f Finding) AutoApplies() bool {
+	return f.Status == StatusAvailable && f.Decision == DecideAuto
 }
 
 // Available reports whether this finding is something a human could act on.
@@ -92,19 +106,54 @@ type Rules struct {
 	Include string
 	Exclude string
 	Delay   string
+	Auto    Auto
 }
 
-// Labels reads a service's duva.* rules.
+// knownLabels is every duva.* label a service may carry. Anything else under
+// the duva. prefix is a typo, and saying so beats ignoring it: a misspelled
+// duva.includ silently means "follow the moving tag instead", which looks
+// like duva working rather than duva misconfigured.
+var knownLabels = map[string]bool{
+	"duva.include": true,
+	"duva.exclude": true,
+	"duva.delay":   true,
+	"duva.auto":    true,
+}
+
+// Labels reads and validates a service's duva.* rules.
 func Labels(composeFile, service string) (Rules, error) {
 	l, err := compose.Labels(composeFile, service)
 	if err != nil {
 		return Rules{}, err
 	}
-	return Rules{
+	for k := range l {
+		if strings.HasPrefix(k, "duva.") && !knownLabels[k] {
+			return Rules{}, fmt.Errorf("unknown label %q", k)
+		}
+	}
+
+	auto, err := ParseAuto(l["duva.auto"])
+	if err != nil {
+		return Rules{}, err
+	}
+
+	r := Rules{
 		Include: l["duva.include"],
 		Exclude: l["duva.exclude"],
 		Delay:   l["duva.delay"],
-	}, nil
+		Auto:    auto,
+	}
+
+	// A delay bounds which candidate tags qualify, so it is meaningless
+	// without a set of candidates to choose from.
+	if r.Delay != "" && r.Include == "" {
+		return Rules{}, fmt.Errorf("duva.delay requires duva.include")
+	}
+	// Same for exclude: nothing to exclude from.
+	if r.Exclude != "" && r.Include == "" {
+		return Rules{}, fmt.Errorf("duva.exclude requires duva.include")
+	}
+	return r, nil
 }
 
 // Baseline records the last digest seen for each moving-tag service, so a
@@ -175,9 +224,14 @@ func service(rootFile, name string, reg Registry, baseline Baseline) Finding {
 	}
 
 	if rules.Include == "" {
-		return movingTag(f, reg, baseline)
+		f = movingTag(f, reg, baseline)
+	} else {
+		f = constrained(f, rules, reg)
 	}
-	return constrained(f, rules, reg)
+	if f.Available() {
+		f.Decision, f.Why = Decide(f, rules.Auto)
+	}
+	return f
 }
 
 // constrained handles a service with a duva.include regex: the newest matching

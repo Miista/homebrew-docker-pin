@@ -164,18 +164,21 @@ func check(cfg envConfig, reg watch.Registry, st *watch.State, now time.Time) ([
 	}
 	sort.Slice(findings, func(i, j int) bool { return findings[i].Service < findings[j].Service })
 
-	var available []watch.Finding
+	// Only what needs a human goes in the queue. An update policy allows
+	// duva to apply is not "waiting" for anything -- it is reported, and
+	// (from the next milestone) applied.
+	var needApproval []watch.Finding
 	for _, f := range findings {
-		if f.Available() {
-			available = append(available, f)
+		if f.NeedsApproval() {
+			needApproval = append(needApproval, f)
 		}
 	}
 
-	st.Reconcile(available, findings, now.UTC().Format(time.RFC3339))
+	st.Reconcile(needApproval, findings, now.UTC().Format(time.RFC3339))
 
 	// Notify once per candidate, not once per run.
-	for _, f := range available {
-		if st.Notified[f.Service] == f.Candidate {
+	for _, f := range findings {
+		if !f.Available() || st.Notified[f.Service] == f.Candidate {
 			continue
 		}
 		notifyAvailable(cfg, f)
@@ -216,7 +219,11 @@ func report(out io.Writer, findings []watch.Finding) {
 	for _, f := range findings {
 		switch f.Status {
 		case watch.StatusAvailable:
-			fmt.Fprintf(out, "%s: %s available\n", f.Service, f.Candidate)
+			verb := "needs approval"
+			if f.AutoApplies() {
+				verb = "would apply"
+			}
+			fmt.Fprintf(out, "%s: %s available — %s (%s)\n", f.Service, f.Candidate, verb, f.Why)
 		case watch.StatusSkipped:
 			fmt.Fprintf(out, "%s: %s, skipping\n", f.Service, f.Reason)
 		case watch.StatusError:
@@ -234,11 +241,16 @@ func notifyAvailable(cfg envConfig, f watch.Finding) {
 		return
 	}
 	n := notify.Ntfy{URL: cfg.NtfyURL, Topic: cfg.NtfyTopic, Token: cfg.NtfyToken}
-	title := fmt.Sprintf("duva@%s: %s has an update", hostLabel(cfg), f.Service)
+	what := "needs approval"
+	if f.AutoApplies() {
+		what = "will be applied"
+	}
+	title := fmt.Sprintf("duva@%s: %s %s", hostLabel(cfg), f.Service, what)
 
-	body := fmt.Sprintf("%s: newer tag %s is available", f.Service, f.Candidate)
+	body := fmt.Sprintf("%s: %s -> %s\n%s", f.Service, f.CurrentTag, f.Candidate, f.Why)
 	if f.Kind == watch.KindDigest {
-		body = fmt.Sprintf("%s: %s:%s now points at a new image", f.Service, f.Image, f.CurrentTag)
+		body = fmt.Sprintf("%s: %s:%s now points at a new image\n%s",
+			f.Service, f.Image, f.CurrentTag, f.Why)
 	}
 	if err := n.Send(title, body, notify.PriorityDefault); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: notification failed: %v\n", err)
