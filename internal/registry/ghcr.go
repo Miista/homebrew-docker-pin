@@ -4,63 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"sort"
 	"strings"
 	"time"
 )
 
 const ghcrMaxTagChecks = 20
-
-func resolveGHCR(image, digest string) (Result, error) {
-	path := strings.TrimPrefix(image, "ghcr.io/")
-	return resolveGHCRFromBase(path, digest, "https://ghcr.io")
-}
-
-func resolveGHCRFromBase(path, digest, baseURL string) (Result, error) {
-	client := &http.Client{Timeout: 15 * time.Second}
-
-	token, err := ghcrTokenFromBase(client, path, baseURL)
-	if err != nil {
-		return Result{}, fmt.Errorf("ghcr auth: %w", err)
-	}
-
-	tags, err := ghcrListTagsFromBase(client, token, path, baseURL)
-	if err != nil {
-		return Result{}, fmt.Errorf("ghcr tags: %w", err)
-	}
-
-	// Filter and sort version tags newest first by actual numeric version,
-	// not string specificity — a registry can have hundreds of version tags
-	// (e.g. linuxserver images), and only the top ghcrMaxTagChecks are
-	// checked, so the sort order determines whether the real match is ever
-	// examined.
-	var versionTags []string
-	for _, tag := range tags {
-		if isVersionTag(tag) {
-			versionTags = append(versionTags, tag)
-		}
-	}
-	sort.Slice(versionTags, func(i, j int) bool {
-		return CompareVersions(versionTags[i], versionTags[j]) > 0
-	})
-
-	result := Result{VersionTagsSeen: len(versionTags)}
-	for i, tag := range versionTags {
-		if i >= ghcrMaxTagChecks {
-			break
-		}
-		tagDigest, err := ghcrManifestDigestFromBase(client, token, path, tag, baseURL)
-		if err != nil {
-			result.ChecksFailed++
-			continue
-		}
-		if tagDigest == digest {
-			result.Tag = tag
-			return result, nil
-		}
-	}
-	return result, nil
-}
 
 // ghcrTagDigestFromBase fetches a single tag's manifest digest, with no pull
 // and no tag listing — one auth round trip plus one HEAD request.
