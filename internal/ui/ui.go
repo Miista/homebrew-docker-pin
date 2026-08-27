@@ -17,6 +17,7 @@ import (
 
 	"github.com/Miista/homebrew-docker-pin/internal/pin"
 	"github.com/Miista/homebrew-docker-pin/internal/watch"
+	"net/url"
 )
 
 //go:embed page.html
@@ -33,11 +34,25 @@ type Source interface {
 	LastCheck() string
 }
 
+// Applier applies one queued update. Approving from the page runs the same
+// path as an automatic update -- one way of applying, not two -- so a click
+// cannot do something an unattended run would not.
+type Applier interface {
+	// Apply performs the update for a service and reports what happened in
+	// one clause, or an error if it did not reach the container.
+	Apply(service string) (string, error)
+}
+
 // Server serves the queue.
 type Server struct {
 	Source  Source
 	Host    string // shown in the header, so several hosts are tellable apart
 	Version string
+	// Applier enables the Apply action. Nil leaves the page read-only and
+	// the endpoint unregistered -- not merely refusing, absent -- because an
+	// endpoint that triggers updates should not exist on a duva that is only
+	// meant to report.
+	Applier Applier
 }
 
 // Handler returns the routes: the page, and a health endpoint for whatever is
@@ -47,8 +62,41 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, "ok")
 	})
+	if s.Applier != nil {
+		mux.HandleFunc("/apply", s.apply)
+	}
 	mux.HandleFunc("/", s.index)
 	return mux
+}
+
+// apply runs one queued update and re-renders the queue. It is a POST because
+// it changes things: a link a browser might prefetch must never restart a
+// container.
+func (s *Server) apply(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "use POST", http.StatusMethodNotAllowed)
+		return
+	}
+	service := r.FormValue("service")
+	if service == "" {
+		http.Error(w, "no service given", http.StatusBadRequest)
+		return
+	}
+
+	note, err := s.Applier.Apply(service)
+	msg, level := note, "ok"
+	if err != nil {
+		msg, level = err.Error(), "error"
+	}
+
+	// Redirect rather than rendering in place, so a refresh does not repeat
+	// the update.
+	http.Redirect(w, r, "/?"+url.Values{
+		"service": {service},
+		"level":   {level},
+		"message": {msg},
+	}.Encode(), http.StatusSeeOther)
 }
 
 type row struct {
@@ -88,7 +136,20 @@ func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 		Host      string
 		Version   string
 		LastCheck string
-	}{rows, s.Host, s.Version, s.Source.LastCheck()}); err != nil {
+		CanApply  bool
+		Service   string
+		Level     string
+		Message   string
+	}{
+		Pending:   rows,
+		Host:      s.Host,
+		Version:   s.Version,
+		LastCheck: s.Source.LastCheck(),
+		CanApply:  s.Applier != nil,
+		Service:   r.URL.Query().Get("service"),
+		Level:     r.URL.Query().Get("level"),
+		Message:   r.URL.Query().Get("message"),
+	}); err != nil {
 		// Too late for an error page — the response is already going out.
 		return
 	}

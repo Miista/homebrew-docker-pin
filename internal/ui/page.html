@@ -43,6 +43,15 @@
   .kind-minor { color: var(--minor); }
   .kind-digest, .kind-unknown { color: var(--digest); }
   .arrow { color: var(--muted); padding: 0 .35rem; }
+  .banner { padding: .7rem .9rem; border-radius: 8px; margin-bottom: 1rem;
+            border: 1px solid var(--line); background: var(--card); font-size: .9rem; }
+  .banner-error { border-color: var(--major); }
+  .banner .who { font-weight: 600; }
+  button { font: inherit; font-size: .85rem; padding: .35rem .8rem; cursor: pointer;
+           border: 1px solid var(--line); border-radius: 6px;
+           background: var(--accent); color: #fff; font-weight: 600; }
+  button:hover { filter: brightness(1.08); }
+  form { margin: 0; }
   .empty { background: var(--card); border: 1px solid var(--line); border-radius: 8px;
            padding: 3rem 1rem; text-align: center; color: var(--muted); }
   footer { margin-top: 1.5rem; color: var(--muted); font-size: .8rem; }
@@ -57,11 +66,17 @@
     {{if .Pending}}<span class="count">{{len .Pending}} waiting</span>{{end}}
   </header>
 
+  {{if .Message}}
+  <div class="banner{{if eq .Level "error"}} banner-error{{end}}">
+    <span class="who">{{.Service}}</span> — {{.Message}}
+  </div>
+  {{end}}
+
   {{if .Pending}}
   <div class="wrap">
   <table>
     <thead>
-      <tr><th>Service</th><th>Current</th><th>Available</th><th>Kind</th><th>Since</th></tr>
+      <tr><th>Service</th><th>Current</th><th>Available</th><th>Kind</th><th>Since</th>{{if $.CanApply}}<th></th>{{end}}</tr>
     </thead>
     <tbody>
       {{range .Pending}}
@@ -76,6 +91,14 @@
         </td>
         <td><span class="kind kind-{{.Kind}}">{{.Kind}}</span>{{if .Why}}<div class="image">{{.Why}}</div>{{end}}</td>
         <td class="image">{{.FirstSeen}}</td>
+        {{if $.CanApply}}
+        <td>
+          <form method="post" action="/apply">
+            <input type="hidden" name="service" value="{{.Service}}">
+            <button type="submit">Apply</button>
+          </form>
+        </td>
+        {{end}}
       </tr>
       {{end}}
     </tbody>
