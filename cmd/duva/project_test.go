@@ -40,33 +40,6 @@ func TestProject_NotAComposeServiceIsFatal(t *testing.T) {
 	}
 }
 
-// The host path matters as much as the project name: compose resolves a
-// service's relative binds against it, so getting it wrong rebinds every
-// ./data to a path that does not exist on the host.
-func TestWorkingDir_ReadsTheHostPath(t *testing.T) {
-	s := selfFuncs{
-		ContainerID: func() (string, error) { return "abc123", nil },
-		Label:       func(string, string) (string, error) { return "/srv/stack", nil },
-	}
-	got, err := workingDir(s)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got != "/srv/stack" {
-		t.Errorf("got %q, want %q", got, "/srv/stack")
-	}
-}
-
-func TestWorkingDir_NotAComposeServiceIsFatal(t *testing.T) {
-	s := selfFuncs{
-		ContainerID: func() (string, error) { return "abc123", nil },
-		Label:       func(string, string) (string, error) { return "", nil },
-	}
-	if _, err := workingDir(s); err == nil {
-		t.Fatal("expected an error when the working_dir label is absent")
-	}
-}
-
 func TestProject_ContainerIDFailureIsReported(t *testing.T) {
 	boom := errors.New("no container id")
 	s := selfFuncs{

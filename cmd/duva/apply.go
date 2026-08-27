@@ -27,7 +27,7 @@ type Docker struct {
 	Pull func(ref string) error
 	// GetDigest returns the repo digest of a locally present image.
 	GetDigest func(ref string) (string, error)
-	// ComposeUp recreates one service from its compose file.
+	// ComposeUp recreates one service so it runs the newly pinned image.
 	ComposeUp func(composeFile, service string) error
 }
 
@@ -68,27 +68,7 @@ var realDocker = Docker{
 		}
 		return "", fmt.Errorf("no repo digest for %s", ref)
 	},
-	// The project is named explicitly rather than derived. duva sees every
-	// compose file at the same mount point, so compose would name every stack
-	// after that mount and fail to find the container it was asked to replace
-	// -- starting a second one beside it. See project.go.
-	ComposeUp: func(composeFile, service string) error {
-		name, err := project(realSelf)
-		if err != nil {
-			return err
-		}
-		// --project-directory is the HOST path of the stack, not duva's view of
-		// it. Compose resolves a service's relative paths against it, and hands
-		// the results to the host's daemon -- so anchoring it at duva's mount
-		// point would rebind every `./data` to a path that does not exist there.
-		dir, err := workingDir(realSelf)
-		if err != nil {
-			return err
-		}
-		return run(exec.Command("docker", "compose",
-			"--project-name", name, "--project-directory", dir,
-			"-f", composeFile, "up", "-d", service))
-	},
+	ComposeUp: recreateContainer,
 }
 
 var realGit = Git{
