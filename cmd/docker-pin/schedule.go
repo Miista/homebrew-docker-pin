@@ -72,12 +72,26 @@ func runSchedule(args []string, d dockerFuncs, sys sysFuncs) error {
 		fmt.Fprintln(os.Stderr, usage)
 		os.Exit(1)
 	}
+	// These take no arguments at all, so anything trailing is a typo -- and
+	// silently ignoring it would mean `schedule apply --dry-riun` installing
+	// the timer for real.
+	noArgs := func(sub string) {
+		if len(args) > 1 {
+			fmt.Fprintf(os.Stderr, "Error: unknown argument %q\n", args[1])
+			fmt.Fprintf(os.Stderr, "Usage: docker pin schedule %s\n", sub)
+			os.Exit(1)
+		}
+	}
+
 	switch args[0] {
 	case "apply":
+		noArgs("apply")
 		return scheduleApply(sys)
 	case "status":
+		noArgs("status")
 		return scheduleStatus(sys)
 	case "remove":
+		noArgs("remove")
 		return scheduleRemove(sys)
 	case "run":
 		dryRun := false

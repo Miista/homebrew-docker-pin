@@ -51,22 +51,36 @@ func main() {
 		return
 	}
 
-	dryRun := false
+	dryRun, all := false, false
 	filtered := args[:0:0]
 	for _, a := range args {
-		if a == "--dry-run" || a == "-n" {
+		switch a {
+		case "--dry-run", "-n":
 			dryRun = true
-			continue
+		case "--all", "-a":
+			all = true
+		default:
+			filtered = append(filtered, a)
 		}
-		filtered = append(filtered, a)
 	}
 	args = filtered
-	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, help.UnpinUsage)
-		os.Exit(1)
+
+	// Anything flag-shaped left over is a typo. Silently ignoring it meant
+	// `unpin --all --dry-riun` stripping every digest in the repo for real,
+	// because --all was matched before the argument count was checked.
+	for _, a := range args {
+		if len(a) > 1 && strings.HasPrefix(a, "-") {
+			fmt.Fprintf(os.Stderr, "Error: unknown flag %q\n", a)
+			fmt.Fprintln(os.Stderr, help.UnpinUsage)
+			os.Exit(1)
+		}
 	}
 
-	if args[0] == "--all" || args[0] == "-a" {
+	if all {
+		if len(args) > 0 {
+			fmt.Fprintln(os.Stderr, "Error: --all cannot be combined with a service name")
+			os.Exit(1)
+		}
 		if err := runAll(dryRun); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)

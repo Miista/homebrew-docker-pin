@@ -153,5 +153,29 @@ check "--all pins the running service from its container" "$all_running"
 all_local=0; [[ "$idle_line" == nginx:1.26.3@sha256:* ]] && all_local=1
 check "--all pins the stopped service from the local image" "$all_local"
 
+# --- unknown flags must puke, not run ----------------------------------
+# The bug this guards: `pin --all --dry-riun` matched --all before checking
+# the argument count, dropped the mistyped flag, and rewrote every compose
+# file for real. A typo in a safety flag must never become a live run.
+echo "== unknown flags are rejected"
+cat > "$PROJECT/docker-compose.yml" <<'EOF'
+services:
+  web:
+    image: nginx:1.26.3
+EOF
+before=$(cat "$PROJECT/docker-compose.yml")
+
+for bad in "pin --all --dry-riun" "pin web --dry-riun" "pin --typo" "pin upgrade --all --dry-riun" "pin upgrade web --dry-riun"; do
+  # shellcheck disable=SC2086
+  if (cd "$PROJECT" && "$BIN" $bad) >/dev/null 2>&1; then
+    check "\`$bad\` exits non-zero" 0
+  else
+    check "\`$bad\` exits non-zero" 1
+  fi
+done
+
+unchanged=0; [ "$before" = "$(cat "$PROJECT/docker-compose.yml")" ] && unchanged=1
+check "no compose file was touched by any of them" "$unchanged"
+
 echo "== e2e: $pass passed, $fail failed"
 exit $((fail > 0))
