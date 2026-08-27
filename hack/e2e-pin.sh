@@ -128,5 +128,30 @@ check "pins the digest the container is running" "$ran"
 not_newer=0; [[ "$line" != *"@$NEW_DIGEST" ]] && not_newer=1
 check "does not pin the newer digest sitting on the tag" "$not_newer"
 
+# --- --all is exactly "pin every service", same rules ------------------
+# --all is a convenience for running pin against each service, so it must use
+# the same digest source: running container first. Here `web` is up on the old
+# image (tag since moved) and `idle` was never started.
+echo "== pin --all mixes running and not-running services"
+cat > "$PROJECT/docker-compose.yml" <<EOF
+services:
+  web:
+    image: nginx:pinsandbox
+  idle:
+    image: nginx:1.26.3
+EOF
+
+(cd "$PROJECT" && "$BIN" pin --all) | sed 's/^/   | /'
+web_line=$(grep -A1 '^  web:' "$PROJECT/docker-compose.yml" | grep image | sed 's/.*image:[[:space:]]*//')
+idle_line=$(grep -A1 '^  idle:' "$PROJECT/docker-compose.yml" | grep image | sed 's/.*image:[[:space:]]*//')
+echo "   -> web:  $web_line"
+echo "   -> idle: $idle_line"
+
+all_running=0; [[ "$web_line" == *"@$OLD_DIGEST" ]] && all_running=1
+check "--all pins the running service from its container" "$all_running"
+
+all_local=0; [[ "$idle_line" == nginx:1.26.3@sha256:* ]] && all_local=1
+check "--all pins the stopped service from the local image" "$all_local"
+
 echo "== e2e: $pass passed, $fail failed"
 exit $((fail > 0))
