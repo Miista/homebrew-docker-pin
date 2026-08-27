@@ -21,10 +21,6 @@ ctx_init() {
   CTX_SUITE="$1"
   # Working directories live under the repo; see ctx_dir.
   CTX_ROOT="${CTX_ROOT:-$PWD}"
-  # Exported for the fixtures: the docker daemon needs absolute paths, and the
-  # repo's location is the only part of them that differs per machine, so it is
-  # the one value a fixture interpolates.
-  export CTX_ROOT
   CTX_SCENARIO=""
   CTX_RUN_DIRS=()
   CTX_RUN_IMAGES=()
@@ -64,30 +60,27 @@ scenario() {
 # working directories by name prefix -- regardless of which run created them.
 # A run killed outright never fires its trap, so the next one cleans up after
 # it rather than accumulating.
+# Cleaning up is two operations: bring down every stack in the testbed, then
+# delete the testbed. Nothing has to be remembered as it is created, because
+# everything a suite builds lives in one known place under a name derived from
+# its directory -- which is also the name compose gives the project.
 ctx_sweep() {
-  local stale
-  stale=$(docker ps -aq --filter "label=${CTX_LABEL}=${CTX_SUITE}" 2>/dev/null || true)
-  if [ -n "$stale" ]; then
-    echo "   (sweeping ${CTX_LABEL}=${CTX_SUITE} containers from a previous run)"
-    # shellcheck disable=SC2086
-    docker rm -f $stale >/dev/null 2>&1 || true
-  fi
-
-  # Compose containers carry no CTX_LABEL: compose stamps its own labels on
-  # what it creates, and it is duva -- inside its own container -- that runs
-  # the `compose up`. A killed run leaves them behind with the directory still
-  # on disk, so each one is brought down from inside itself, where compose
-  # names the project exactly as it did originally.
   local dir
   for dir in "${CTX_ROOT}"/testbed/"${CTX_SUITE}"*/; do
     [ -f "$dir/docker-compose.yml" ] || continue
     (cd "$dir" && docker compose down --remove-orphans --volumes --timeout 3 >/dev/null 2>&1) || true
   done
 
-  if [ -d "${CTX_ROOT}/testbed" ]; then
-    echo "   (sweeping ${CTX_SUITE} testbed from a previous run)"
-    rm -rf "${CTX_ROOT}/testbed/${CTX_SUITE}"*
+  # Containers a suite started outside compose -- the registry, the ntfy fake
+  # -- carry the suite label instead.
+  local stale
+  stale=$(docker ps -aq --filter "label=${CTX_LABEL}=${CTX_SUITE}" 2>/dev/null || true)
+  if [ -n "$stale" ]; then
+    # shellcheck disable=SC2086
+    docker rm -f $stale >/dev/null 2>&1 || true
   fi
+
+  rm -rf "${CTX_ROOT}/testbed/${CTX_SUITE}"*
   return 0
 }
 
