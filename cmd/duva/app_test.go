@@ -2,6 +2,7 @@ package main
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -446,5 +447,137 @@ func TestApp_BreakingTheRegistry_IsAnErrorThatExplainsItself(t *testing.T) {
 	}
 	if got.Reason == "" {
 		t.Error("an error finding must carry the cause")
+	}
+}
+
+// --- applying what policy allows ----------------------------------------
+//
+// These drive the whole application with the acting half wired in, so what is
+// asserted is the rule -- "duva applies what it may, and stops waiting for it"
+// -- rather than the transaction's internals, which transaction_test covers.
+
+// appApply is app() with an actor, so the run applies rather than only
+// reporting. docker and git are faked; everything else is real.
+func appApply(t *testing.T, project string, reg fixture.RegistryAnswers, r *recorder) ([]watch.Finding, *watch.State) {
+	t.Helper()
+	a := newApp(t, project)
+	composeDir, stateFile = filepath.Dir(a.project), a.state
+
+	st, err := watch.LoadState(a.state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	act := func(f watch.Finding) Result {
+		return apply(f, r.docker, r.git, applyOptions{Host: "testhost"})
+	}
+	findings, err := checkWith(envConfig{}, watch.Registry{
+		ListMatchingTags: reg.ListMatchingTags,
+		RemoteDigest:     reg.RemoteDigest,
+		TagCreated:       reg.TagCreated,
+	}, st, time.Now(), act, r.docker, r.git)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Save(a.state); err != nil {
+		t.Fatal(err)
+	}
+	return findings, st
+}
+
+// An update policy allows is applied, and then it is not waiting for anyone.
+func TestApp_AutoApplicableUpdateIsApplied(t *testing.T) {
+	f := fixture.New(t)
+	svc := f.WithAuto(f.WithUpdate(f.PinnedService(), fixture.BumpPatch), "patch")
+	r := newRecorder()
+
+	findings, st := appApply(t, f.Project(svc), f.Registry(svc), r)
+
+	if !r.did("up") {
+		t.Errorf("the container should have been recreated: %v", r.calls)
+	}
+	if !r.did("commit") {
+		t.Errorf("the change should have been committed: %v", r.calls)
+	}
+	got := findingFor(t, findings, svc.Name)
+	if got.Available() {
+		t.Errorf("an applied update is no longer available: %+v", got)
+	}
+	if len(st.Pending) != 0 {
+		t.Errorf("nothing should be queued: %+v", st.Pending)
+	}
+}
+
+// An update needing approval must not be applied behind the human's back.
+func TestApp_ApprovalNeededIsNotApplied(t *testing.T) {
+	f := fixture.New(t)
+	svc := f.WithAuto(f.WithUpdate(f.PinnedService(), fixture.BumpMajor), "patch")
+	r := newRecorder()
+
+	_, st := appApply(t, f.Project(svc), f.Registry(svc), r)
+
+	if r.did("pull") || r.did("up") {
+		t.Errorf("nothing should have been applied: %v", r.calls)
+	}
+	if _, queued := st.Pending[svc.Name]; !queued {
+		t.Error("it should still be waiting for a human")
+	}
+}
+
+// A failed apply leaves the service reported as an error rather than quietly
+// looking up to date, so the next run tries again.
+func TestApp_FailedApplyIsReportedAsAnError(t *testing.T) {
+	f := fixture.New(t)
+	svc := f.WithAuto(f.WithUpdate(f.PinnedService(), fixture.BumpPatch), "patch")
+	r := newRecorder()
+	r.docker.ComposeUp = func(string, string) error { return errBoundary }
+
+	findings, _ := appApply(t, f.Project(svc), f.Registry(svc), r)
+
+	got := findingFor(t, findings, svc.Name)
+	if got.Status != watch.StatusError {
+		t.Errorf("Status = %q, want error (%s)", got.Status, got.Reason)
+	}
+	if !strings.Contains(got.Reason, string(StepRecreate)) {
+		t.Errorf("the reason should name the step that failed: %q", got.Reason)
+	}
+}
+
+// A moving tag's baseline advances only when the update is applied. Advancing
+// it on detection would mean a move that could not be applied is forgotten,
+// and the service silently stops being offered the update it needs.
+func TestApp_BaselineAdvancesOnlyWhenApplied(t *testing.T) {
+	f := fixture.New(t)
+	svc := f.WithAuto(f.MovingTagService(false), "patch")
+	a := newApp(t, f.Project(svc))
+
+	// First run records where the tag points.
+	composeDir, stateFile = filepath.Dir(a.project), a.state
+	st, err := watch.LoadState(a.state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := check(envConfig{}, watch.Registry{
+		RemoteDigest: f.Registry(svc).RemoteDigest,
+	}, st, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	baseline := st.Baseline[svc.Name]
+
+	// The tag moves, and the apply fails.
+	moved := svc
+	moved.AvailableDigest = f.Digest()
+	r := newRecorder()
+	r.docker.ComposeUp = func(string, string) error { return errBoundary }
+
+	if _, err := checkWith(envConfig{}, watch.Registry{
+		RemoteDigest: f.Registry(moved).RemoteDigest,
+	}, st, time.Now(), func(fd watch.Finding) Result {
+		return apply(fd, r.docker, r.git, applyOptions{Host: "h"})
+	}, r.docker, r.git); err != nil {
+		t.Fatal(err)
+	}
+
+	if st.Baseline[svc.Name] != baseline {
+		t.Error("a failed apply must not advance the baseline, or the move is forgotten")
 	}
 }

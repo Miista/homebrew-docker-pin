@@ -42,6 +42,7 @@ import (
 	"github.com/Miista/homebrew-docker-pin/internal/registry"
 	"github.com/Miista/homebrew-docker-pin/internal/ui"
 	"github.com/Miista/homebrew-docker-pin/internal/watch"
+	"strconv"
 )
 
 var version = "dev"
@@ -118,6 +119,19 @@ type envConfig struct {
 	// UIAddr is the listen address for the approval queue, e.g. ":8080".
 	// Empty disables the UI entirely — no listener at all.
 	UIAddr string
+	// Apply lets duva act on what policy allows rather than only reporting
+	// it. Off by default: a build that can write must not start writing on a
+	// host where nobody has said it may, and duva has spent its life as a
+	// notify-only tool.
+	Apply bool
+	// Push publishes duva's commits. Off by default: pushing needs a key in a
+	// container that already holds the docker socket, for value a human's
+	// next push delivers anyway.
+	Push bool
+	// RequireCleanRepo refuses to act when the compose file's repository has
+	// uncommitted changes, so duva cannot commit on top of a half-finished
+	// edit. On by default.
+	RequireCleanRepo bool
 }
 
 func loadEnvConfig() envConfig {
@@ -128,6 +142,43 @@ func loadEnvConfig() envConfig {
 		NtfyTopic: os.Getenv("DUVA_NTFY_TOPIC"),
 		NtfyToken: os.Getenv("DUVA_NTFY_TOKEN"),
 		UIAddr:    os.Getenv("DUVA_UI_ADDR"),
+
+		Apply:            boolEnv("DUVA_APPLY", false),
+		Push:             boolEnv("DUVA_GIT_PUSH", false),
+		RequireCleanRepo: boolEnv("DUVA_REQUIRE_CLEAN_REPO", true),
+	}
+}
+
+// boolEnv reads a boolean environment variable, treating anything unset as
+// the given default and anything unrecognised as a hard error: a typo in
+// DUVA_APPLY silently meaning "no" is the kind of thing discovered months
+// later, when nothing has been applied and nobody knows why.
+func boolEnv(key string, fallback bool) bool {
+	raw, ok := os.LookupEnv(key)
+	if !ok || raw == "" {
+		return fallback
+	}
+	v, err := strconv.ParseBool(raw)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %s=%q is not a boolean\n", key, raw)
+		os.Exit(1)
+	}
+	return v
+}
+
+// actor returns the function that applies an update, or nil when duva is only
+// reporting.
+func actor(cfg envConfig) func(watch.Finding) Result {
+	if !cfg.Apply {
+		return nil
+	}
+	opts := applyOptions{
+		Host:             hostLabel(cfg),
+		Push:             cfg.Push,
+		RequireCleanRepo: cfg.RequireCleanRepo,
+	}
+	return func(f watch.Finding) Result {
+		return apply(f, realDocker, realGit, opts)
 	}
 }
 
@@ -153,6 +204,13 @@ func hostLabel(cfg envConfig) string {
 // unattended arrives with the policy work; until then duva reports and does
 // not act, which is what it has always done.
 func check(cfg envConfig, reg watch.Registry, st *watch.State, now time.Time) ([]watch.Finding, error) {
+	return checkWith(cfg, reg, st, now, nil, Docker{}, Git{})
+}
+
+// checkWith is check with the acting half injectable, so tests can drive it
+// without a docker daemon. act is nil when duva only reports.
+func checkWith(cfg envConfig, reg watch.Registry, st *watch.State, now time.Time,
+	act func(watch.Finding) Result, d Docker, g Git) ([]watch.Finding, error) {
 	rootFile, err := compose.FindFile(composeDir)
 	if err != nil {
 		return nil, err
@@ -164,9 +222,20 @@ func check(cfg envConfig, reg watch.Registry, st *watch.State, now time.Time) ([
 	}
 	sort.Slice(findings, func(i, j int) bool { return findings[i].Service < findings[j].Service })
 
-	// Only what needs a human goes in the queue. An update policy allows
-	// duva to apply is not "waiting" for anything -- it is reported, and
-	// (from the next milestone) applied.
+	// Apply what policy allows, before deciding what is still outstanding: a
+	// service that has just been updated is no longer waiting for anything.
+	if act != nil {
+		for i, f := range findings {
+			if !f.AutoApplies() {
+				continue
+			}
+			res := act(f)
+			applyResult(cfg, &findings[i], res, st)
+		}
+	}
+
+	// Only what needs a human goes in the queue. An update policy allows duva
+	// to apply is not "waiting" for anything.
 	var needApproval []watch.Finding
 	for _, f := range findings {
 		if f.NeedsApproval() {
@@ -176,7 +245,8 @@ func check(cfg envConfig, reg watch.Registry, st *watch.State, now time.Time) ([
 
 	st.Reconcile(needApproval, findings, now.UTC().Format(time.RFC3339))
 
-	// Notify once per candidate, not once per run.
+	// Notify once per candidate, not once per run. Anything applied above has
+	// already reported its own outcome.
 	for _, f := range findings {
 		if !f.Available() || st.Notified[f.Service] == f.Candidate {
 			continue
@@ -203,7 +273,7 @@ func runOnce(reg watch.Registry, out io.Writer) error {
 		return fmt.Errorf("loading state: %w", err)
 	}
 
-	findings, err := check(cfg, reg, st, time.Now())
+	findings, err := checkWith(cfg, reg, st, time.Now(), actor(cfg), realDocker, realGit)
 	if err != nil {
 		return err
 	}
@@ -340,7 +410,7 @@ func serve(reg watch.Registry, out io.Writer) error {
 
 		now := time.Now()
 		s.mu.Lock()
-		findings, err := check(cfg, reg, s.state, now)
+		findings, err := checkWith(cfg, reg, s.state, now, actor(cfg), realDocker, realGit)
 		if err == nil {
 			s.lastCheck = now
 		}
@@ -361,4 +431,72 @@ func (s *store) saveState() error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.state.Save(stateFile)
+}
+
+// applyResult folds an applied update back into the run: the finding stops
+// being "available" when the container took it, the moving-tag baseline
+// advances only then, and the outcome is announced.
+//
+// The baseline is deliberately not advanced on detection alone -- only when
+// the update is applied -- so a move that could not be applied is still
+// waiting on the next run rather than being silently forgotten.
+func applyResult(cfg envConfig, f *watch.Finding, res Result, st *watch.State) {
+	switch {
+	case res.Applied:
+		if f.Kind == watch.KindDigest {
+			st.Baseline[f.Service] = f.Candidate
+		}
+		f.Status = watch.StatusUpToDate
+		f.Reason = "applied"
+		delete(st.Notified, f.Service)
+		notifyApplied(cfg, *f, res)
+
+	case res.Err != nil:
+		f.Status = watch.StatusError
+		f.Reason = fmt.Sprintf("%s failed: %v", res.FailedAt, res.Err)
+		notifyFailed(cfg, *f, res)
+
+	default:
+		// Nothing to do: the registry offered what the file already pins.
+		f.Status = watch.StatusUpToDate
+		f.Reason = "already at this digest"
+	}
+}
+
+// notifyApplied announces an update duva made itself. Notification failures
+// only warn: a lost message must not make a successful update look failed.
+func notifyApplied(cfg envConfig, f watch.Finding, res Result) {
+	if cfg.NtfyURL == "" || cfg.NtfyTopic == "" {
+		return
+	}
+	n := notify.Ntfy{URL: cfg.NtfyURL, Topic: cfg.NtfyTopic, Token: cfg.NtfyToken}
+	title := fmt.Sprintf("duva@%s: %s updated", hostLabel(cfg), f.Service)
+	body := fmt.Sprintf("%s -> %s", res.Outcome.OldRaw, res.Outcome.NewRaw)
+	if res.Note != "" {
+		body += "\n" + res.Note
+	}
+	if res.FailedAt != "" {
+		// Applied, but the record-keeping did not finish.
+		body += fmt.Sprintf("\nnote: %s failed: %v", res.FailedAt, res.Err)
+	}
+	if err := n.Send(title, body, notify.PriorityDefault); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: notification failed: %v\n", err)
+	}
+}
+
+// notifyFailed announces an update that did not reach the container, at high
+// priority: something needs a human.
+func notifyFailed(cfg envConfig, f watch.Finding, res Result) {
+	if cfg.NtfyURL == "" || cfg.NtfyTopic == "" {
+		return
+	}
+	n := notify.Ntfy{URL: cfg.NtfyURL, Topic: cfg.NtfyTopic, Token: cfg.NtfyToken}
+	title := fmt.Sprintf("duva@%s: %s FAILED to update", hostLabel(cfg), f.Service)
+	body := fmt.Sprintf("%s -> %s\n%s failed: %v", f.CurrentTag, f.Candidate, res.FailedAt, res.Err)
+	if res.Reverted {
+		body += "\nthe compose file was put back; the container is unchanged"
+	}
+	if err := n.Send(title, body, notify.PriorityHigh); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: notification failed: %v\n", err)
+	}
 }
