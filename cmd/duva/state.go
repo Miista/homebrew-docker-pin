@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"regexp"
 )
 
 // stateFile is where the last-notified-tag-per-service map is persisted:
@@ -43,19 +42,4 @@ func saveState(path string, st map[string]string) error {
 		return err
 	}
 	return os.WriteFile(path, data, 0o644)
-}
-
-// compileTagFilters compiles a service's include/exclude regexes.
-func compileTagFilters(svc serviceRules) (include, exclude *regexp.Regexp, err error) {
-	include, err = regexp.Compile(svc.Include)
-	if err != nil {
-		return nil, nil, err
-	}
-	if svc.Exclude != "" {
-		exclude, err = regexp.Compile(svc.Exclude)
-		if err != nil {
-			return nil, nil, err
-		}
-	}
-	return include, exclude, nil
 }

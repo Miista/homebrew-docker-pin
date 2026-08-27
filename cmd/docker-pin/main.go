@@ -17,6 +17,7 @@ import (
 	"github.com/Miista/homebrew-docker-pin/internal/compose"
 	"github.com/Miista/homebrew-docker-pin/internal/docker"
 	"github.com/Miista/homebrew-docker-pin/internal/help"
+	pinpkg "github.com/Miista/homebrew-docker-pin/internal/pin"
 	"github.com/Miista/homebrew-docker-pin/internal/registry"
 )
 
@@ -731,18 +732,8 @@ func upgrade(service, targetVersion string, d dockerFuncs, dryRun bool) (upgrade
 
 // upgradeOutcome describes what an upgradeInFile call did (or, in dry-run
 // mode, would have done).
-type upgradeOutcome struct {
-	OldRaw string
-	NewRaw string
-	// Tag and Digest are the tag and digest the service is (or would be)
-	// pinned to.
-	Tag, Digest string
-	// Changed is true when the pin moved (or would move, in a dry run).
-	Changed bool
-	// Built is true when the service is built locally (build:) and so was
-	// skipped -- there is no registry to check for a newer image.
-	Built bool
-}
+// upgradeOutcome is pinpkg.Outcome under the name the CLI code already uses.
+type upgradeOutcome = pinpkg.Outcome
 
 // upgradeInFile pulls the target (or discovered moving) tag and pins service
 // to the pulled digest. With dryRun it does everything except rewrite the
@@ -788,7 +779,7 @@ func upgradeInFile(composeFile, service, targetVersion string, d dockerFuncs, dr
 // pinned image computed by computeUpgrade. Kept separate from computeUpgrade
 // so callers (e.g. upgradeAll) can apply the file writes sequentially.
 func applyUpgrade(composeFile, service string, outcome upgradeOutcome) error {
-	return compose.PinImage(composeFile, service, outcome.NewRaw)
+	return pinpkg.Apply(composeFile, service, outcome)
 }
 
 // resolvePullRef works out which image ref to pull for service: either the
@@ -831,36 +822,18 @@ func resolvePullRef(composeFile, service, targetVersion string, dryRun, quiet bo
 // are computed concurrently and immediate prints would interleave with a
 // shared progress counter.
 func computeUpgrade(composeFile, service, pullRef string, d dockerFuncs, dryRun, quiet bool) (outcome upgradeOutcome, err error) {
-	baseImage, currentTag, err := compose.ParseImage(composeFile, service)
+	out, err := pinpkg.Compute(composeFile, service, pullRef, pinpkg.Docker{GetDigest: d.getDigest, Pull: d.pull})
 	if err != nil {
-		return upgradeOutcome{}, err
+		return out, err
 	}
-
-	oldRaw, err := compose.RawImage(composeFile, service)
-	if err != nil {
-		return upgradeOutcome{}, err
+	if out.Built && !dryRun && !quiet {
+		fmt.Printf("%s is built locally (build:), nothing to upgrade\n", service)
 	}
-	outcome = upgradeOutcome{OldRaw: oldRaw, NewRaw: oldRaw, Tag: currentTag, Digest: digestOf(oldRaw)}
-
-	digest, err := d.getDigest(pullRef)
-	if err != nil {
-		return outcome, err
+	if !out.Changed && !out.Built && !dryRun && !quiet {
+		fmt.Printf("%s: up to date — %s still points at the pinned digest (%s)\n",
+			service, pullRef, pinpkg.ShortDigest(out.Digest))
 	}
-
-	if oldDigest := digestOf(oldRaw); oldDigest != "" && oldDigest == digest {
-		if !dryRun && !quiet {
-			fmt.Printf("%s: up to date — %s still points at the pinned digest (%s)\n", service, pullRef, shortDigest(oldDigest))
-		}
-		return outcome, nil
-	}
-
-	pullTag := strings.TrimPrefix(pullRef, baseImage+":")
-	pinned := fmt.Sprintf("%s:%s@%s", baseImage, pullTag, digest)
-	outcome.NewRaw = pinned
-	outcome.Tag = pullTag
-	outcome.Digest = digest
-	outcome.Changed = true
-	return outcome, nil
+	return out, nil
 }
 
 func digestOf(image string) string {
