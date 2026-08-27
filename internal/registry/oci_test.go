@@ -44,43 +44,6 @@ func ociTestServer(t *testing.T, tags []string, digestFor func(tag string) strin
 	return srv
 }
 
-func TestResolveOCI_ChallengeFlow(t *testing.T) {
-	const target = "sha256:match"
-	srv := ociTestServer(t, []string{"latest", "1.2.3", "1.2", "stable"}, func(tag string) string {
-		if tag == "1.2.3" {
-			return target
-		}
-		return "sha256:other"
-	})
-	defer srv.Close()
-
-	got, err := resolveOCIFromBase(srv.URL, "repo", target)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got.Tag != "1.2.3" {
-		t.Errorf("got tag %q, want %q", got.Tag, "1.2.3")
-	}
-}
-
-func TestResolveOCI_Orphaned(t *testing.T) {
-	srv := ociTestServer(t, []string{"latest", "1.2.3"}, func(tag string) string {
-		return "sha256:newbuild"
-	})
-	defer srv.Close()
-
-	got, err := resolveOCIFromBase(srv.URL, "repo", "sha256:oldbuild")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got.Tag != "" {
-		t.Errorf("expected no match, got %q", got.Tag)
-	}
-	if got.VersionTagsSeen != 1 {
-		t.Errorf("expected 1 version tag seen, got %d", got.VersionTagsSeen)
-	}
-}
-
 func TestNextPageURL(t *testing.T) {
 	tests := []struct {
 		header string

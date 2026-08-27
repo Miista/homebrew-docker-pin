@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
-	"sort"
 	"strings"
 	"time"
 )
@@ -32,54 +31,6 @@ func splitRegistryRepo(image string) (host, repo string) {
 		return parts[0], parts[1]
 	}
 	return "", image
-}
-
-// resolveOCI resolves a version tag against any registry implementing the OCI
-// Distribution Spec, discovering bearer auth via the WWW-Authenticate challenge.
-func resolveOCI(image, digest string) (Result, error) {
-	host, repo := splitRegistryRepo(image)
-	if host == "" {
-		return Result{}, fmt.Errorf("could not determine registry host from %q", image)
-	}
-	return resolveOCIFromBase("https://"+host, repo, digest)
-}
-
-func resolveOCIFromBase(baseURL, repo, digest string) (Result, error) {
-	client := &http.Client{Timeout: 15 * time.Second}
-
-	tags, err := ociListTags(client, baseURL, repo)
-	if err != nil {
-		return Result{}, err
-	}
-
-	// Sort newest first by actual numeric version, not string specificity —
-	// see the equivalent comment in ghcr.go.
-	var versionTags []string
-	for _, t := range tags {
-		if isVersionTag(t) {
-			versionTags = append(versionTags, t)
-		}
-	}
-	sort.Slice(versionTags, func(i, j int) bool {
-		return CompareVersions(versionTags[i], versionTags[j]) > 0
-	})
-
-	result := Result{VersionTagsSeen: len(versionTags)}
-	for i, t := range versionTags {
-		if i >= ociMaxTagChecks {
-			break
-		}
-		d, err := ociManifestDigest(client, baseURL, repo, t)
-		if err != nil {
-			result.ChecksFailed++
-			continue
-		}
-		if d == digest {
-			result.Tag = t
-			return result, nil
-		}
-	}
-	return result, nil
 }
 
 // ociTagDigestFromBase fetches a single tag's manifest digest from any

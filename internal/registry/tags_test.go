@@ -53,7 +53,7 @@ func TestCompareVersions_NumericSuffixRuns(t *testing.T) {
 		a, b string
 		want int
 	}{
-		{"1.32.8-ls100", "1.32.8-ls99", 1},  // lexical compare would say -1
+		{"1.32.8-ls100", "1.32.8-ls99", 1}, // lexical compare would say -1
 		{"3.18.4-r10", "3.18.4-r2", 1},
 		{"16-3.10", "16-3.9", 1},
 		{"1.0.0-rc10", "1.0.0-rc9", 1},
