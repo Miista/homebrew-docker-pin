@@ -77,8 +77,17 @@ var realDocker = Docker{
 		if err != nil {
 			return err
 		}
+		// --project-directory is the HOST path of the stack, not duva's view of
+		// it. Compose resolves a service's relative paths against it, and hands
+		// the results to the host's daemon -- so anchoring it at duva's mount
+		// point would rebind every `./data` to a path that does not exist there.
+		dir, err := workingDir(realSelf)
+		if err != nil {
+			return err
+		}
 		return run(exec.Command("docker", "compose",
-			"--project-name", name, "-f", composeFile, "up", "-d", service))
+			"--project-name", name, "--project-directory", dir,
+			"-f", composeFile, "up", "-d", service))
 	},
 }
 

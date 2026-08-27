@@ -21,6 +21,10 @@ ctx_init() {
   CTX_SUITE="$1"
   # Working directories live under the repo; see ctx_dir.
   CTX_ROOT="${CTX_ROOT:-$PWD}"
+  # Exported for the fixtures: the docker daemon needs absolute paths, and the
+  # repo's location is the only part of them that differs per machine, so it is
+  # the one value a fixture interpolates.
+  export CTX_ROOT
   CTX_SCENARIO=""
   CTX_RUN_DIRS=()
   CTX_RUN_IMAGES=()
@@ -130,6 +134,58 @@ ctx_run_dir() {
   printf '%s' "$dir"
 }
 
+# ctx_docker_pin -- path to a built docker-pin, built once per run.
+#
+# Suites that need a pinned starting state use the real tool to produce it
+# rather than writing digests into their fixtures: a fixture then holds the
+# plain tag, and the digest arrives the same way it does in production. It
+# also means the suite cannot disagree with docker pin about what a pinned
+# line looks like.
+ctx_docker_pin() {
+  if [ -z "${CTX_DOCKER_PIN:-}" ]; then
+    local dir
+    dir="$(ctx_run_dir dockerpin)"
+    CTX_DOCKER_PIN="$dir/docker-pin"
+    # Instrumented when GOCOVERDIR is set, so this counts toward coverage the
+    # same way the suite's other binaries do.
+    if [ -n "${GOCOVERDIR:-}" ]; then
+      (cd "$CTX_ROOT" && go build -cover -coverpkg=./... -o "$CTX_DOCKER_PIN" ./cmd/docker-pin)
+    else
+      (cd "$CTX_ROOT" && go build -o "$CTX_DOCKER_PIN" ./cmd/docker-pin)
+    fi
+  fi
+  printf '%s' "$CTX_DOCKER_PIN"
+}
+
+# ctx_fixture <scenario> <dir> -- copy a scenario's fixture into dir.
+#
+# Each scenario owns a directory under hack/fixtures/<suite>/, holding the
+# compose file it needs and anything that file references. A real compose file
+# is readable on its own terms, whereas one assembled by echo and patched by
+# sed can only be understood by running it -- and the compose file is what
+# duva parses, so the fixture should be one.
+#
+# Nothing is substituted: every path in a fixture is a literal under testbed/,
+# except ${CTX_ROOT}, which compose interpolates because the daemon needs
+# absolute paths and the repo's location is all that differs per machine. The
+# digest is absent by design -- the suite pins the image with docker pin, so
+# the starting state is made the way a real stack's is.
+#
+# The copy is a git repository, because duva commits what it applies and
+# refuses to act on a dirty tree.
+ctx_fixture() {
+  local scenario="$1" dir="$2"
+  local src="${CTX_ROOT}/hack/fixtures/${CTX_SUITE#integration-}/${scenario}"
+  [ -d "$src" ] || { echo "no fixture at $src" >&2; return 1; }
+
+  mkdir -p "$dir"
+  cp -R "$src/." "$dir/"
+
+  git -C "$dir" init -q
+  git -C "$dir" add -A
+  git -C "$dir" -c user.name=t -c user.email=t@t commit -qm "$scenario"
+}
+
 # ctx_container <name> -- register a container for removal. Callers should also
 # pass --label "$CTX_LABEL=$CTX_SUITE" to docker run, so a killed run is still
 # sweepable.
@@ -144,15 +200,19 @@ ctx_run() {
   docker run -d --name "$name" --label "${CTX_LABEL}=${CTX_SUITE}" "$@" >/dev/null
 }
 
-# ctx_compose_up <dir> -- compose up in dir, registering the project so it is
-# torn down. The project is named after the suite and the directory, so two
-# suites cannot collide.
+# ctx_compose_up <dir> [service...] -- compose up in dir, registering the
+# project so it is torn down. The project is named after the directory, which
+# is fixed, so two suites cannot collide.
+#
+# Naming services brings up only those. A project holding a one-shot service --
+# duva itself, in the suites that exercise applying -- must not start it here,
+# since it runs once and exits.
 ctx_compose_up() {
-  local dir="$1"
+  local dir="$1"; shift
   CTX_PROJECTS+=("$dir")
-  (cd "$dir" && docker compose up -d --remove-orphans >/dev/null 2>&1) || {
+  (cd "$dir" && docker compose up -d --remove-orphans "$@" >/dev/null 2>&1) || {
     echo "compose up failed in $dir:" >&2
-    (cd "$dir" && docker compose up -d --remove-orphans 2>&1 | tail -5 >&2)
+    (cd "$dir" && docker compose up -d --remove-orphans "$@" 2>&1 | tail -5 >&2)
     return 1
   }
 }

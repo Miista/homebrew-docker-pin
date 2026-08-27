@@ -68,6 +68,34 @@ func containerID() (string, error) {
 	return host, nil
 }
 
+// workingDir returns the HOST path of the stack duva belongs to.
+//
+// duva sees the compose file at its own mount point, and compose resolves a
+// service's relative paths -- binds especially -- against the directory
+// holding that file. Left alone it would resolve `./conf` to duva's view of
+// it and hand that to the host's daemon, which would create an empty
+// directory at a path that means nothing there. A bind mount silently
+// pointing at the wrong place loses data quietly.
+//
+// The host path is recorded on duva's own container by compose, for the same
+// reason the project name is.
+func workingDir(s selfFuncs) (string, error) {
+	id, err := s.ContainerID()
+	if err != nil {
+		return "", err
+	}
+	dir, err := s.Label(id, "com.docker.compose.project.working_dir")
+	if err != nil {
+		return "", fmt.Errorf("duva could not read its own project directory: %w", err)
+	}
+	if dir == "" {
+		return "", fmt.Errorf(
+			"duva is not running as a compose service, so it cannot tell where its " +
+				"stack lives on the host; run it as a service in the stack it watches")
+	}
+	return dir, nil
+}
+
 // project returns the compose project duva belongs to.
 //
 // An error here is fatal rather than a fallback: acting on the wrong project

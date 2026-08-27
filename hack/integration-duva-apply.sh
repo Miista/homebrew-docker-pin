@@ -34,52 +34,66 @@ check() { # check <description> <0|1>
   else echo "   FAIL $1"; fail=$((fail + 1)); fi
 }
 
-# project <dir> <service> <image-ref> [labels...] -- a compose project in a
-# git repository, since duva commits its change.
-project() {
-  local dir="$1" service="$2" ref="$3"; shift 3
-  mkdir -p "$dir"
-  {
-    echo "services:"
-    echo "  $service:"
-    echo "    image: $ref"
-    if [ "$#" -gt 0 ]; then
-      echo "    labels:"
-      printf '      %s\n' "$@"
-    fi
-  } > "$dir/docker-compose.yml"
-
-  git -C "$dir" init -q
-  git -C "$dir" add docker-compose.yml
-  git -C "$dir" -c user.name=t -c user.email=t@t commit -qm "initial"
-}
-
-# duva_apply <compose-dir> <data-dir> -- one applying run.
+# duva_apply <compose-dir> -- bring duva up and wait for its run to finish.
 #
-# The socket is mounted because applying recreates a container, and the
-# compose mount is read-write because applying rewrites the file -- the two
-# ways this differs from a reporting duva.
+# duva is started as the compose service it is declared as, not with a bare
+# `docker run`: it reads its own container's project label to know which
+# project to recreate containers in, and outside a project there is no label.
 #
-# The registry is addressed as localhost:PORT rather than by its network name:
-# duva drives the host's daemon through the mounted socket, so every image
-# reference it writes or pulls has to be one that daemon can resolve. Reaching
-# the published port from inside the container needs the host gateway.
-#
-# The project is mounted twice: at /compose, which is where duva looks and is
-# not configurable, and at its host path, because `docker compose` runs against
-# the host's daemon and is handed the path duva saw -- so that path has to mean
-# the same thing on both sides.
-# shellcheck disable=SC2046,SC2086
+# Nothing asserts on its output. What duva did IS the state of the world -- the
+# file repinned, the container replaced, the commit written, the queue
+# recorded. A check on a log line would only prove duva announced something,
+# which is the one thing that cannot break a stack.
 duva_apply() {
-  docker run --rm \
-    --add-host=localhost:host-gateway \
-    -v "$REGISTRY_CERT:/etc/ssl/certs/ca-certificates.crt:ro" \
-    $COVER_MOUNT \
-    -e DUVA_HOSTNAME=integration \
-    -v /var/run/docker.sock:/var/run/docker.sock \
-    -v "$1:/compose" -v "$1:$1" -v "$2:/data" \
-    "$IMAGE" run 2>&1
+  (cd "$1" && docker compose up -d duva >/dev/null 2>&1)
+  # duva run is a one-shot: it checks, acts and exits.
+  local i
+  for i in $(seq 60); do
+    case "$(cd "$1" && docker compose ps -a --status exited --format '{{.Service}}' 2>/dev/null)" in
+      *duva*) return 0 ;;
+    esac
+    sleep 0.5
+  done
+  echo "duva did not finish in 30s" >&2
+  (cd "$1" && docker compose logs duva >&2)
+  return 1
 }
+
+# victim <dir> -- the watched container, found by project and service.
+#
+# Not by working_dir: that label records the directory of whoever last ran
+# compose, and duva runs it from its own mount point -- so the container it
+# recreates says /compose while the one the suite started says the host path.
+# The project name is the same either way, which is the point of duva reading
+# it from its own labels.
+#
+# The service is named because duva is in this project too.
+victim() {
+  docker ps -q --filter "label=com.docker.compose.project=$(basename "$1")" \
+    --filter "label=com.docker.compose.service=app" | head -1
+}
+
+# start <scenario> -- lay out a scenario's world and bring the watched service
+# up on its current image.
+#
+# The fixture carries a plain tag; docker pin writes the digest, so the
+# starting state is produced by the real tool rather than forged here. duva
+# then has something to recreate: it replaces a container, it does not create
+# one from nothing.
+start() {
+  WORK="$(ctx_dir work)"
+  DATA="$(ctx_dir data)"; chmod 777 "$DATA"
+  ctx_fixture "$1" "$WORK"
+
+  (cd "$WORK" && "$(ctx_docker_pin)" pin app >/dev/null)
+  git -C "$WORK" add -A
+  git -C "$WORK" -c user.name=t -c user.email=t@t commit -qm "pin app"
+
+  ctx_compose_up "$WORK" app
+}
+
+# queued <data-dir> -- the services duva recorded as needing approval.
+queued() { "$(ctx_statequery)" "$1/duva.json" pending; }
 
 image_line() { grep -E '^\s+image:' "$1" | head -1 | sed 's/^[[:space:]]*image:[[:space:]]*//'; }
 
@@ -89,19 +103,10 @@ registry_start
 push_runnable app 1.0.0 first
 push_runnable app 1.0.1 second
 
-WORK="$(ctx_dir work)"
-DATA="$(ctx_dir data)"; chmod 777 "$DATA"
-project "$WORK" app "$(image_ref app 1.0.0)@$(digest_of app 1.0.0)" \
-  "duva.include: '^1\.0\.\d+\$'" \
-  "duva.auto: patch"
+start within-policy
+before_container=$(victim "$WORK")
 
-# Bring the service up on the old image first: duva recreates a container, it
-# does not create one from nothing.
-ctx_compose_up "$WORK"
-before_container=$(docker ps -q --filter "label=com.docker.compose.project.working_dir=$WORK" | head -1)
-
-out=$(duva_apply "$WORK" "$DATA")
-echo "$out" | sed 's/^/   | /'
+duva_apply "$WORK"
 
 line=$(image_line "$WORK/docker-compose.yml")
 echo "   -> $line"
@@ -109,7 +114,7 @@ echo "   -> $line"
 c=0; [[ "$line" == *":1.0.1@sha256:"* ]] && c=1
 check "the compose file is pinned to the new version" "$c"
 
-after_container=$(docker ps -q --filter "label=com.docker.compose.project.working_dir=$WORK" | head -1)
+after_container=$(victim "$WORK")
 c=0; [ -n "$after_container" ] && [ "$after_container" != "$before_container" ] && c=1
 check "the container was actually replaced" "$c"
 
@@ -129,15 +134,10 @@ registry_start
 push_runnable app 1.0.0 first
 push_runnable app 2.0.0 second
 
-WORK="$(ctx_dir work)"
-DATA="$(ctx_dir data)"; chmod 777 "$DATA"
-project "$WORK" app "$(image_ref app 1.0.0)@$(digest_of app 1.0.0)" \
-  "duva.include: '^\d+\.\d+\.\d+\$'" \
-  "duva.auto: patch"
+start beyond-policy
 before=$(image_line "$WORK/docker-compose.yml")
 
-out=$(duva_apply "$WORK" "$DATA")
-echo "$out" | sed 's/^/   | /'
+duva_apply "$WORK"
 
 c=0; [ "$(image_line "$WORK/docker-compose.yml")" = "$before" ] && c=1
 check "the compose file is untouched" "$c"
@@ -145,8 +145,8 @@ check "the compose file is untouched" "$c"
 c=0; [ -z "$(git -C "$WORK" log --oneline -1 --grep='2.0.0')" ] && c=1
 check "nothing is committed" "$c"
 
-c=0; echo "$out" | grep -q "needs approval" && c=1
-check "it is reported as needing approval" "$c"
+c=0; [ "$(queued "$DATA")" = "app" ] && c=1
+check "it is queued for approval" "$c"
 
 # --- a refused image leaves no lie in the file ---------------------------
 # The one case duva undoes: compose refuses the new image, so the container
@@ -161,16 +161,10 @@ docker build -q -t "${REGISTRY_HOST}/app:1.0.1" "$REGISTRY_CTX" >/dev/null
 docker push -q "${REGISTRY_HOST}/app:1.0.1" >/dev/null
 ctx_image "${REGISTRY_HOST}/app:1.0.1"
 
-WORK="$(ctx_dir work)"
-DATA="$(ctx_dir data)"; chmod 777 "$DATA"
-project "$WORK" app "$(image_ref app 1.0.0)@$(digest_of app 1.0.0)" \
-  "duva.include: '^1\.0\.\d+\$'" \
-  "duva.auto: patch"
-ctx_compose_up "$WORK"
+start refused-image
 before=$(image_line "$WORK/docker-compose.yml")
 
-out=$(duva_apply "$WORK" "$DATA")
-echo "$out" | sed 's/^/   | /'
+duva_apply "$WORK"
 
 c=0; [ "$(image_line "$WORK/docker-compose.yml")" = "$before" ] && c=1
 check "the compose file is put back" "$c"
@@ -180,6 +174,32 @@ check "no half-applied change is left behind" "$c"
 
 c=0; [ -z "$(git -C "$WORK" log --oneline -1 --grep='1.0.1')" ] && c=1
 check "a failed update is not committed" "$c"
+
+# --- a relative bind survives being seen at a different path -------------
+scenario "a relative bind still points at the host directory after a recreate"
+registry_start
+push_runnable app 1.0.0 first
+push_runnable app 1.0.1 second
+
+start relative-bind
+
+# Read from the daemon's side: these images are FROM scratch with a static
+# binary and have no shell to exec into.
+bind_source() {
+  docker inspect "$1" --format '{{range .Mounts}}{{if eq .Destination "/mnt"}}{{.Source}}{{end}}{{end}}' 2>/dev/null
+}
+
+c=0; [ "$(bind_source "$(victim "$WORK")")" = "$WORK/conf" ] && c=1
+check "the bind points at the host directory to begin with" "$c"
+
+duva_apply "$WORK"
+
+c=0; [[ "$(image_line "$WORK/docker-compose.yml")" == *":1.0.1@sha256:"* ]] && c=1
+check "the update is applied" "$c"
+
+got=$(bind_source "$(victim "$WORK")")
+c=0; [ "$got" = "$WORK/conf" ] && c=1
+check "the relative bind still resolves to the host directory (got: ${got:-<empty>})" "$c"
 
 echo "== integration: $pass passed, $fail failed"
 exit $((fail > 0))
