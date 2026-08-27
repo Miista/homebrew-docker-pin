@@ -47,10 +47,9 @@ registry_setup() {
   REGISTRY_CERT="$REGISTRY_CERT_DIR/cert.pem"
 }
 
-# registry_start brings up a registry and a build context for scratch images.
-# Sets REGISTRY_CTX to the context directory. Requires ctx_init to have run:
-# the registry and its build context are context resources, torn down with
-# everything else.
+# registry_start brings up a registry outside any compose project, for suites
+# whose fixtures do not declare one. Requires ctx_init to have run: the
+# registry is a context resource, torn down with everything else.
 registry_start() {
   # The port is the resource, not the name. Anything holding it -- a registry
   # from a suite that was killed, or one started by hand -- is wiped, because
@@ -81,9 +80,6 @@ registry_start() {
     -e REGISTRY_HTTP_TLS_KEY=/certs/key.pem \
     registry:3
 
-  REGISTRY_CTX="$(ctx_dir registry)"
-  printf 'FROM scratch\nCOPY marker /marker\n' > "$REGISTRY_CTX/Dockerfile"
-
   # The registry needs a moment before it accepts pushes.
   for _ in $(seq 40); do
     curl -skf "https://${REGISTRY_HOST}/v2/" >/dev/null 2>&1 && return 0
@@ -103,8 +99,9 @@ push_versions() {
   local repo="$1"; shift
   local tag
   for tag in "$@"; do
-    printf '%s\n' "$repo:$tag" > "$REGISTRY_CTX/marker"
-    docker build -q -t "${REGISTRY_HOST}/${repo}:${tag}" "$REGISTRY_CTX" >/dev/null
+    local dir; dir="$(build_dir)"
+    printf '%s\n' "$repo:$tag" > "$dir/marker"
+    docker build -q -t "${REGISTRY_HOST}/${repo}:${tag}" "$dir" >/dev/null
     docker push -q "${REGISTRY_HOST}/${repo}:${tag}" >/dev/null
     ctx_image "${REGISTRY_HOST}/${repo}:${tag}"
   done
@@ -119,8 +116,9 @@ push_versions() {
 #   push_moving web latest second   # same tag, new digest
 push_moving() {
   local repo="$1" tag="$2" generation="$3"
-  printf '%s\n' "$repo:$tag:$generation" > "$REGISTRY_CTX/marker"
-  docker build -q -t "${REGISTRY_HOST}/${repo}:${tag}" "$REGISTRY_CTX" >/dev/null
+  local dir; dir="$(build_dir)"
+  printf '%s\n' "$repo:$tag:$generation" > "$dir/marker"
+  docker build -q -t "${REGISTRY_HOST}/${repo}:${tag}" "$dir" >/dev/null
   docker push -q "${REGISTRY_HOST}/${repo}:${tag}" >/dev/null
   ctx_image "${REGISTRY_HOST}/${repo}:${tag}"
 }
@@ -135,9 +133,42 @@ push_moving() {
 #
 # generation varies the output, so two generations of the same tag are
 # genuinely different images with different digests.
+# build_dir -- a scratch directory to build test images in, made on demand.
+#
+# Private to this file: the tests that push do not need to know where an
+# image is assembled, only what ends up in the registry.
+# Called from a subshell as $(build_dir), so it cannot remember the directory
+# in a variable -- it derives the same path every time instead, and only
+# creates it once. ctx_dir names are fixed, which is what makes that possible.
+build_dir() {
+  local dir="${CTX_ROOT}/testbed/${CTX_SUITE}-registry"
+  if [ ! -f "$dir/Dockerfile" ]; then
+    mkdir -p "$dir"
+    printf 'FROM scratch\nCOPY marker /marker\n' > "$dir/Dockerfile"
+  fi
+  printf '%s' "$dir"
+}
+
+# push_unrunnable <repo> <tag> -- an image that exists but cannot start:
+# FROM scratch with no command. For testing what duva does when a container
+# refuses the image it was just pinned to.
+push_unrunnable() {
+  local repo="$1" tag="$2" dir
+  dir="$(build_dir)"
+  printf '%s\n' "$repo:$tag:broken" > "$dir/marker"
+  docker build -q -t "${REGISTRY_HOST}/${repo}:${tag}" "$dir" >/dev/null
+  docker push -q "${REGISTRY_HOST}/${repo}:${tag}" >/dev/null
+  ctx_image "${REGISTRY_HOST}/${repo}:${tag}"
+}
+
 push_runnable() {
-  local repo="$1" tag="$2" generation="$3"
-  local dir="$REGISTRY_CTX/runnable"
+  local repo="$1" tag="$2"
+  # The tag is baked into the binary so that two tags never produce the same
+  # digest. duva compares digests, so identical content would make "the
+  # container was replaced" indistinguishable from "nothing happened" -- and
+  # it would be the test that looked wrong, not the tool.
+  local generation="$tag"
+  local dir="$(build_dir)/runnable"
   mkdir -p "$dir"
 
   cat > "$dir/main.go" <<GOEOF
@@ -168,9 +199,9 @@ GOEOF
 # (buildx also adds attestation manifests, which the descent must skip).
 push_multiarch() {
   local repo="$1" tag="$2"
-  printf '%s\n' "$repo:$tag:multiarch" > "$REGISTRY_CTX/marker"
+  printf '%s\n' "$repo:$tag:multiarch" > "$(build_dir)/marker"
   docker buildx build --platform linux/amd64,linux/arm64 \
-    -t "${REGISTRY_HOST}/${repo}:${tag}" --push "$REGISTRY_CTX" >/dev/null 2>&1
+    -t "${REGISTRY_HOST}/${repo}:${tag}" --push "$(build_dir)" >/dev/null 2>&1
 }
 
 # digest_of <repo> <tag> -- the digest THIS registry serves for a tag.

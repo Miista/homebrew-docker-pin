@@ -85,7 +85,13 @@ type Finding struct {
 	// Decision is whether policy allows duva to apply this itself, and Why
 	// says so in one clause fit for a notification or a table cell.
 	Decision Decision
-	Why      string
+	// Auto is the service's duva.auto threshold, carried so the queue can
+	// show what the rule IS and not only that a candidate exceeded it. A
+	// service is easiest to misconfigure in the direction of applying more
+	// than intended, which is invisible if the policy is only ever mentioned
+	// in the explanation of what it rejected.
+	Auto Auto
+	Why  string
 }
 
 // NeedsApproval reports whether this finding is waiting on a human.
@@ -228,6 +234,7 @@ func service(rootFile, name string, reg Registry, baseline Baseline) Finding {
 	} else {
 		f = constrained(f, rules, reg)
 	}
+	f.Auto = rules.Auto
 	if f.Available() {
 		f.Decision, f.Why = Decide(f, rules.Auto)
 	}

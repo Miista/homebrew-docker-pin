@@ -174,6 +174,12 @@ ctx_fixture() {
   mkdir -p "$dir"
   cp -R "$src/." "$dir/"
 
+  # Fixtures include common/*.yml for what every scenario shares. Copied
+  # inside the project, so the include resolves from below the compose file
+  # rather than above it, where nothing is mounted.
+  mkdir -p "$dir/common"
+  cp -R "${CTX_ROOT}/hack/fixtures/common/." "$dir/common/"
+
   git -C "$dir" init -q
   git -C "$dir" add -A
   git -C "$dir" -c user.name=t -c user.email=t@t commit -qm "$scenario"
@@ -203,9 +209,11 @@ ctx_run() {
 ctx_compose_up() {
   local dir="$1"; shift
   CTX_PROJECTS+=("$dir")
-  (cd "$dir" && docker compose up -d --remove-orphans "$@" >/dev/null 2>&1) || {
+  # --wait blocks until services with a healthcheck report healthy, so a
+  # caller never has to poll for the registry to start accepting pushes.
+  (cd "$dir" && docker compose up -d --wait --remove-orphans "$@" >/dev/null 2>&1) || {
     echo "compose up failed in $dir:" >&2
-    (cd "$dir" && docker compose up -d --remove-orphans "$@" 2>&1 | tail -5 >&2)
+    (cd "$dir" && docker compose up -d --wait --remove-orphans "$@" 2>&1 | tail -5 >&2)
     return 1
   }
 }

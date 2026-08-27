@@ -30,8 +30,13 @@ var page = template.Must(template.New("page").Parse(pageHTML))
 type Source interface {
 	// Pending returns the updates awaiting approval, sorted.
 	Pending() []watch.Pending
-	// LastCheck describes when detection last ran, for the footer.
+	// LastCheck describes when detection last ran, for the footer, as an age
+	// rather than a timestamp: the question a reader has is whether it was
+	// recent.
 	LastCheck() string
+	// LastCheckExact is the same moment as a timestamp, for the tooltip,
+	// when the age is not precise enough.
+	LastCheckExact() string
 }
 
 // Applier applies one queued update. Approving from the page runs the same
@@ -107,6 +112,7 @@ type row struct {
 	Kind       string
 	Why        string
 	FirstSeen  string
+	Auto       string
 }
 
 func (s *Server) index(w http.ResponseWriter, r *http.Request) {
@@ -127,28 +133,31 @@ func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 			Kind:       kindLabel(p),
 			Why:        p.Why,
 			FirstSeen:  p.FirstSeen,
+			Auto:       p.Auto,
 		})
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := page.Execute(w, struct {
-		Pending   []row
-		Host      string
-		Version   string
-		LastCheck string
-		CanApply  bool
-		Service   string
-		Level     string
-		Message   string
+		Pending        []row
+		Host           string
+		Version        string
+		LastCheck      string
+		LastCheckExact string
+		CanApply       bool
+		Service        string
+		Level          string
+		Message        string
 	}{
-		Pending:   rows,
-		Host:      s.Host,
-		Version:   s.Version,
-		LastCheck: s.Source.LastCheck(),
-		CanApply:  s.Applier != nil,
-		Service:   r.URL.Query().Get("service"),
-		Level:     r.URL.Query().Get("level"),
-		Message:   r.URL.Query().Get("message"),
+		Pending:        rows,
+		Host:           s.Host,
+		Version:        s.Version,
+		LastCheck:      s.Source.LastCheck(),
+		LastCheckExact: s.Source.LastCheckExact(),
+		CanApply:       s.Applier != nil,
+		Service:        r.URL.Query().Get("service"),
+		Level:          r.URL.Query().Get("level"),
+		Message:        r.URL.Query().Get("message"),
 	}); err != nil {
 		// Too late for an error page — the response is already going out.
 		return

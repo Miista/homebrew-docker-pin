@@ -23,29 +23,27 @@ scenario_up() {
   WORK="$(ctx_dir work)"
   ctx_fixture "$name" "$WORK"
 
-  # Inside the project, so the fixture can refer to them relatively rather
-  # than through a variable only the suite could expand.
+  # Inside the project, so the fixture can name them relatively rather than
+  # through a variable only the suite could expand.
   DATA="$WORK/data"; mkdir -p "$DATA"; chmod 777 "$DATA"
   mkdir -p "$WORK/certs"; cp "$REGISTRY_CERT_DIR"/*.pem "$WORK/certs/"
 
-  # The images the scenario declares, published into the registry. Which tags
-  # exist is part of what a scenario IS -- a patch available, a major
-  # available, nothing available -- so it lives with the fixture rather than
-  # in whoever is running it.
-  local tag generation
-  while read -r tag generation; do
+  # The registry first, alone. It is a service in the fixture like any other,
+  # through the shared include -- but nothing else can start until it holds
+  # the image the fixture names, since a service whose image does not exist
+  # cannot be created. --wait means it is accepting pushes on return.
+  ctx_compose_up "$WORK" testregistry
+
+  # The tags the fixture's own compose file refers to, so the stack can start.
+  # Only those: what is AVAILABLE to update to is the variable each test is
+  # about, so a test pushes that itself.
+  local tag
+  while read -r tag; do
     [ -n "$tag" ] || continue
-    push_runnable app "$tag" "$generation"
+    push_runnable app "$tag"
   done < "$src/images"
 
-  # The fixture holds a plain tag; the digest is written by the real tool, so
-  # the starting state is made the way a real stack's is.
-  (cd "$WORK" && "$(ctx_docker_pin)" pin app >/dev/null)
-  git -C "$WORK" add -A
-  git -C "$WORK" -c user.name=t -c user.email=t@t commit -qm "pin app"
-
-  # duva recreates a container; it does not create one from nothing.
-  ctx_compose_up "$WORK" app
+  ctx_compose_up "$WORK"
 }
 
 # Sourced by the suite, which drives scenarios itself.
@@ -82,8 +80,6 @@ trap - EXIT INT TERM
 registry_setup
 echo "== building $IMAGE"
 ctx_build_duva_image "$IMAGE"
-registry_start
-
 scenario_up "$SCENARIO"
 
 # One check, so there is something to look at.

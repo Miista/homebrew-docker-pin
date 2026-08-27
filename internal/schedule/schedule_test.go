@@ -20,10 +20,10 @@ func writeFile(t *testing.T, dir, name, content string) string {
 
 func TestFindFile(t *testing.T) {
 	tests := []struct {
-		name     string
-		files    []string
-		want     string
-		wantErr  bool
+		name    string
+		files   []string
+		want    string
+		wantErr bool
 	}{
 		{"yaml", []string{"pin.yaml"}, "pin.yaml", false},
 		{"yml", []string{"pin.yml"}, "pin.yml", false},

@@ -57,9 +57,9 @@ check() { # check <description> <0|1>
 # container, and a bare FROM-scratch image has no command to start. The other
 # services share the repo so their verdicts differ only by label.
 echo "== publishing test images"
-push_runnable app 1.26.0 first
-push_runnable app 1.26.3 second
-push_runnable app 1.31.4 third
+push_runnable app 1.26.0
+push_runnable app 1.26.3
+push_runnable app 1.31.4
 STALE=$(digest_of app 1.26.0)
 
 cat > "$ROOT/compose/docker-compose.yml" <<EOF
