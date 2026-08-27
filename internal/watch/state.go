@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+
+	"github.com/Miista/homebrew-docker-pin/internal/registry"
 )
 
 // State is what duva remembers between runs. It lives as one JSON file on the
@@ -40,6 +42,9 @@ type Pending struct {
 	// digest respectively.
 	Kind      Kind   `json:"kind"`
 	Candidate string `json:"candidate"`
+	// Bump is how big the version change is, for a tag candidate. Empty for a
+	// digest candidate, which has no version pair to compare.
+	Bump registry.Kind `json:"bump,omitempty"`
 	// Reason says why this needs a human rather than being applied: the
 	// classification, or that it could not be classified.
 	Reason string `json:"reason"`
@@ -164,6 +169,7 @@ func (s *State) Reconcile(needApproval []Finding, seen []Finding, now string) {
 			CurrentDigest: f.CurrentDigest,
 			Kind:          f.Kind,
 			Candidate:     f.Candidate,
+			Bump:          f.Bump,
 			Reason:        f.Reason,
 			FirstSeen:     firstSeen,
 		}
