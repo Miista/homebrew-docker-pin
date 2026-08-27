@@ -3,8 +3,19 @@ package compose
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+// readFile returns a file's contents, for asserting on a rewrite's result.
+func readFile(t *testing.T, path string) string {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
 
 // --- splitImage ---
 
@@ -687,5 +698,140 @@ func TestIsBuilt(t *testing.T) {
 
 	if _, err := IsBuilt(f, "nope"); err == nil {
 		t.Error("expected an error for an unknown service")
+	}
+}
+
+// --- error paths and edge cases -----------------------------------------
+
+func TestLocate_NoComposeFileAnywhere(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := FindFile(dir); err == nil {
+		t.Error("a directory with no compose file (and no parent with one) must be an error")
+	}
+}
+
+func TestParseImage_Errors(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "docker-compose.yml")
+	writeFile(t, f, "services:\n  app:\n    image: x/y:1.0.0\n  noimage:\n    build: ./x\n")
+
+	if _, _, err := ParseImage(f, "nope"); err == nil {
+		t.Error("unknown service must be an error")
+	}
+	if _, _, err := ParseImage(f, "noimage"); err == nil {
+		t.Error("a service with no image: must be an error")
+	}
+	if _, _, err := ParseImage(filepath.Join(t.TempDir(), "gone.yml"), "app"); err == nil {
+		t.Error("missing file must be an error")
+	}
+}
+
+// A tag is optional in compose; an image without one means latest.
+func TestParseImage_DefaultsToLatest(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "docker-compose.yml")
+	writeFile(t, f, "services:\n  app:\n    image: nginx\n")
+	base, tag, err := ParseImage(f, "app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if base != "nginx" || tag != "latest" {
+		t.Errorf("got %q / %q, want nginx / latest", base, tag)
+	}
+}
+
+func TestRawImage_Errors(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "docker-compose.yml")
+	writeFile(t, f, "services:\n  app:\n    image: x/y:1.0.0\n")
+
+	if _, err := RawImage(f, "nope"); err == nil {
+		t.Error("unknown service must be an error")
+	}
+	if _, err := RawImage(filepath.Join(t.TempDir(), "gone.yml"), "app"); err == nil {
+		t.Error("missing file must be an error")
+	}
+}
+
+func TestIsBuilt_Errors(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "docker-compose.yml")
+	writeFile(t, f, "services:\n  app:\n    image: x/y:1.0.0\n")
+
+	if _, err := IsBuilt(f, "nope"); err == nil {
+		t.Error("unknown service must be an error")
+	}
+	if _, err := IsBuilt(filepath.Join(t.TempDir(), "gone.yml"), "app"); err == nil {
+		t.Error("missing file must be an error")
+	}
+}
+
+// The rewrite is line-based precisely so that formatting, comments and
+// ordering survive: a YAML round trip would reformat the whole file.
+func TestPinImage_PreservesEverythingElse(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "docker-compose.yml")
+	const before = `# top comment
+services:
+
+  app:
+    image: x/y:1.0.0   # keep me
+    environment:
+      - A=1
+
+  other:
+    image: z/w:2.0.0
+`
+	writeFile(t, f, before)
+	if err := PinImage(f, "app", "x/y:1.0.0@sha256:d"); err != nil {
+		t.Fatal(err)
+	}
+	got := readFile(t, f)
+
+	for _, want := range []string{"# top comment", "# keep me", "- A=1", "z/w:2.0.0"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rewrite lost %q:\n%s", want, got)
+		}
+	}
+	if !strings.Contains(got, "x/y:1.0.0@sha256:d") {
+		t.Errorf("pin not written:\n%s", got)
+	}
+}
+
+// Two services can share an image; the rewrite must touch only the one named.
+func TestPinImage_TouchesOnlyTheNamedService(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "docker-compose.yml")
+	writeFile(t, f, "services:\n  a:\n    image: same:1.0.0\n  b:\n    image: same:1.0.0\n")
+	if err := PinImage(f, "b", "same:1.0.0@sha256:d"); err != nil {
+		t.Fatal(err)
+	}
+	got := readFile(t, f)
+	if strings.Count(got, "@sha256:d") != 1 {
+		t.Errorf("expected exactly one line rewritten:\n%s", got)
+	}
+	// a is declared first and must be untouched.
+	if !strings.Contains(got, "  a:\n    image: same:1.0.0\n") {
+		t.Errorf("wrong service rewritten:\n%s", got)
+	}
+}
+
+func TestListServices_MissingFile(t *testing.T) {
+	if _, err := ListServices(filepath.Join(t.TempDir(), "gone.yml")); err == nil {
+		t.Error("missing file must be an error")
+	}
+}
+
+// A broken include must be reported: silently returning the services it could
+// read would hide half a project.
+func TestListServices_BrokenInclude(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "docker-compose.yml")
+	writeFile(t, root, "include:\n  - missing/compose.yml\nservices:\n  a:\n    image: x:1\n")
+	if _, err := ListServices(root); err == nil {
+		t.Error("an unreadable include must be an error, not a partial result")
+	}
+}
+
+func TestResolveServiceIn_UnknownService(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "docker-compose.yml")
+	writeFile(t, root, "services:\n  a:\n    image: x:1\n")
+	if _, err := ResolveServiceIn(root, "nope"); err == nil {
+		t.Error("a service in no file must be an error")
 	}
 }

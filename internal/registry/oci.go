@@ -203,7 +203,14 @@ func ociListTags(client *http.Client, baseURL, repo string) ([]string, error) {
 		if next == "" {
 			break
 		}
-		url = baseURL + next
+		// RFC 5988 allows the Link target to be absolute or relative, and
+		// registries do both. Concatenating an absolute one onto baseURL
+		// produces a nonsense host, so only relative references are joined.
+		if strings.HasPrefix(next, "http://") || strings.HasPrefix(next, "https://") {
+			url = next
+		} else {
+			url = baseURL + next
+		}
 	}
 	return tags, nil
 }
