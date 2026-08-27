@@ -290,3 +290,161 @@ var errTest = &testError{"registry unreachable"}
 type testError struct{ s string }
 
 func (e *testError) Error() string { return e.s }
+
+// --- valid data, one thing broken --------------------------------------
+//
+// The generator produces a service that works. Each of these takes that
+// working service, breaks exactly one thing, and asserts the consequence of
+// that break -- so a failure names the cause rather than leaving you to guess
+// which part of an invalid fixture mattered.
+
+// Baseline: the unmodified generated service behaves. If this fails, every
+// test below is meaningless, so it is asserted rather than assumed.
+func TestApp_GeneratedServiceIsValid(t *testing.T) {
+	f := fixture.New(t)
+	svc := f.WithAuto(f.WithUpdate(f.PinnedService(), fixture.BumpPatch), "patch")
+
+	findings, _ := app(t, f.Project(svc), f.Registry(svc))
+	got := findingFor(t, findings, svc.Name)
+	if got.Status != watch.StatusAvailable || !got.AutoApplies() {
+		t.Fatalf("the generated fixture must work before anything is broken: %+v", got)
+	}
+}
+
+// Remove the digest: pin status is duva's opt-in, so the service stops being
+// watched entirely -- not an error, just invisible.
+func TestApp_BreakingThePin_StopsItBeingWatched(t *testing.T) {
+	f := fixture.New(t)
+	svc := f.WithAuto(f.WithUpdate(f.PinnedService(), fixture.BumpPatch), "patch")
+
+	svc.Pinned = false // the one break
+
+	findings, st := app(t, f.Project(svc), f.Registry(svc))
+	got := findingFor(t, findings, svc.Name)
+	if got.Status != watch.StatusSkipped {
+		t.Errorf("Status = %q, want skipped: an unpinned service has made no decision to watch", got.Status)
+	}
+	if len(st.Pending) != 0 {
+		t.Errorf("nothing should be queued for an unwatched service: %+v", st.Pending)
+	}
+}
+
+// Remove duva.include: the service stops being a constrained one and becomes
+// a moving-tag follower, which is a different question entirely. Its version
+// tag never moves, so nothing is ever found.
+func TestApp_RemovingTheIncludeLabel_ChangesWhatIsAsked(t *testing.T) {
+	f := fixture.New(t)
+	svc := f.WithAuto(f.WithUpdate(f.PinnedService(), fixture.BumpPatch), "patch")
+
+	delete(svc.Labels, "duva.include") // the one break
+	svc.AvailableDigest = svc.Digest   // a moving-tag lookup now answers
+
+	findings, _ := app(t, f.Project(svc), f.Registry(svc))
+	got := findingFor(t, findings, svc.Name)
+	if got.Kind == watch.KindTag {
+		t.Errorf("without duva.include this is no longer a tag question: %+v", got)
+	}
+}
+
+// Corrupt duva.auto: the service errors rather than silently falling back to
+// a default. A typo that quietly means "none" is discovered months later,
+// when an update that should have applied itself never did.
+func TestApp_CorruptingTheAutoLabel_IsAnErrorNotADefault(t *testing.T) {
+	f := fixture.New(t)
+	svc := f.WithAuto(f.WithUpdate(f.PinnedService(), fixture.BumpPatch), "patch")
+
+	svc.Labels["duva.auto"] = "pathc" // the one break
+
+	findings, st := app(t, f.Project(svc), f.Registry(svc))
+	got := findingFor(t, findings, svc.Name)
+	if got.Status != watch.StatusError {
+		t.Errorf("Status = %q, want error: a misspelled threshold must not read as a default", got.Status)
+	}
+	if len(st.Pending) != 0 {
+		t.Errorf("a service that could not be evaluated must not be queued: %+v", st.Pending)
+	}
+}
+
+// Misspell the label name itself: same reasoning. Silently ignoring an
+// unknown duva.* label looks exactly like duva working.
+func TestApp_MisspellingALabelName_IsAnError(t *testing.T) {
+	f := fixture.New(t)
+	svc := f.WithAuto(f.WithUpdate(f.PinnedService(), fixture.BumpPatch), "patch")
+
+	svc.Labels["duva.includ"] = svc.Labels["duva.include"] // the one break
+	delete(svc.Labels, "duva.include")
+
+	findings, _ := app(t, f.Project(svc), f.Registry(svc))
+	if got := findingFor(t, findings, svc.Name); got.Status != watch.StatusError {
+		t.Errorf("Status = %q, want error for an unknown duva.* label", got.Status)
+	}
+}
+
+// Break the include regex: an unparseable rule is an error for that service,
+// not a rule that quietly matches nothing.
+func TestApp_BreakingTheIncludeRegex_IsAnError(t *testing.T) {
+	f := fixture.New(t)
+	svc := f.WithAuto(f.WithUpdate(f.PinnedService(), fixture.BumpPatch), "patch")
+
+	svc.Labels["duva.include"] = "^(" // the one break
+
+	findings, _ := app(t, f.Project(svc), f.Registry(svc))
+	if got := findingFor(t, findings, svc.Name); got.Status != watch.StatusError {
+		t.Errorf("Status = %q, want error for an uncompilable regex", got.Status)
+	}
+}
+
+// Add a build: key. A locally built image's digest exists only on the daemon
+// that built it, so pinning one produces a reference no other host can pull.
+func TestApp_AddingABuildKey_StopsItBeingWatched(t *testing.T) {
+	f := fixture.New(t)
+	svc := f.WithAuto(f.WithUpdate(f.PinnedService(), fixture.BumpPatch), "patch")
+
+	svc.Built = true // the one break
+
+	findings, st := app(t, f.Project(svc), f.Registry(svc))
+	got := findingFor(t, findings, svc.Name)
+	if got.Status != watch.StatusSkipped {
+		t.Errorf("Status = %q, want skipped for a locally built image", got.Status)
+	}
+	if len(st.Pending) != 0 {
+		t.Errorf("a built service must never be queued: %+v", st.Pending)
+	}
+}
+
+// Add a delay the candidate cannot satisfy: the update is withheld rather
+// than adopted, and nothing is queued -- a soaking tag is not a candidate at
+// all, so there is nothing for a human to approve yet either.
+func TestApp_AddingAnUnsatisfiedDelay_WithholdsTheUpdate(t *testing.T) {
+	f := fixture.New(t)
+	svc := f.WithAuto(f.WithUpdate(f.PinnedService(), fixture.BumpPatch), "patch")
+
+	svc.Labels["duva.delay"] = "30d"               // the one break
+	svc.Published = time.Now().Add(-1 * time.Hour) // ...which this makes bite
+
+	findings, st := app(t, f.Project(svc), f.Registry(svc))
+	if got := findingFor(t, findings, svc.Name); got.Available() {
+		t.Errorf("a one-hour-old tag must not satisfy a 30d soak: %+v", got)
+	}
+	if len(st.Pending) != 0 {
+		t.Errorf("a soaking candidate is not yet a candidate: %+v", st.Pending)
+	}
+}
+
+// Take the registry away: that service errors, and says why.
+func TestApp_BreakingTheRegistry_IsAnErrorThatExplainsItself(t *testing.T) {
+	f := fixture.New(t)
+	svc := f.WithAuto(f.WithUpdate(f.PinnedService(), fixture.BumpPatch), "patch")
+
+	reg := f.Registry(svc)
+	reg.Fail = map[string]error{svc.Image: errTest} // the one break
+
+	findings, _ := app(t, f.Project(svc), reg)
+	got := findingFor(t, findings, svc.Name)
+	if got.Status != watch.StatusError {
+		t.Fatalf("Status = %q, want error when the registry is unreachable", got.Status)
+	}
+	if got.Reason == "" {
+		t.Error("an error finding must carry the cause")
+	}
+}
