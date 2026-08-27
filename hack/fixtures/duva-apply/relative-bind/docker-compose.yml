@@ -30,13 +30,15 @@ services:
     environment:
       DUVA_HOSTNAME: integration
     volumes:
-      # The socket, because applying recreates a container. The compose mount
-      # is read-write, because applying rewrites the file.
       - /var/run/docker.sock:/var/run/docker.sock
       - ${CTX_ROOT}/testbed/integration-duva-apply-work:/compose
       - ${CTX_ROOT}/testbed/integration-duva-apply-data:/data
+      # Only here because the suite's registry is self-signed.
       - ${CTX_ROOT}/testbed/integration-duva-apply-certs/cert.pem:/etc/ssl/certs/ca-certificates.crt:ro
     extra_hosts:
-      # duva drives the HOST's daemon through the socket, so the registry has
-      # to be named as that daemon can resolve it: the published port.
+      # The image is localhost:5555/app, and that name has to mean the registry
+      # in two places: here, where duva lists tags over HTTPS, and on the host's
+      # daemon, where the pull happens. It already does on the host; this makes
+      # it so inside the container. A real registry resolves the same
+      # everywhere, so neither this nor the certificate mount exists there.
       - localhost:host-gateway

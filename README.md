@@ -279,16 +279,16 @@ image: postgres:16.3
 
 No-op if the service isn't pinned.
 
-## duva — the notify-only companion
+## duva — the update companion
 
 This repo also ships **duva** (Swedish for dove — a carrier pigeon: flies to
-the registry, comes back with one note, touches nothing) as a container image:
-`ghcr.io/miista/duva`. It watches **pinned** services in a compose project
-(`image:` has `@sha256:...`) and sends one ntfy notification when a newer
-version tag appears (or, for an unconstrained pin, when the remote digest
-changes) — then remembers what it reported so it never repeats itself. It
-never rewrites the compose file, never pulls an image, never touches the
-Docker socket.
+the registry and comes back) as a container image: `ghcr.io/miista/duva`. It
+watches **pinned** services in a compose project (`image:` has `@sha256:...`),
+and for each one either applies the update or queues it for a human, according
+to that service's `duva.auto` policy. Applying means: pull the image, rewrite
+the pin, recreate the container, commit the change. What it cannot apply it
+reports once — over ntfy and in a small web queue — and remembers, so it never
+repeats itself.
 
 Being pinned **is** the opt-in: `docker pin <service>` starts duva watching
 it, `docker unpin <service>` stops it. A service without a digest is logged
@@ -309,10 +309,15 @@ services:
       duva.delay: 7d                  # only report a candidate this old
 ```
 
+`duva.auto` decides what may be applied without asking: `none` (the default),
+`patch`, `minor` or `major`. A service with no `duva.auto` is only ever
+reported.
+
 Everything else is env vars — `DUVA_SCHEDULE` (cron expression),
-`DUVA_HOSTNAME` (optional, defaults to the OS hostname), and
-`DUVA_NTFY_URL`/`DUVA_NTFY_TOPIC`/`DUVA_NTFY_TOKEN` for notifications. The
-container contract is two fixed mount paths plus env — no config file:
+`DUVA_HOSTNAME` (optional, defaults to the OS hostname),
+`DUVA_NTFY_URL`/`DUVA_NTFY_TOPIC`/`DUVA_NTFY_TOKEN` for notifications, and
+`DUVA_GIT_PUSH` to publish the commit. The container contract is two fixed
+mount paths plus env — no config file:
 
 ```yaml
 services:
@@ -324,19 +329,47 @@ services:
       DUVA_NTFY_TOPIC: docker-pin
     env_file: ./duva-secrets.env   # DUVA_NTFY_TOKEN=... ; gitignored
     volumes:
-      - .:/compose:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+      - .:/compose
       - duva-state:/data
+    ports:
+      - "8080:8080"   # the approval queue; omit to keep it unreachable
 volumes:
   duva-state:
 ```
 
-`/data` holds only the small dedup-state file, so a named volume is the
-right default: it lives on disk under Docker's data root, persists across
-restarts and upgrades, and inherits the image's `nonroot` ownership on
-first use — no `user:` or `chown` needed. If you prefer a bind mount
-(`./duva/data:/data`), the image's distroless `nonroot` user (UID 65532)
-must be able to write it: set `user:` to the directory owner's UID:GID or
-`chown 65532` the directory.
+**duva must be a service in the stack it watches.** It is not a host-wide
+daemon: it reads its own container's compose labels to learn which project to
+recreate containers in, and where that project lives on the host. Outside a
+compose project those labels do not exist and duva refuses to act rather than
+guess — recreating in the wrong project does not replace a container, it
+creates a second one alongside. With a root compose file that `include:`s the
+rest, one duva covers everything, since an included service belongs to the
+root project.
+
+The three mounts are what that work needs:
+
+- **`/var/run/docker.sock`** — duva pulls images and recreates containers by
+  driving the host's daemon. This is real access to the host: duva can start
+  and stop anything. Give it to a tool you are willing to trust that far.
+- **`.:/compose`** — the stack itself. duva parses it to find pinned services
+  and their labels, and rewrites the `image:` line when it applies an update.
+  Read-write, unlike earlier versions: a read-only mount silently blocks every
+  apply. It is also the git repository duva commits into, so it must be a
+  checkout, not a deployed copy.
+- **`duva-state:/data`** — the state file. It holds the approval queue, the
+  digest baselines for moving tags, and what has already been announced, so an
+  update is reported once rather than every run and the queue survives a
+  restart. A named volume is the right default; it persists across upgrades
+  and needs no ownership fiddling.
+
+Both paths are fixed. duva runs in a container, where `/compose` and
+`/data/duva.json` are the contract rather than a default, so there is nothing
+to configure and nothing to get wrong.
+
+Because duva commits, it will not act on a dirty repository — committing on
+top of someone's half-finished edit is never wanted. It is a precondition, not
+a setting.
 
 **`/compose` MUST be the compose project _directory_, never the compose file
 alone.** Two things break with a single-file mount: `include:`'d nested
