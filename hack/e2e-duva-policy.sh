@@ -15,11 +15,26 @@ NAME=duva-e2e-policy
 PORT=8098
 
 echo "== building $IMAGE"
-docker build -q -f cmd/duva/Dockerfile -t "$IMAGE" . >/dev/null
+# With GOCOVERDIR set, build and run an instrumented binary so this suite's
+# coverage merges with the unit tests' (go.dev/blog/integration-test-coverage).
+COVER_ARGS=""
+COVER_MOUNT=""
+if [ -n "${GOCOVERDIR:-}" ]; then
+  mkdir -p "$GOCOVERDIR"
+  chmod 777 "$GOCOVERDIR"
+  COVER_ARGS="--build-arg COVER=1"
+  # Run as the invoking user: the image is distroless-nonroot, which cannot
+  # write to a host-mounted directory. (On macOS the directory must also be
+  # under a path Docker Desktop shares -- /tmp is not one.)
+  COVER_MOUNT="-v $GOCOVERDIR:/covdata -e GOCOVERDIR=/covdata --user $(id -u):$(id -g)"
+fi
+docker build -q $COVER_ARGS -f cmd/duva/Dockerfile -t "$IMAGE" . >/dev/null
 
 rm -rf "$ROOT" && mkdir -p "$ROOT/compose" "$ROOT/data"
 chmod 777 "$ROOT/data"
-trap 'docker rm -f "$NAME" >/dev/null 2>&1 || true; rm -rf "$ROOT"' EXIT
+# stop before rm: SIGKILL would lose the instrumented binary's coverage,
+# which is only flushed on a clean exit.
+trap 'docker stop -t 5 "$NAME" >/dev/null 2>&1 || true; docker rm -f "$NAME" >/dev/null 2>&1 || true; rm -rf "$ROOT"' EXIT
 
 pass=0; fail=0
 check() { # check <description> <0|1>
@@ -59,7 +74,7 @@ services:
     image: nginx:1.26.0
 EOF
 
-run() { docker run --rm -v "$ROOT/compose:/compose:ro" -v "$ROOT/data:/data" "$IMAGE" run 2>&1; }
+run() { docker run --rm $COVER_MOUNT -v "$ROOT/compose:/compose:ro" -v "$ROOT/data:/data" "$IMAGE" run 2>&1; }
 
 echo "== first check against real registry data"
 out=$(run)
@@ -124,7 +139,7 @@ check "a second run leaves the queue unchanged" "$c"
 
 # --- the UI serves what the state holds --------------------------------
 echo "== serving the queue"
-docker run -d --name "$NAME" -p "$PORT:8080" \
+docker run -d --name "$NAME" $COVER_MOUNT -p "$PORT:8080" \
   -e DUVA_SCHEDULE="0 3 * * *" -e DUVA_UI_ADDR=":8080" -e DUVA_HOSTNAME=e2e \
   -v "$ROOT/compose:/compose:ro" -v "$ROOT/data:/data" "$IMAGE" serve >/dev/null
 for _ in $(seq 20); do curl -sf "http://localhost:$PORT/healthz" >/dev/null 2>&1 && break; sleep 0.5; done

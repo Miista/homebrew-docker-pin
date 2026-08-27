@@ -13,8 +13,16 @@ cd "$(dirname "$0")/.."
 ROOT="$PWD/.e2e-pin"
 BIN="$PWD/docker-pin"
 
+# With GOCOVERDIR set, build an instrumented binary so this suite's coverage
+# can be merged with the unit tests' (go.dev/blog/integration-test-coverage).
+# Unset, this is an ordinary build and nothing changes.
 echo "== building docker-pin"
-go build -o "$BIN" ./cmd/docker-pin
+if [ -n "${GOCOVERDIR:-}" ]; then
+  mkdir -p "$GOCOVERDIR"
+  go build -cover -coverpkg=./... -o "$BIN" ./cmd/docker-pin
+else
+  go build -o "$BIN" ./cmd/docker-pin
+fi
 
 rm -rf "$ROOT" && mkdir -p "$ROOT"
 trap 'rm -rf "$ROOT" "$BIN"' EXIT
