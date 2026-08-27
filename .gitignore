@@ -1,6 +1,7 @@
 /docker-pin
 /docker-unpin
 /docker-upgrade
+/duva
 dist/
 coverage.out
 
