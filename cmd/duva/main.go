@@ -426,6 +426,20 @@ func serve(reg watch.Registry, out io.Writer) error {
 		}()
 	}
 
+	// Check once at startup rather than waiting for the first tick. A daily
+	// schedule would otherwise leave duva idle for up to a day, showing a
+	// queue from some earlier run under a footer saying it had not looked yet.
+	if _, err := checkWith(cfg, reg, s.state, time.Now(), s.act, realDocker, realGit); err != nil {
+		fmt.Fprintf(os.Stderr, "duva: %v\n", err)
+	} else {
+		s.mu.Lock()
+		s.lastCheck = time.Now()
+		s.mu.Unlock()
+		if err := s.saveState(); err != nil {
+			fmt.Fprintf(os.Stderr, "duva: %v\n", err)
+		}
+	}
+
 	for {
 		next, err := croncal.Next(cfg.Schedule, time.Now())
 		if err != nil {
