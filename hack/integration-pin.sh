@@ -22,6 +22,7 @@ cd "$(dirname "$0")/.."
 # exits. No test has to remember to clean up, and a container left by a run
 # that was killed outright is swept before this one starts.
 ctx_init integration-pin
+registry_setup
 
 BIN="$(ctx_dir bin)/docker-pin"
 

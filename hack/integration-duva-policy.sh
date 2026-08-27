@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
-# e2e for duva's detection and policy, against real registries and a real
-# container.
+# Integration tests for duva's policy: which updates it applies unattended and
+# which it queues for a human.
 #
-# The unit tests fake the registry, so they cannot catch what this exists for:
-# real tags being listed, sorted and classified; labels surviving a round trip
-# through compose parsing; the state file surviving a restart; and the queue
-# rendering over HTTP. Each of those has broken in a way no fake would notice.
+# Real registry protocol, real container, real HTTP -- all locally, against a
+# registry containing exactly the tags each scenario declares. Nothing upstream
+# is contacted, so these are deterministic and work offline.
+#
+# The unit tests fake the registry, so they cannot show that a real tag list is
+# sorted and classified correctly, that labels survive a round trip through
+# compose parsing, that the queue persists across restarts, or that the page
+# renders over HTTP. Each of those has broken in a way no fake would notice.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -15,28 +19,25 @@ cd "$(dirname "$0")/.."
 # Everything created here is a context resource, torn down when this exits
 # however it exits; see hack/lib/context.sh.
 ctx_init integration-duva-policy
+registry_setup
 
 IMAGE=duva:integration-policy
 NAME=integration-duva-policy
 PORT=8098
 
 echo "== building $IMAGE"
-# With GOCOVERDIR set, build and run an instrumented binary so this suite's
-# coverage merges with the unit tests' (go.dev/blog/integration-test-coverage).
-COVER_ARGS=""
+# Built from the host's Go rather than through cmd/duva/Dockerfile: that
+# pulls golang: and distroless: at build time, so every run would depend on
+# Docker Hub being reachable and not rate-limiting. See ctx_build_duva_image.
 COVER_MOUNT=""
 if [ -n "${GOCOVERDIR:-}" ]; then
   mkdir -p "$GOCOVERDIR"
   chmod 777 "$GOCOVERDIR"
-  COVER_ARGS="--build-arg COVER=1"
-  # Run as the invoking user: the image is distroless-nonroot, which cannot
-  # write to a host-mounted directory. (On macOS the directory must also be
-  # under a path Docker Desktop shares -- /tmp is not one.)
-  COVER_MOUNT="-v $GOCOVERDIR:/covdata -e GOCOVERDIR=/covdata --user $(id -u):$(id -g)"
+  COVER_MOUNT="-v $GOCOVERDIR:/covdata -e GOCOVERDIR=/covdata"
 fi
-docker build -q $COVER_ARGS -f cmd/duva/Dockerfile -t "$IMAGE" . >/dev/null
+ctx_build_duva_image "$IMAGE"
 
-echo "== starting a local registry"
+scenario "policy decides what is queued"
 registry_start
 
 ROOT="$(ctx_dir project)"
@@ -60,30 +61,36 @@ cat > "$ROOT/compose/docker-compose.yml" <<EOF
 services:
   # patch available, duva.auto: patch -> applied unattended, never queued
   autopatch:
-    image: $(image_ref app 1.26.0)@$STALE
+    image: $(internal_ref app 1.26.0)@$STALE
     labels:
       duva.include: '^1\.26\.\d+\$'
       duva.auto: patch
 
   # minor available, duva.auto: patch -> exceeds the threshold, queued
   exceeds:
-    image: $(image_ref app 1.26.0)@$STALE
+    image: $(internal_ref app 1.26.0)@$STALE
     labels:
       duva.include: '^1\.\d+\.\d+\$'
       duva.auto: patch
 
   # patch available, no duva.auto -> defaults to none, queued
   defaultnone:
-    image: $(image_ref app 1.26.0)@$STALE
+    image: $(internal_ref app 1.26.0)@$STALE
     labels:
       duva.include: '^1\.26\.\d+\$'
 
   # unpinned: not watched at all
   loose:
-    image: $(image_ref app 1.26.0)
+    image: $(internal_ref app 1.26.0)
 EOF
 
-run() { docker run --rm $COVER_MOUNT -v "$ROOT/compose:/compose:ro" -v "$ROOT/data:/data" "$IMAGE" run 2>&1; }
+# duva reaches the registry by name on the shared network and trusts the
+# suite's certificate; see registry_container_args.
+# shellcheck disable=SC2046
+run() {
+  docker run --rm $(registry_container_args) $COVER_MOUNT \
+    -v "$ROOT/compose:/compose:ro" -v "$ROOT/data:/data" "$IMAGE" run 2>&1
+}
 
 echo "== first check"
 out=$(run)
@@ -109,35 +116,22 @@ c=0; echo "$out" | grep -q "loose: not pinned, skipping" && c=1
 check "unpinned service is skipped" "$c"
 
 # --- the queue holds only what needs a human ---------------------------
-queued() { python3 -c "
-import json,sys
-d=json.load(open('$ROOT/data/duva.json'))
-print(' '.join(sorted(d['pending'])))
-"; }
+# statequery reads the state file, so the suite needs no JSON parser on the
+# host; see hack/lib/statequery.
+queued() { "$(ctx_statequery)" "$ROOT/data/duva.json" pending; }
+pending_field() { "$(ctx_statequery)" "$ROOT/data/duva.json" pending "$1" "$2"; }
 
 got=$(queued); echo "   queue: [$got]"
 c=0; [ "$got" = "defaultnone exceeds" ] && c=1
 check "queue holds exactly the two needing approval" "$c"
 
-c=0; python3 -c "
-import json,sys
-d=json.load(open('$ROOT/data/duva.json'))
-sys.exit(0 if d['pending']['exceeds'].get('why') else 1)
-" && c=1
+c=0; [ -n "$(pending_field exceeds why)" ] && c=1
 check "queued rows carry an explanation" "$c"
 
-c=0; python3 -c "
-import json,sys
-d=json.load(open('$ROOT/data/duva.json'))
-sys.exit(0 if d['pending']['defaultnone'].get('bump') == 'patch' else 1)
-" && c=1
+c=0; [ "$(pending_field defaultnone bump)" = "patch" ] && c=1
 check "1.26.0 -> 1.26.3 classifies as patch" "$c"
 
-c=0; python3 -c "
-import json,sys
-d=json.load(open('$ROOT/data/duva.json'))
-sys.exit(0 if d['pending']['exceeds'].get('bump') == 'minor' else 1)
-" && c=1
+c=0; [ "$(pending_field exceeds bump)" = "minor" ] && c=1
 check "1.26.0 -> 1.31.4 classifies as minor" "$c"
 
 # --- state survives a restart ------------------------------------------
@@ -148,8 +142,8 @@ check "a second run leaves the queue unchanged" "$c"
 
 # --- the UI serves what the state holds --------------------------------
 echo "== serving the queue"
-# shellcheck disable=SC2086
-ctx_run "$NAME" $COVER_MOUNT -p "$PORT:8080" \
+# shellcheck disable=SC2086,SC2046
+ctx_run "$NAME" $(registry_container_args) $COVER_MOUNT -p "$PORT:8080" \
   -e DUVA_SCHEDULE="0 3 * * *" -e DUVA_UI_ADDR=":8080" -e DUVA_HOSTNAME=integration \
   -v "$ROOT/compose:/compose:ro" -v "$ROOT/data:/data" "$IMAGE" serve
 for _ in $(seq 20); do curl -sf "http://localhost:$PORT/healthz" >/dev/null 2>&1 && break; sleep 0.5; done

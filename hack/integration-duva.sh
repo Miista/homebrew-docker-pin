@@ -1,296 +1,190 @@
 #!/usr/bin/env bash
-# End-to-end test for duva against the real registry: builds the
-# container image, points it at a compose file pinned to an old tag, and
-# verifies it (1) detects the newer tag and notifies, (2) does not notify
-# again for the same tag on a second run, (3) never touches the compose
-# file it was pointed at (duva is read-only by design), and (4) skips any
-# service that isn't pinned (image: has no @sha256:...) -- duva only
-# watches services that were deliberately pinned via `docker pin`.
+# Integration tests for duva's detection and notification behaviour.
 #
-# The tag pair is NOT hardcoded -- a hardcoded "old" tag drifts stale over
-# time (eventually every patch on the branch is "old"), and a hardcoded pair
-# risks the older tag eventually being pruned from the registry's listing.
-# Instead this discovers, live, the two newest x.y.z-alpine tags currently
-# published for redis (same regex duva itself is configured with below),
-# pins the compose file to the OLDER of that pair, and expects duva to
-# report exactly the NEWER one -- the real predecessor/successor relationship
-# on whatever redis has actually published by the time this runs.
+# Real registry protocol, real container, real HTTP notifications -- all
+# locally, against a registry containing exactly the tags each scenario
+# declares. Nothing upstream is contacted, so these are deterministic and work
+# offline.
 #
-# Notifications are captured by a throwaway local HTTP server standing in for
-# ntfy, so this needs no real ntfy account/token and no network egress beyond
-# the registry lookup.
-#
-# Usage: hack/e2e-duva.sh   (run from the repo root; needs docker)
+# The unit tests fake the registry, so what they cannot show is what duva
+# actually announced: whether a notification fired at all, fired once rather
+# than every run, and named the right thing. That needs something on the other
+# end of the HTTP request.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-ROOT="$PWD/.e2e-duva"
-IMAGE=duva:e2e
+. hack/lib/context.sh
+. hack/lib/registry.sh
+. hack/lib/ntfy.sh
+
+ctx_init integration-duva
+registry_setup
+ntfy_setup
+
+IMAGE=duva:integration
 
 echo "== building $IMAGE"
-# With GOCOVERDIR set, build and run an instrumented binary so this suite's
-# coverage merges with the unit tests' (go.dev/blog/integration-test-coverage).
-COVER_ARGS=""
+# With GOCOVERDIR set the binary is instrumented, so this suite's coverage
+# merges with the unit tests' (go.dev/blog/integration-test-coverage).
 COVER_MOUNT=""
 if [ -n "${GOCOVERDIR:-}" ]; then
   mkdir -p "$GOCOVERDIR"
   chmod 777 "$GOCOVERDIR"
-  COVER_ARGS="--build-arg COVER=1"
-  # Run as the invoking user: the image is distroless-nonroot, which cannot
-  # write to a host-mounted directory. (On macOS the directory must also be
-  # under a path Docker Desktop shares -- /tmp is not one.)
-  COVER_MOUNT="-v $GOCOVERDIR:/covdata -e GOCOVERDIR=/covdata --user $(id -u):$(id -g)"
+  COVER_MOUNT="-v $GOCOVERDIR:/covdata -e GOCOVERDIR=/covdata"
 fi
-docker build -q $COVER_ARGS -f cmd/duva/Dockerfile -t "$IMAGE" . >/dev/null
+ctx_build_duva_image "$IMAGE"
 
-echo "== discovering the two newest redis x.y.z-alpine tags"
-read -r OLD_TAG NEW_TAG < <(
-  curl -s "https://hub.docker.com/v2/repositories/library/redis/tags?page_size=100" |
-    python3 -c '
-import json, re, sys
-tags = json.load(sys.stdin)["results"]
-pat = re.compile(r"^\d+\.\d+\.\d+-alpine$")
-versioned = sorted(
-    (t["name"] for t in tags if pat.match(t["name"])),
-    key=lambda s: tuple(map(int, s.split("-")[0].split("."))),
-)
-if len(versioned) < 2:
-    sys.exit("not enough versioned alpine tags found")
-print(versioned[-2], versioned[-1])
-'
-)
-echo "   predecessor: $OLD_TAG   successor: $NEW_TAG"
+pass=0; fail=0
+check() { # check <description> <0|1>
+  if [ "$2" = 1 ]; then echo "   ok   $1"; pass=$((pass + 1))
+  else echo "   FAIL $1"; fail=$((fail + 1)); fi
+}
 
-echo "== resolving redis:$OLD_TAG's digest so the fixture is pinned"
-docker pull -q "redis:$OLD_TAG" >/dev/null
-OLD_DIGEST=$(docker image inspect "redis:$OLD_TAG" --format '{{index .RepoDigests 0}}' | sed 's/^.*@//')
+# duva_run <compose-dir> <data-dir> -- one check, as the container runs it.
+# It reaches the registry by name over TLS and posts notifications to the fake
+# receiver, both on the shared network.
+# shellcheck disable=SC2046,SC2086
+duva_run() {
+  docker run --rm --user "$(id -u):$(id -g)" \
+    $(registry_container_args) $(ntfy_env) $COVER_MOUNT \
+    -e DUVA_HOSTNAME=integration \
+    -v "$1:/compose:ro" -v "$2:/data" \
+    "$IMAGE" run 2>&1
+}
 
-NTFY_PORT=8933
+# state_value <file> <service> -- what duva remembers about a service. A
+# constrained service records its last-notified TAG; a moving tag records its
+# digest baseline.
+state_value() {
+  "$(ctx_statequery)" "$1" remembers "$2"
+}
 
-rm -rf "$ROOT" && mkdir -p "$ROOT/work" "$ROOT/data"
-cat > "$ROOT/work/docker-compose.yml" <<EOF
+# --- a newer tag is announced once ---------------------------------------
+scenario "a newer constrained tag is announced exactly once"
+registry_start
+ntfy_start
+push_versions app 1.0.0-alpine 1.1.0-alpine
+
+WORK="$(ctx_dir work)"; mkdir -p "$WORK/compose" "$WORK/data"
+chmod 777 "$WORK/data"
+cat > "$WORK/compose/docker-compose.yml" <<EOF
 services:
-  redis:
-    image: redis:$OLD_TAG@$OLD_DIGEST
+  app:
+    image: $(internal_ref app 1.0.0-alpine)@$(digest_of app 1.0.0-alpine)
     labels:
       duva.include: '^\d+\.\d+\.\d+-alpine\$'
 EOF
-DUVA_ENV=(-e "DUVA_SCHEDULE=0 0 * * *" -e "DUVA_NTFY_URL=http://host.docker.internal:$NTFY_PORT" -e "DUVA_NTFY_TOPIC=e2e")
+before_hash=$(shasum -a 256 "$WORK/compose/docker-compose.yml" | awk '{print $1}')
 
-# Minimal fake ntfy: a netcat-less HTTP responder using python3 (present on
-# GitHub Actions ubuntu-latest and any dev machine with Docker), logging each
-# POST body to a file so the test can assert exactly one notification fired.
-NTFY_LOG="$ROOT/ntfy-requests.log"
-: > "$NTFY_LOG"
-python3 - "$NTFY_PORT" "$NTFY_LOG" >"$ROOT/ntfy-server.log" 2>&1 <<'PYEOF' &
-import http.server, sys, threading
+out=$(duva_run "$WORK/compose" "$WORK/data")
+echo "$out" | sed 's/^/   | /'
 
-port, log_path = int(sys.argv[1]), sys.argv[2]
+c=0; echo "$out" | grep -q "app: 1.1.0-alpine available" && c=1
+check "the newer tag is detected" "$c"
 
-class Handler(http.server.BaseHTTPRequestHandler):
-    def do_POST(self):
-        length = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(length).decode(errors="replace")
-        with open(log_path, "a") as f:
-            # One notification, one line: bodies are multi-line now (the
-            # message says what changed AND why), and the tests count lines.
-            f.write(self.headers.get("Title", "") + "|" + body.replace("\n", " ") + "\n")
-        self.send_response(200)
-        self.end_headers()
-    def log_message(self, *a):
-        pass
+c=0; [ "$(shasum -a 256 "$WORK/compose/docker-compose.yml" | awk '{print $1}')" = "$before_hash" ] && c=1
+check "the compose file is untouched -- duva only reports" "$c"
 
-httpd = http.server.HTTPServer(("0.0.0.0", port), Handler)
-httpd.serve_forever()
-PYEOF
-NTFY_PID=$!
-trap 'kill $NTFY_PID 2>/dev/null || true; wait $NTFY_PID 2>/dev/null || true; rm -rf "$ROOT"' EXIT
+c=0; [ "$(ntfy_count)" = 1 ] && c=1
+check "exactly one notification is sent (got $(ntfy_count))" "$c"
 
-sleep 0.5 # let the fake ntfy bind before duva can reach it
+c=0; ntfy_mentions "1.1.0-alpine" && c=1
+check "the notification names the successor tag" "$c"
 
-pass=0 fail=0
-check() { # $1 = description, $2 = condition (already evaluated as 0/1)
-  if [ "$2" = 1 ]; then echo "   PASS: $1"; pass=$((pass+1))
-  else echo "   FAIL: $1"; fail=$((fail+1)); fi
-}
+c=0; [ "$(state_value "$WORK/data/duva.json" app)" = "1.1.0-alpine" ] && c=1
+check "the successor is recorded as notified" "$c"
 
-# state_value <file> <key>: prints state.json's value for key, or nothing if
-# the file/key is missing -- used to assert the exact stored value, not just
-# that some matching substring appears somewhere in the file.
-state_value() {
-  python3 -c '
-import json, sys
-# State is {"baseline": {...}, "notified": {...}, "pending": {...}}. A
-# constrained service records its last-notified TAG under notified; a moving
-# tag records its digest baseline under baseline. Look in both, since callers
-# just ask "what does duva remember about this service".
-try:
-    with open(sys.argv[1]) as f:
-        data = json.load(f)
-except (FileNotFoundError, json.JSONDecodeError):
-    sys.exit(0)
-key = sys.argv[2]
-print(data.get("notified", {}).get(key) or data.get("baseline", {}).get(key, ""), end="")
-' "$1" "$2"
-}
+# The same candidate on a later run must not be announced again: a tool that
+# repeats itself hourly gets muted, and then real news is missed too.
+duva_run "$WORK/compose" "$WORK/data" >/dev/null
+c=0; [ "$(ntfy_count)" = 1 ] && c=1
+check "a second run does not repeat the notification (got $(ntfy_count))" "$c"
 
-before_compose_hash=$(sha256sum "$ROOT/work/docker-compose.yml" | awk '{print $1}')
+# --- a moving tag records a baseline silently ----------------------------
+scenario "a moving tag records its baseline without announcing anything"
+registry_start
+ntfy_start
+push_moving app latest first
 
-echo "== first run: expect a newer tag detected and one notification sent"
-docker run --rm --user "$(id -u):$(id -g)" --add-host=host.docker.internal:host-gateway \
-  "${DUVA_ENV[@]}" \
-  -v "$ROOT/work:/compose:ro" -v "$ROOT/data:/data" \
-  "$IMAGE" run 2>&1 | sed 's/^/   | /'
-
-after_compose_hash=$(sha256sum "$ROOT/work/docker-compose.yml" | awk '{print $1}')
-same_hash=0; [ "$before_compose_hash" = "$after_compose_hash" ] && same_hash=1
-check "compose file untouched" "$same_hash"
-
-notif_count=$(wc -l < "$NTFY_LOG" | tr -d ' ')
-one_notif=0; [ "$notif_count" = 1 ] && one_notif=1
-check "exactly one notification sent" "$one_notif"
-
-mentions_new_tag=0; grep -q "$NEW_TAG" "$NTFY_LOG" && mentions_new_tag=1
-check "notification names the discovered successor tag ($NEW_TAG)" "$mentions_new_tag"
-
-state_written=0; [ -f "$ROOT/data/duva.json" ] && state_written=1
-check "state file written" "$state_written"
-
-redis_state=$(state_value "$ROOT/data/duva.json" redis)
-state_has_new_tag=0; [ "$redis_state" = "$NEW_TAG" ] && state_has_new_tag=1
-check "state[redis] is exactly the discovered successor tag ($NEW_TAG, got '$redis_state')" "$state_has_new_tag"
-
-echo "== second run: expect no repeat notification for the same tag"
-docker run --rm --user "$(id -u):$(id -g)" --add-host=host.docker.internal:host-gateway \
-  "${DUVA_ENV[@]}" \
-  -v "$ROOT/work:/compose:ro" -v "$ROOT/data:/data" \
-  "$IMAGE" run 2>&1 | sed 's/^/   | /'
-
-notif_count2=$(wc -l < "$NTFY_LOG" | tr -d ' ')
-still_one=0; [ "$notif_count2" = 1 ] && still_one=1
-check "no repeat notification (still exactly one)" "$still_one"
-
-# --- moving-tag scenario: unconstrained service (no tags: regex) ---
-# duva has no local baseline for a moving tag (nothing is pulled), so the
-# first check must record the remote digest silently, then only notify once
-# a later check sees a different digest.
-echo "== moving-tag scenario: unconstrained service, no baseline yet"
-MROOT="$ROOT-moving"
-rm -rf "$MROOT" && mkdir -p "$MROOT/work" "$MROOT/data"
-
-docker pull -q redis:alpine >/dev/null
-ALPINE_DIGEST=$(docker image inspect redis:alpine --format '{{index .RepoDigests 0}}' | sed 's/^.*@//')
-cat > "$MROOT/work/docker-compose.yml" <<EOF
+WORK="$(ctx_dir work)"; mkdir -p "$WORK/compose" "$WORK/data"
+chmod 777 "$WORK/data"
+cat > "$WORK/compose/docker-compose.yml" <<EOF
 services:
-  redis:
-    image: redis:alpine@$ALPINE_DIGEST
+  app:
+    image: $(internal_ref app latest)@$(digest_of app latest)
 EOF
-MNTFY_PORT=8934
-MDUVA_ENV=(-e "DUVA_SCHEDULE=0 0 * * *" -e "DUVA_NTFY_URL=http://host.docker.internal:$MNTFY_PORT" -e "DUVA_NTFY_TOPIC=e2e")
 
-MNTFY_LOG="$MROOT/ntfy-requests.log"
-: > "$MNTFY_LOG"
-python3 - "$MNTFY_PORT" "$MNTFY_LOG" >"$MROOT/ntfy-server.log" 2>&1 <<'PYEOF' &
-import http.server, sys
+duva_run "$WORK/compose" "$WORK/data" | sed 's/^/   | /'
 
-port, log_path = int(sys.argv[1]), sys.argv[2]
+c=0; [ "$(ntfy_count)" = 0 ] && c=1
+check "nothing is announced on the first sight of a moving tag" "$c"
 
-class Handler(http.server.BaseHTTPRequestHandler):
-    def do_POST(self):
-        length = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(length).decode(errors="replace")
-        with open(log_path, "a") as f:
-            # One notification, one line: bodies are multi-line now (the
-            # message says what changed AND why), and the tests count lines.
-            f.write(self.headers.get("Title", "") + "|" + body.replace("\n", " ") + "\n")
-        self.send_response(200)
-        self.end_headers()
-    def log_message(self, *a):
-        pass
+baseline=$(state_value "$WORK/data/duva.json" app)
+c=0; [[ "$baseline" == sha256:* ]] && c=1
+check "a digest baseline is recorded (got '${baseline:0:20}')" "$c"
 
-http.server.HTTPServer(("0.0.0.0", port), Handler).serve_forever()
-PYEOF
-MNTFY_PID=$!
-trap 'kill $NTFY_PID $MNTFY_PID 2>/dev/null || true; wait $NTFY_PID $MNTFY_PID 2>/dev/null || true; rm -rf "$ROOT" "$MROOT"' EXIT
-sleep 0.5
+# Unchanged: still silent, and the baseline does not drift.
+duva_run "$WORK/compose" "$WORK/data" >/dev/null
+c=0; [ "$(ntfy_count)" = 0 ] && c=1
+check "an unmoved tag stays silent" "$c"
 
-docker run --rm --user "$(id -u):$(id -g)" --add-host=host.docker.internal:host-gateway \
-  "${MDUVA_ENV[@]}" \
-  -v "$MROOT/work:/compose:ro" -v "$MROOT/data:/data" \
-  "$IMAGE" run 2>&1 | sed 's/^/   | /'
+c=0; [ "$(state_value "$WORK/data/duva.json" app)" = "$baseline" ] && c=1
+check "the baseline is unchanged while the tag has not moved" "$c"
 
-no_notif_yet=0; [ "$(wc -l < "$MNTFY_LOG" | tr -d ' ')" = 0 ] && no_notif_yet=1
-check "moving tag: no notification on first check (no baseline yet)" "$no_notif_yet"
+# --- a moved digest is announced -----------------------------------------
+scenario "a moved digest is announced"
+registry_start
+ntfy_start
+push_moving app latest first
 
-moving_state=$(state_value "$MROOT/data/duva.json" redis)
-baseline_written=0
-case "$moving_state" in sha256:*) baseline_written=1 ;; esac
-check "moving tag: state[redis] holds a sha256 digest baseline (got '$moving_state')" "$baseline_written"
-
-echo "== moving-tag scenario: second run with an unchanged digest must not notify"
-docker run --rm --user "$(id -u):$(id -g)" --add-host=host.docker.internal:host-gateway \
-  "${MDUVA_ENV[@]}" \
-  -v "$MROOT/work:/compose:ro" -v "$MROOT/data:/data" \
-  "$IMAGE" run 2>&1 | sed 's/^/   | /'
-
-still_no_notif=0; [ "$(wc -l < "$MNTFY_LOG" | tr -d ' ')" = 0 ] && still_no_notif=1
-check "moving tag: no notification while the digest is unchanged" "$still_no_notif"
-
-moving_state2=$(state_value "$MROOT/data/duva.json" redis)
-baseline_unchanged=0; [ "$moving_state2" = "$moving_state" ] && baseline_unchanged=1
-check "moving tag: recorded baseline unchanged across the unchanged-digest run" "$baseline_unchanged"
-
-# --- pin-gate scenario: an unpinned service must be skipped entirely ---
-echo "== pin-gate scenario: unpinned service is skipped, no state, no notification"
-UROOT="$ROOT-unpinned"
-rm -rf "$UROOT" && mkdir -p "$UROOT/work" "$UROOT/data"
-cat > "$UROOT/work/docker-compose.yml" <<EOF
+WORK="$(ctx_dir work)"; mkdir -p "$WORK/compose" "$WORK/data"
+chmod 777 "$WORK/data"
+cat > "$WORK/compose/docker-compose.yml" <<EOF
 services:
-  redis:
-    image: redis:$OLD_TAG
+  app:
+    image: $(internal_ref app latest)@$(digest_of app latest)
 EOF
-UNTFY_PORT=8935
-UDUVA_ENV=(-e "DUVA_SCHEDULE=0 0 * * *" -e "DUVA_NTFY_URL=http://host.docker.internal:$UNTFY_PORT" -e "DUVA_NTFY_TOPIC=e2e")
-UNTFY_LOG="$UROOT/ntfy-requests.log"
-: > "$UNTFY_LOG"
-python3 - "$UNTFY_PORT" "$UNTFY_LOG" >"$UROOT/ntfy-server.log" 2>&1 <<'PYEOF' &
-import http.server, sys
 
-port, log_path = int(sys.argv[1]), sys.argv[2]
+duva_run "$WORK/compose" "$WORK/data" >/dev/null   # records the baseline
+ntfy_reset
 
-class Handler(http.server.BaseHTTPRequestHandler):
-    def do_POST(self):
-        length = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(length).decode(errors="replace")
-        with open(log_path, "a") as f:
-            # One notification, one line: bodies are multi-line now (the
-            # message says what changed AND why), and the tests count lines.
-            f.write(self.headers.get("Title", "") + "|" + body.replace("\n", " ") + "\n")
-        self.send_response(200)
-        self.end_headers()
-    def log_message(self, *a):
-        pass
+push_moving app latest second                       # the tag moves
+out=$(duva_run "$WORK/compose" "$WORK/data")
+echo "$out" | sed 's/^/   | /'
 
-http.server.HTTPServer(("0.0.0.0", port), Handler).serve_forever()
-PYEOF
-UNTFY_PID=$!
-trap 'kill $NTFY_PID $MNTFY_PID $UNTFY_PID 2>/dev/null || true; wait $NTFY_PID $MNTFY_PID $UNTFY_PID 2>/dev/null || true; rm -rf "$ROOT" "$MROOT" "$UROOT"' EXIT
-sleep 0.5
+c=0; echo "$out" | grep -q "app: sha256:.* available" && c=1
+check "the digest move is detected" "$c"
 
-run_output=$(docker run --rm --user "$(id -u):$(id -g)" --add-host=host.docker.internal:host-gateway \
-  "${UDUVA_ENV[@]}" \
-  -v "$UROOT/work:/compose:ro" -v "$UROOT/data:/data" \
-  "$IMAGE" run 2>&1)
-echo "$run_output" | sed 's/^/   | /'
+c=0; [ "$(ntfy_count)" = 1 ] && c=1
+check "the move is announced once (got $(ntfy_count))" "$c"
 
-skipped=0; echo "$run_output" | grep -q "redis: not pinned, skipping" && skipped=1
-check "unpinned service logged as skipped" "$skipped"
+# --- pin status is the opt-in --------------------------------------------
+scenario "an unpinned service is not watched at all"
+registry_start
+ntfy_start
+push_versions app 1.0.0-alpine 1.1.0-alpine
 
-no_notif=0; [ "$(wc -l < "$UNTFY_LOG" | tr -d ' ')" = 0 ] && no_notif=1
-check "unpinned service: no notification sent" "$no_notif"
+WORK="$(ctx_dir work)"; mkdir -p "$WORK/compose" "$WORK/data"
+chmod 777 "$WORK/data"
+cat > "$WORK/compose/docker-compose.yml" <<EOF
+services:
+  app:
+    image: $(internal_ref app 1.0.0-alpine)
+    labels:
+      duva.include: '^\d+\.\d+\.\d+-alpine\$'
+EOF
 
-no_state=0; { [ ! -f "$UROOT/data/duva.json" ] || [ "$(state_value "$UROOT/data/duva.json" redis)" = "" ]; } && no_state=1
-check "unpinned service: no state recorded" "$no_state"
+out=$(duva_run "$WORK/compose" "$WORK/data")
+echo "$out" | sed 's/^/   | /'
 
-echo "== e2e: $pass passed, $fail failed"
+c=0; echo "$out" | grep -q "app: not pinned, skipping" && c=1
+check "the service is reported as skipped" "$c"
+
+c=0; [ "$(ntfy_count)" = 0 ] && c=1
+check "nothing is announced for an unwatched service" "$c"
+
+c=0; [ -z "$(state_value "$WORK/data/duva.json" app)" ] && c=1
+check "nothing is recorded for an unwatched service" "$c"
+
+echo "== integration: $pass passed, $fail failed"
 exit $((fail > 0))

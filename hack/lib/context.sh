@@ -23,6 +23,7 @@ ctx_init() {
   CTX_ROOT="${CTX_ROOT:-$PWD}"
   CTX_SCENARIO=""
   CTX_RUN_DIRS=()
+  CTX_RUN_IMAGES=()
   ctx_reset_registers
 
   # Anything left by a run that died before its trap fired.
@@ -97,6 +98,14 @@ ctx_dir() {
 # ctx_run_dir [suffix] -- like ctx_dir, but survives scenario boundaries and
 # is removed only when the run ends. For artefacts that are the same for every
 # scenario, such as the registry certificate.
+# ctx_run_image <ref> -- register an image that outlives scenario boundaries
+# and is removed only when the run ends. For test tooling, which is identical
+# for every scenario: rebuilding a byte-identical binary per scenario is pure
+# cost, and nothing a scenario asserts depends on it being fresh.
+ctx_run_image() {
+  CTX_RUN_IMAGES+=("$1")
+}
+
 ctx_run_dir() {
   local dir
   dir="$(mktemp -d "${CTX_ROOT}/.${CTX_SUITE}${1:+-$1}.XXXXXX")"
@@ -180,6 +189,11 @@ ctx_teardown() {
 
   ctx_release
 
+  local ref
+  for ref in "${CTX_RUN_IMAGES[@]:-}"; do
+    [ -n "$ref" ] && docker rmi -f "$ref" >/dev/null 2>&1 || true
+  done
+
   local rundir
   for rundir in "${CTX_RUN_DIRS[@]:-}"; do
     [ -n "$rundir" ] && rm -rf "$rundir"
@@ -190,4 +204,45 @@ ctx_teardown() {
   ctx_sweep
 
   return $status
+}
+
+# ctx_statequery -- builds the state-file query helper once per run and prints
+# its path. Used instead of a JSON parser on the host: Go is already required
+# to build what is under test, python3 is not.
+ctx_statequery() {
+  if [ -z "${CTX_STATEQUERY:-}" ]; then
+    local dir
+    dir="$(ctx_run_dir statequery)"
+    CTX_STATEQUERY="$dir/statequery"
+    (cd "$CTX_ROOT" && go build -o "$CTX_STATEQUERY" ./hack/lib/statequery)
+  fi
+  printf '%s' "$CTX_STATEQUERY"
+}
+
+# ctx_build_duva_image <tag> -- builds a duva image without pulling anything.
+#
+# The shipped Dockerfile builds inside golang:1.22-alpine and lands on
+# distroless -- correct for a release, but it means every suite run depends on
+# Docker Hub being reachable and not rate-limiting. Here the binary is built on
+# the host (Go is already required to build what is under test) and copied into
+# a scratch image, so the suite pulls nothing.
+#
+# The result differs from the shipped image in one way that matters: no CA
+# bundle. Suites that need one mount it, which they do anyway to trust the test
+# registry's certificate.
+ctx_build_duva_image() {
+  local tag="$1" dir
+  dir="$(ctx_run_dir duvaimg)"
+
+  local flags=(-trimpath)
+  if [ -n "${GOCOVERDIR:-}" ]; then
+    flags+=(-cover -coverpkg=./...)
+  else
+    flags+=(-ldflags "-s -w")
+  fi
+
+  (cd "$CTX_ROOT" && CGO_ENABLED=0 GOOS=linux go build "${flags[@]}" -o "$dir/duva" ./cmd/duva)
+  printf 'FROM scratch\nCOPY duva /duva\nENTRYPOINT ["/duva"]\nCMD ["serve"]\n' > "$dir/Dockerfile"
+  docker build -q -t "$tag" "$dir" >/dev/null
+  ctx_run_image "$tag"
 }

@@ -27,6 +27,26 @@ REGISTRY_HOST="localhost:${REGISTRY_PORT}"
 REGISTRY_INTERNAL_HOST="testregistry:5000"
 REGISTRY_NAME="testregistry"
 
+# registry_setup prepares what every scenario's registry will share: the TLS
+# certificate. Call it once, after ctx_init and before the first scenario.
+#
+# One certificate per suite, not per scenario: it is the same certificate
+# every time, so regenerating a 2048-bit key on each scenario boundary is pure
+# cost. Generated rather than committed, so there is no private key in the
+# repo and no expiry to trip over in a year. It lives in a run-scoped
+# directory, so scenario boundaries leave it alone and only teardown removes
+# it.
+registry_setup() {
+  REGISTRY_CERT_DIR="$(ctx_run_dir certs)"
+  # SANs cover both names the registry answers to: testregistry from another
+  # container, localhost from the host.
+  openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+    -keyout "$REGISTRY_CERT_DIR/key.pem" -out "$REGISTRY_CERT_DIR/cert.pem" \
+    -subj "/CN=testregistry" \
+    -addext "subjectAltName=DNS:testregistry,DNS:localhost,IP:127.0.0.1" 2>/dev/null
+  REGISTRY_CERT="$REGISTRY_CERT_DIR/cert.pem"
+}
+
 # registry_start brings up a registry and a build context for scratch images.
 # Sets REGISTRY_CTX to the context directory. Requires ctx_init to have run:
 # the registry and its build context are context resources, torn down with
@@ -45,21 +65,11 @@ registry_start() {
 
   docker rm -f "$REGISTRY_NAME" >/dev/null 2>&1 || true
 
-  # One certificate per run, not per scenario: it is the same certificate
-  # every time, so regenerating a 2048-bit key on each scenario boundary is
-  # pure cost. Generated rather than committed so there is no private key in
-  # the repo and no expiry to trip over years from now.
   if [ -z "${REGISTRY_CERT_DIR:-}" ]; then
-    REGISTRY_CERT_DIR="$(ctx_run_dir certs)"
-    # SANs cover both names it answers to: testregistry from another
-    # container, localhost from the host.
-    openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
-      -keyout "$REGISTRY_CERT_DIR/key.pem" -out "$REGISTRY_CERT_DIR/cert.pem" \
-      -subj "/CN=testregistry" \
-      -addext "subjectAltName=DNS:testregistry,DNS:localhost,IP:127.0.0.1" 2>/dev/null
+    echo "registry_setup must be called once before the first scenario" >&2
+    return 1
   fi
   local certs="$REGISTRY_CERT_DIR"
-  REGISTRY_CERT="$certs/cert.pem"
 
   REGISTRY_NETWORK="${CTX_SUITE}-net"
   ctx_network "$REGISTRY_NETWORK"
