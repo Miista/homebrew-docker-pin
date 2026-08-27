@@ -73,6 +73,9 @@ type composeFile struct {
 	Services map[string]struct {
 		Image  string      `yaml:"image"`
 		Labels labelsField `yaml:"labels"`
+		// Build is only ever tested for presence, so its shape (string short
+		// form or mapping) does not matter -- yaml.Node accepts both.
+		Build yaml.Node `yaml:"build"`
 	} `yaml:"services"`
 	Include []includeEntry `yaml:"include"`
 }
@@ -245,6 +248,30 @@ func RawImage(file, serviceName string) (string, error) {
 		return "", fmt.Errorf("service %q not found in %s", serviceName, file)
 	}
 	return svc.Image, nil
+}
+
+// IsBuilt reports whether the service is built locally (has a `build:` key)
+// rather than pulled from a registry.
+//
+// These must never be pinned. A locally built image does get a repo digest
+// once it is tagged, but that digest is local to this daemon -- no registry
+// serves it, so `image: myapp:local@sha256:...` cannot be pulled on another
+// host, which is the whole point of pinning. `docker compose up` builds them
+// from source anyway; the Dockerfile and its build context are the pin.
+func IsBuilt(file, serviceName string) (bool, error) {
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return false, err
+	}
+	var cf composeFile
+	if err := yaml.Unmarshal(data, &cf); err != nil {
+		return false, fmt.Errorf("parsing %s: %w", file, err)
+	}
+	svc, ok := cf.Services[serviceName]
+	if !ok {
+		return false, fmt.Errorf("service %q not found in %s", serviceName, file)
+	}
+	return !svc.Build.IsZero(), nil
 }
 
 // Labels returns the labels of the given service (nil if it has none).

@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -69,6 +70,102 @@ func TestPinInFile_LocalImage(t *testing.T) {
 	}
 	if !strings.Contains(readCompose(t, f), "nginx:1.25@sha256:localhash") {
 		t.Errorf("expected pinned image in compose, got:\n%s", readCompose(t, f))
+	}
+}
+
+// The reason runningDigest exists: pin is normally run after a stack has been
+// up a while, and in that window something else can re-pull the moving tag.
+// The local image for `latest` then points somewhere newer than the container
+// is actually running, and pinning that would record a digest that never ran.
+func TestPinInFile_PrefersRunningContainer(t *testing.T) {
+	f := writeTempCompose(t, `services:
+  web:
+    image: nginx:latest
+`)
+	d := dockerFuncs{
+		runningDigest: func(dir, service, baseImage string) (string, error) {
+			if service != "web" || baseImage != "nginx" {
+				t.Errorf("unexpected lookup: service=%q baseImage=%q", service, baseImage)
+			}
+			return "sha256:whatisrunning", nil
+		},
+		getDigest: func(ref string) (string, error) { return "sha256:newerlocal", nil },
+		pull:      func(ref string) error { return errors.New("should not be called") },
+	}
+	if _, err := pinInFile(f, "web", d, false); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got := readCompose(t, f)
+	if !strings.Contains(got, "nginx:latest@sha256:whatisrunning") {
+		t.Errorf("expected the running container's digest to win, got:\n%s", got)
+	}
+}
+
+// No container for the service (never brought up, or it belongs to another
+// host) falls back to the local image.
+func TestPinInFile_FallsBackToLocalWhenNotRunning(t *testing.T) {
+	f := writeTempCompose(t, `services:
+  web:
+    image: nginx:latest
+`)
+	d := dockerFuncs{
+		runningDigest: func(dir, service, baseImage string) (string, error) { return "", nil },
+		getDigest:     func(ref string) (string, error) { return "sha256:localhash", nil },
+		pull:          func(ref string) error { return errors.New("should not be called") },
+	}
+	if _, err := pinInFile(f, "web", d, false); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(readCompose(t, f), "nginx:latest@sha256:localhash") {
+		t.Errorf("expected fallback to the local image, got:\n%s", readCompose(t, f))
+	}
+}
+
+// A container running an image with no usable repo digest (locally built, or
+// pruned after the tag moved) must not block pinning -- fall through.
+func TestPinInFile_RunningLookupFailureIsFatal(t *testing.T) {
+	f := writeTempCompose(t, `services:
+  web:
+    image: nginx:latest
+`)
+	d := dockerFuncs{
+		runningDigest: func(dir, service, baseImage string) (string, error) {
+			return "", errors.New("docker daemon unreachable")
+		},
+		getDigest: func(ref string) (string, error) { return "sha256:localhash", nil },
+		pull:      func(ref string) error { return errors.New("should not be called") },
+	}
+	if _, err := pinInFile(f, "web", d, false); err == nil {
+		t.Fatal("expected a docker failure to surface rather than silently pinning something else")
+	}
+	if strings.Contains(readCompose(t, f), "@sha256:") {
+		t.Error("compose file should be untouched when the running lookup errors")
+	}
+}
+
+// The tag is the tag to FOLLOW, so pinning must write it back verbatim.
+// Resolving `latest` to whatever version tag happens to carry the same digest
+// would freeze the service on that version line: the concrete tag never moves,
+// so it would silently stop receiving updates.
+func TestPinInFile_KeepsMovingTag(t *testing.T) {
+	f := writeTempCompose(t, `services:
+  web:
+    image: nginx:latest
+`)
+	d := dockerFuncs{
+		getDigest: func(ref string) (string, error) { return "sha256:localhash", nil },
+		pull:      func(ref string) error { return errors.New("should not be called") },
+	}
+	out, err := pinInFile(f, "web", d, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out.Tag != "latest" {
+		t.Errorf("tag should stay latest, got %q", out.Tag)
+	}
+	got := readCompose(t, f)
+	if !strings.Contains(got, "nginx:latest@sha256:localhash") {
+		t.Errorf("expected latest to be kept as the followed tag, got:\n%s", got)
 	}
 }
 
@@ -255,6 +352,143 @@ func TestPinAll(t *testing.T) {
 	}
 }
 
+// chdir switches to dir for the duration of the test (t.Chdir needs go1.24,
+// and this module targets 1.22).
+func chdir(t *testing.T, dir string) {
+	t.Helper()
+	prev, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chdir(prev) })
+}
+
+// captureStdout runs fn with os.Stdout redirected and returns what it wrote.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	orig := os.Stdout
+	os.Stdout = w
+	done := make(chan string)
+	go func() {
+		var b strings.Builder
+		io.Copy(&b, r)
+		done <- b.String()
+	}()
+	fn()
+	w.Close()
+	os.Stdout = orig
+	return <-done
+}
+
+// summaryOrder returns the service column of a "Summary:" table, in the order
+// printed.
+func summaryOrder(t *testing.T, out string) []string {
+	t.Helper()
+	var got []string
+	seenHeader := false
+	for _, line := range strings.Split(out, "\n") {
+		f := strings.Fields(line)
+		if len(f) == 0 {
+			continue
+		}
+		if f[0] == "SERVICE" {
+			seenHeader = true
+			continue
+		}
+		if seenHeader {
+			got = append(got, f[0])
+		}
+	}
+	return got
+}
+
+// The dry-run summary is a report a human reads and diffs between runs, so it
+// is sorted rather than left in compose-file order (pin) or goroutine
+// completion order (upgrade --all, which was nondeterministic).
+func TestPinAll_SummaryIsSorted(t *testing.T) {
+	dir := t.TempDir()
+	// deliberately not alphabetical in the file
+	if err := os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte(`services:
+  web:
+    image: nginx:1.25
+  alpha:
+    image: alpine:3.20
+  mango:
+    image: redis:7
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	chdir(t, dir)
+
+	d := dockerFuncs{
+		getDigest: func(ref string) (string, error) { return "sha256:" + ref, nil },
+		pull:      func(ref string) error { return nil },
+	}
+	out := captureStdout(t, func() {
+		if err := pinAll(d, true); err != nil {
+			t.Errorf("pinAll: %v", err)
+		}
+	})
+
+	got := summaryOrder(t, out)
+	want := []string{"alpha", "mango", "web"}
+	if len(got) != len(want) {
+		t.Fatalf("expected %d rows, got %d:\n%s", len(want), len(got), out)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("summary not sorted: got %v, want %v", got, want)
+		}
+	}
+}
+
+// upgrade --all resolves and pulls concurrently, so before sorting the
+// summary came out in goroutine-completion order -- a different order every
+// run, for a report meant to be diffed.
+func TestUpgradeAll_SummaryIsSorted(t *testing.T) {
+	dir := t.TempDir()
+	// `latest` keeps MovingPullTag off the network; not alphabetical in file.
+	if err := os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte(`services:
+  web:
+    image: nginx:latest@sha256:old1
+  alpha:
+    image: alpine:latest@sha256:old2
+  mango:
+    image: redis:latest@sha256:old3
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	chdir(t, dir)
+
+	d := dockerFuncs{
+		getDigest: func(ref string) (string, error) { return "sha256:new-" + ref, nil },
+		pull:      func(ref string) error { return nil },
+	}
+	out := captureStdout(t, func() {
+		if err := upgradeAll(d, true, 4); err != nil {
+			t.Errorf("upgradeAll: %v", err)
+		}
+	})
+
+	got := summaryOrder(t, out)
+	want := []string{"alpha", "mango", "web"}
+	if len(got) != len(want) {
+		t.Fatalf("expected %d rows, got %d:\n%s", len(want), len(got), out)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("summary not sorted: got %v, want %v", got, want)
+		}
+	}
+}
+
 // --- listInFile ---
 
 const listCompose = `services:
@@ -318,5 +552,55 @@ func TestListInFile_AllPinnedQuiet(t *testing.T) {
 	}
 	if buf.Len() != 0 {
 		t.Errorf("expected no output, got %q", buf.String())
+	}
+}
+
+// A locally built image must never be pinned: its repo digest exists only on
+// this daemon, so `myapp:local@sha256:...` is unpullable anywhere else --
+// precisely the reproducibility failure pinning exists to prevent.
+func TestPinInFile_SkipsLocallyBuilt(t *testing.T) {
+	f := writeTempCompose(t, `services:
+  app:
+    build: ./app
+    image: myapp:local
+`)
+	d := dockerFuncs{
+		runningDigest: func(dir, service, baseImage string) (string, error) {
+			return "", errors.New("should not be consulted for a built service")
+		},
+		getDigest: func(ref string) (string, error) { return "", errors.New("should not be called") },
+		pull:      func(ref string) error { return errors.New("should not be called") },
+	}
+	out, err := pinInFile(f, "app", d, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !out.Built {
+		t.Error("outcome should be marked Built")
+	}
+	if strings.Contains(readCompose(t, f), "@sha256:") {
+		t.Errorf("a built service must not be pinned, got:\n%s", readCompose(t, f))
+	}
+}
+
+func TestUpgradeInFile_SkipsLocallyBuilt(t *testing.T) {
+	f := writeTempCompose(t, `services:
+  app:
+    build: ./app
+    image: myapp:local
+`)
+	d := dockerFuncs{
+		getDigest: func(ref string) (string, error) { return "", errors.New("should not be called") },
+		pull:      func(ref string) error { return errors.New("should not be called") },
+	}
+	out, err := upgradeInFile(f, "app", "", d, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !out.Built || out.Changed {
+		t.Errorf("expected a skipped built service, got %+v", out)
+	}
+	if strings.Contains(readCompose(t, f), "@sha256:") {
+		t.Errorf("a built service must not be pinned, got:\n%s", readCompose(t, f))
 	}
 }

@@ -45,8 +45,12 @@ Shells out to the `docker` CLI. `Pull` streams `docker pull`; `GetDigest` runs
 `sha256:...` repo digest of a locally-present image.
 
 ### `internal/registry`
-Resolves which *version* tag (e.g. `1.2.3`) corresponds to a digest, so a
-`latest` pin can be recorded under a meaningful tag.
+Tag listing/selection for `upgrade` and `schedule`, plus a resolver that maps a
+digest back to a *version* tag (e.g. `1.2.3`). **The resolver is no longer wired
+into pinning** — see "The tag is the tag to follow" — so `ResolveVersionTag` and
+friends currently have no production caller. They are kept for a planned
+readability feature (annotating a pinned line with the concrete version as a
+trailing comment), not because anything depends on them today.
 - `ResolveVersionTag(baseImage, digest)` dispatches by registry: `ghcr.io/` →
   GHCR; no dot in first path segment or `docker.io/` prefix → Docker Hub;
   anything else → generic OCI Distribution (`oci.go`), discovering bearer auth
@@ -74,11 +78,18 @@ Resolves which *version* tag (e.g. `1.2.3`) corresponds to a digest, so a
 
 ## Command semantics
 
-- **`docker pin <service>`**: no-op if the image is already digest-pinned. Uses the
-  *local* digest, pulling only if the image isn't present locally. If the tag is
-  `latest`, resolves it to a version tag via `ResolveOrWarn` — a first-time,
-  low-stakes label guess, since the digest (not the tag) is what's pinned.
-  Writes `base:tag@sha256:...`.
+- **`docker pin <service>`**: no-op if the image is already digest-pinned. Digest
+  source, in order: the **running container's** image (`docker.RunningDigest`,
+  found via compose's own `com.docker.compose.service` +
+  `project.working_dir` labels), else the local image, else a pull. Preferring
+  the running container matters because pinning happens *after* a stack has been
+  up a while, and in that window something else can re-pull the moving tag —
+  pinning the local image would then record a digest that never ran here. When
+  the two disagree it prints a "Note:" line. A `runningDigest` error is fatal
+  (never silently fall through to a different digest); "no container" and "no
+  repo digest" (locally built / pruned) both return empty and fall through.
+  Writes `base:tag@sha256:...` with the tag **exactly as written in the compose
+  file** — see "The tag is the tag to follow" below.
 - **`docker pin upgrade <service> [version]`**: *always* pulls — `version` if
   given, otherwise the moving tag `registry.MovingPullTag` derives from the
   service's current tag (e.g. a service pinned at `1.4.2` checks `1.4`; one
@@ -162,6 +173,28 @@ This repo **is** the Homebrew tap. The formula installs the binaries into
 plugin dir, the formula caveat tells users to add it to `cliPluginsExtraDirs` in
 `~/.docker/config.json`.
 
+## The tag is the tag to follow
+
+In `image: <name>:<tag>@sha256:<digest>` the **tag is an instruction** — which
+stream of releases this service tracks — and the **digest is the record** of
+what is actually running. One field cannot be both, so the tag is never
+rewritten to describe what was pinned:
+
+- `docker pin <service>` writes the tag back verbatim. A service on `latest`
+  stays on `latest`.
+- `docker pin upgrade <service>` re-resolves the digest for the tag already in
+  the file; the tag is unchanged.
+- `docker pin upgrade <service> <version>` is the one operation that *does*
+  change the tag, because changing it is what was asked for.
+
+Until 2026-08 both `pin` (via `ResolveOrWarn`) and `upgrade` resolved a moving
+tag to whatever concrete version tag carried the same digest, for readability.
+That was actively harmful: it converted "track latest" into "pinned to the
+1.26 line forever" — a concrete tag never moves, so the service silently
+stopped receiving updates the moment it was pinned. Guarded by
+`TestPinInFile_KeepsMovingTag` and `hack/e2e-pin.sh` (real registry; the unit
+tests fake the digest lookups and so cannot catch a tag rewrite).
+
 ## Index vs manifest digests (multi-arch)
 
 `docker image inspect` returns the **index** (manifest-list) digest — the hash of
@@ -180,6 +213,19 @@ This means:
 
 ## Conventions
 
+- **Parse flags, then reject what's left over if it's flag-shaped.** Each
+  command consumes its known flags into variables (`--dry-run`/`-n`,
+  `--all`/`-a`, `--concurrency`/`-j`) and everything else falls through to a
+  `filtered` slice of positional args; `rejectUnknownFlags` then errors on any
+  of those starting with `-`. Never sniff `args[0] == "--all"` before checking
+  argument counts — that is what let `pin --all --dry-riun` drop the mistyped
+  flag and rewrite every compose file for real.
+- **`--all` dry-run summaries are sorted by service name** (`sort.Slice` on
+  results, `sort.Strings` on failures) in all three tables: `pinAll`,
+  `upgradeAll`, unpin's `runAll`. `upgradeAll`'s was otherwise in
+  goroutine-completion order, i.e. different every run. Covered by
+  `Test*_SummaryIsSorted` in both commands' `main_test.go`, which capture
+  stdout via the local `captureStdout` helper.
 - New subcommand on `docker pin` = new `case` in `cmd/docker-pin/main.go`'s `main()` switch.
 - New top-level plugin = new `cmd/docker-<name>` package; register in `Makefile` `BINARIES`,
   `.goreleaser.yaml` `builds`/`archives`, and the formula `install` line.

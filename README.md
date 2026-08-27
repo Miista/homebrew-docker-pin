@@ -10,7 +10,7 @@ Docker CLI plugins to pin container images in a Compose file to an exact tag and
 
 Two plugins:
 
-- **`docker pin`** — pins a service to its current digest. Pulls the image if not local. If the tag is `latest`, resolves it to the most specific immutable version tag (e.g. `5.8.0-ga1b2c3d`) so the pin is meaningful, not just `latest@sha256:...`.
+- **`docker pin`** — pins a service to the digest it is *actually running* (falling back to the local image, then a pull). The tag is written back verbatim: it is the tag to *follow*, and the digest is the record of what runs, so `latest@sha256:...` stays on `latest`.
 - **`docker pin upgrade`** — pulls fresh, then re-pins to the new digest. Same version-tag resolution.
 - **`docker unpin`** — strips the digest, leaving just `image: postgres:16`.
 
@@ -73,7 +73,7 @@ docker pin <service>
 docker pin --all
 ```
 
-No-op if the service is already pinned. Pulls the image if it isn't present locally.
+No-op if the service is already pinned.
 
 Before:
 ```yaml
@@ -86,15 +86,45 @@ After:
 ```yaml
 services:
   db:
-    image: postgres:16.3@sha256:a3dc6b...
+    image: postgres:16@sha256:a3dc6b...
 ```
 
-If the tag is `latest`, the plugin resolves it to the most specific immutable version tag available in the registry:
+#### Which digest gets pinned
+
+The intended workflow is: bring the stack up, live with it, decide this is what
+you want, *then* pin. So `pin` records **what is actually running**, in this
+order:
+
+1. **The running container's image** — if a container for the service is up.
+2. **The local image** for the tag — if the service isn't running.
+3. **A pull** — only if the image isn't present locally at all (first pin on a
+   fresh host, after a prune, or a service that runs on another box).
+
+The order matters because of the gap between "up" and "pinned". In that window
+something else may re-pull the moving tag — a sibling service on the same base
+image, a build, a manual `docker pull` — so the local image for `nginx:latest`
+can be *newer* than the container is running. Pinning that would record a
+digest that has never run on this host. When the two disagree, `pin` says so
+and pins the running one:
+
+```
+Using digest from running container: sha256:41b1944...
+Note: nginx:latest now resolves to sha256:b34848e... locally — pinning what is running, not that.
+```
+
+To move to what the tag points at now, that is what `upgrade` is for.
+
+The tag is kept exactly as written — it is the tag to **follow**, while the
+digest records what is actually running. A service on `latest` stays on
+`latest` and keeps tracking it:
 
 ```yaml
-  gatus:
-    image: ghcr.io/miista/gatus-wrapper:5.8.0-ga1b2c3d@sha256:...
+  web:
+    image: nginx:latest@sha256:...
 ```
+
+Only `docker pin upgrade <service> <version>` changes the tag, because that is
+what it was asked to do.
 
 ### Upgrade a service
 
@@ -186,7 +216,7 @@ receives `PIN_SERVICE`, `PIN_OLD_IMAGE` and `PIN_NEW_IMAGE` in its
 environment, so a hook like
 
 ```yaml
-on_change: git add docker-compose.yml && git commit -m "optiplex/$PIN_SERVICE: upgrade to $PIN_NEW_IMAGE" && git push
+on_change: git add docker-compose.yml && git commit -m "$PIN_SERVICE: upgrade to $PIN_NEW_IMAGE" && git push
 ```
 
 produces one revertable commit per service upgrade. The full set of hook
@@ -328,16 +358,66 @@ exits.
 - Two tags can point to byte-identical `linux/amd64` images but have different index digests if their manifest lists carry different platform sets (e.g. `latest` includes Windows images, `alpine` does not). The "already up to date" check will therefore treat them as different — this is correct, not a bug.
 - The digest shown in the Docker Hub "Digest" column is the per-arch manifest digest and may differ from the index digest recorded by this tool. This is expected.
 
-## Version tag resolution
+## The tag is the tag to follow
 
-When a service is on `latest` (or you upgrade to `latest`), the plugin queries the registry for all version-like tags and matches their manifest digests against the freshly pulled image. It picks the most specific matching tag — most dots, then longest — so a `-g<sha>` build tag wins over a bare `1.2`.
+In `image: <name>:<tag>@sha256:<digest>`, the **tag is an instruction** — which
+stream of releases this service tracks — and the **digest is the record** of
+what is actually running. One field cannot be both, so the tag is never
+rewritten to describe what got pinned:
 
-If no version tag matches the local digest (the image is orphaned — a newer build replaced the tag), the plugin warns and falls back to pinning with the pull tag unchanged. It also suggests `docker pin upgrade <service>` to get back onto a tagged version.
+| Command | Tag |
+|---|---|
+| `docker pin <service>` | written back verbatim |
+| `docker pin upgrade <service>` | unchanged; only the digest moves |
+| `docker pin upgrade <service> <version>` | becomes `<version>` — the one operation that changes it, because that is what was asked |
 
-Resolution is supported for:
-- **Docker Hub** — public images, no auth required
-- **GHCR** — `ghcr.io/` images
-- **Any OCI-compliant registry** — bearer auth discovered via `WWW-Authenticate` challenge
+Earlier versions resolved a moving tag to whatever concrete version tag carried
+the same digest, so that the file read `radarr:5.28.1@sha256:…` instead of
+`radarr:latest@sha256:…`. That was actively harmful: a concrete tag never
+moves, so the service silently stopped receiving updates the moment it was
+pinned. If you have services pinned by an older version, check for ones whose
+tag you did not choose yourself.
+
+The registry tag-listing code is still used to find upgrade candidates
+(`docker pin upgrade`, `schedule`, and duva); it just no longer decides what
+tag a pin is written under. Supported registries: **Docker Hub**, **GHCR**, and
+any **OCI-compliant registry** (bearer auth discovered via the
+`WWW-Authenticate` challenge).
+
+## Unknown flags are rejected
+
+Every command parses the flags it knows and treats anything else that looks
+like a flag as an error, rather than silently passing it through as a
+positional argument:
+
+```
+$ docker pin --all --dry-riun
+Error: unknown flag "--dry-riun"
+Usage: docker pin <service>
+       docker pin --all [--dry-run]
+```
+
+This matters because `--all` combined with a mistyped `--dry-run` would
+otherwise run for real against every service. A typo in a safety flag must
+never become a live run.
+
+## Dry-run summaries
+
+`--dry-run` on any `--all` command prints a summary table instead of changing
+anything. Rows are sorted alphabetically by service, so the output is stable
+between runs and easy to diff:
+
+```
+$ docker pin --all --dry-run
+Summary:
+SERVICE  ACTION  SHA
+alpha    pin     sha256:...
+mango    none    sha256:...
+web      pin     sha256:...
+```
+
+`ACTION` is `pin`/`upgrade`/`unpin` for services that would change, `none` for
+those already in the desired state, and `FAILED` for ones that errored.
 
 ### GHCR/OCI tag listing cost
 
