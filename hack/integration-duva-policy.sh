@@ -144,7 +144,7 @@ check "a second run leaves the queue unchanged" "$c"
 echo "== serving the queue"
 # shellcheck disable=SC2086,SC2046
 ctx_run "$NAME" $(registry_container_args) $COVER_MOUNT -p "$PORT:8080" \
-  -e DUVA_SCHEDULE="0 3 * * *" -e DUVA_UI_ADDR=":8080" -e DUVA_HOSTNAME=integration \
+  -e DUVA_SCHEDULE="0 3 * * *" -e DUVA_HOSTNAME=integration \
   -v "$ROOT/compose:/compose:ro" -v "$ROOT/data:/data" "$IMAGE" serve
 for _ in $(seq 20); do curl -sf "http://localhost:$PORT/healthz" >/dev/null 2>&1 && break; sleep 0.5; done
 

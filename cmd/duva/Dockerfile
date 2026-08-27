@@ -29,8 +29,8 @@ RUN mkdir /out/data && chown 65532:65532 /out/data
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build --chown=65532:65532 /out/data /data
 COPY --from=build /out/duva /duva
-# The approval queue, when DUVA_UI_ADDR is set. Documentation only — the port
-# is whatever that variable says, and with it unset no listener is started.
+# The approval queue. Reachable only if the operator publishes it; duva always
+# listens, since a container's port is invisible until someone maps it.
 EXPOSE 8080
 ENTRYPOINT ["/duva"]
 CMD ["serve"]

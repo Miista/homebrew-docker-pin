@@ -47,6 +47,12 @@ import (
 
 var version = "dev"
 
+// uiAddr is where the approval queue is served. Fixed rather than
+// configurable: inside a container the port is invisible to the operator,
+// who chooses what -- if anything -- to publish it as. A setting here would
+// only be a second place to look.
+const uiAddr = ":8080"
+
 // duva's container contract is fixed mount paths plus env vars — no
 // working-directory tricks, no search logic:
 //
@@ -116,9 +122,6 @@ type envConfig struct {
 	NtfyURL   string
 	NtfyTopic string
 	NtfyToken string
-	// UIAddr is the listen address for the approval queue, e.g. ":8080".
-	// Empty disables the UI entirely — no listener at all.
-	UIAddr string
 	// Apply lets duva act on what policy allows rather than only reporting
 	// it. Off by default: a build that can write must not start writing on a
 	// host where nobody has said it may, and duva has spent its life as a
@@ -141,7 +144,6 @@ func loadEnvConfig() envConfig {
 		NtfyURL:   os.Getenv("DUVA_NTFY_URL"),
 		NtfyTopic: os.Getenv("DUVA_NTFY_TOPIC"),
 		NtfyToken: os.Getenv("DUVA_NTFY_TOKEN"),
-		UIAddr:    os.Getenv("DUVA_UI_ADDR"),
 
 		Apply:            boolEnv("DUVA_APPLY", false),
 		Push:             boolEnv("DUVA_GIT_PUSH", false),
@@ -408,8 +410,8 @@ func (s *store) LastCheck() string {
 }
 
 // serve loops forever, running the same check as `run` on cfg.Schedule (a
-// 5-field cron expression), until SIGTERM/SIGINT. With DUVA_UI_ADDR set it
-// also serves the approval queue.
+// 5-field cron expression), until SIGTERM/SIGINT, serving the approval queue
+// alongside it.
 func serve(reg watch.Registry, out io.Writer) error {
 	cfg := loadEnvConfig()
 	if _, err := croncal.Next(cfg.Schedule, time.Now()); err != nil {
@@ -425,9 +427,9 @@ func serve(reg watch.Registry, out io.Writer) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if cfg.UIAddr != "" {
+	{
 		srv := &http.Server{
-			Addr: cfg.UIAddr,
+			Addr: uiAddr,
 			Handler: (&ui.Server{
 				Source:  s,
 				Host:    hostLabel(cfg),
@@ -440,7 +442,7 @@ func serve(reg watch.Registry, out io.Writer) error {
 			ReadHeaderTimeout: 10 * time.Second,
 		}
 		go func() {
-			fmt.Fprintf(out, "duva: approval queue on %s\n", cfg.UIAddr)
+			fmt.Fprintf(out, "duva: approval queue on %s\n", uiAddr)
 			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 				fmt.Fprintf(os.Stderr, "duva: ui: %v\n", err)
 			}
