@@ -91,5 +91,42 @@ echo "   -> $line"
 explicit=0; [[ "$line" == nginx:1.26.3@sha256:* ]] && explicit=1
 check "explicit version becomes the new followed tag" "$explicit"
 
+# --- running container wins over a moved local tag ----------------------
+# The real scenario: bring a stack up, live with it, then pin. Meanwhile the
+# moving tag gets re-pulled by something else, so the local image for the tag
+# is newer than what the container is running. Pin must record what runs.
+echo "== pinning a running service whose tag has since moved"
+# NOT under $ROOT: compose.FindFile walks up, and $ROOT has its own
+# docker-compose.yml from the tests above that it would find instead.
+PROJECT="$PWD/.e2e-pin-running"
+rm -rf "$PROJECT"
+mkdir -p "$PROJECT"
+OLD_DIGEST=sha256:41b194461e4bae16f9b25d68b0976ed4735b89ca625c89aad88e1c1c3b7e8860  # nginx 1.26.3
+cat > "$PROJECT/docker-compose.yml" <<EOF
+services:
+  web:
+    image: nginx:pinsandbox
+EOF
+
+# Build the divergence by hand: tag an old image as :pinsandbox, run it, then
+# repoint the tag at a newer image without touching the container.
+docker pull -q "nginx@$OLD_DIGEST" >/dev/null
+docker tag "nginx@$OLD_DIGEST" nginx:pinsandbox
+(cd "$PROJECT" && docker compose up -d >/dev/null 2>&1)
+docker pull -q nginx:latest >/dev/null
+NEW_DIGEST=$(docker image inspect nginx:latest --format '{{index .RepoDigests 0}}' | sed 's/^.*@//')
+docker tag nginx:latest nginx:pinsandbox   # tag now points somewhere newer
+trap 'cd "$PROJECT" 2>/dev/null && docker compose down >/dev/null 2>&1; docker rmi nginx:pinsandbox >/dev/null 2>&1; rm -rf "$ROOT" "$PROJECT" "$BIN"' EXIT
+
+(cd "$PROJECT" && "$BIN" pin web) | sed 's/^/   | /'
+line=$(image_line "$PROJECT/docker-compose.yml")
+echo "   -> $line"
+
+ran=0; [[ "$line" == *"@$OLD_DIGEST" ]] && ran=1
+check "pins the digest the container is running" "$ran"
+
+not_newer=0; [[ "$line" != *"@$NEW_DIGEST" ]] && not_newer=1
+check "does not pin the newer digest sitting on the tag" "$not_newer"
+
 echo "== e2e: $pass passed, $fail failed"
 exit $((fail > 0))
