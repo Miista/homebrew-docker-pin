@@ -223,21 +223,19 @@ func TestApply_EndpointAbsentWhenReadOnly(t *testing.T) {
 	}
 }
 
-// And the button is not offered either, so the page does not suggest an
-// action that cannot happen.
-func TestIndex_NoButtonWhenReadOnly(t *testing.T) {
+// And the form is not offered either, so the page cannot suggest an action
+// that would 404. The form is what is asserted, not the button's label: what
+// matters is whether the page can submit, and wording is free to change.
+func TestIndex_NoFormWhenReadOnly(t *testing.T) {
 	body := get(t, queueWith(nil), "/").Body.String()
-	if strings.Contains(body, "Apply") {
-		t.Errorf("a read-only queue should offer no Apply button:\n%s", body)
+	if strings.Contains(body, `action="/apply"`) {
+		t.Errorf("a read-only queue should offer no way to submit:\n%s", body)
 	}
 }
 
-func TestIndex_ButtonWhenApplierPresent(t *testing.T) {
+func TestIndex_FormWhenApplierPresent(t *testing.T) {
 	body := get(t, queueWith(&fakeApplier{}), "/").Body.String()
-	if !strings.Contains(body, "Apply") {
-		t.Error("the Apply button should be offered")
-	}
 	if !strings.Contains(body, `action="/apply"`) {
-		t.Error("the form should post to /apply")
+		t.Error("the form should post to /apply, where the handler is")
 	}
 }
