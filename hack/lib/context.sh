@@ -133,7 +133,11 @@ ctx_run() {
 ctx_compose_up() {
   local dir="$1"
   CTX_PROJECTS+=("$dir")
-  (cd "$dir" && docker compose up -d --remove-orphans >/dev/null 2>&1)
+  (cd "$dir" && docker compose up -d --remove-orphans >/dev/null 2>&1) || {
+    echo "compose up failed in $dir:" >&2
+    (cd "$dir" && docker compose up -d --remove-orphans 2>&1 | tail -5 >&2)
+    return 1
+  }
 }
 
 # ctx_image <ref> -- register a locally tagged image for removal, so a rerun
@@ -243,6 +247,30 @@ ctx_build_duva_image() {
 
   (cd "$CTX_ROOT" && CGO_ENABLED=0 GOOS=linux go build "${flags[@]}" -o "$dir/duva" ./cmd/duva)
   printf 'FROM scratch\nCOPY duva /duva\nENTRYPOINT ["/duva"]\nCMD ["serve"]\n' > "$dir/Dockerfile"
+  docker build -q -t "$tag" "$dir" >/dev/null
+  ctx_run_image "$tag"
+}
+
+# ctx_build_duva_applier <tag> -- a duva image that can apply updates.
+#
+# Applying needs the docker CLI, compose and git, so this cannot be FROM
+# scratch like the reporting image. It is built on docker:cli, which carries
+# all three, rather than assembling them: the point is to exercise duva
+# against the real binaries, and a hand-built image would only be a slower way
+# of getting the same ones.
+ctx_build_duva_applier() {
+  local tag="$1" dir
+  dir="$(ctx_run_dir applier)"
+
+  local flags=(-trimpath)
+  if [ -n "${GOCOVERDIR:-}" ]; then
+    flags+=(-cover -coverpkg=./...)
+  else
+    flags+=(-ldflags "-s -w")
+  fi
+  (cd "$CTX_ROOT" && CGO_ENABLED=0 GOOS=linux go build "${flags[@]}" -o "$dir/duva" ./cmd/duva)
+
+  printf 'FROM docker:cli\nCOPY duva /duva\nENTRYPOINT ["/duva"]\nCMD ["run"]\n' > "$dir/Dockerfile"
   docker build -q -t "$tag" "$dir" >/dev/null
   ctx_run_image "$tag"
 }

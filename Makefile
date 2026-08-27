@@ -43,6 +43,7 @@ test-integration:
 	./hack/integration-pin.sh
 	./hack/integration-duva.sh
 	./hack/integration-duva-policy.sh
+	./hack/integration-duva-apply.sh
 
 # --- coverage ---------------------------------------------------------
 # Reports unit and integration coverage separately, then merged. Merging
@@ -66,6 +67,7 @@ cover:
 	@GOCOVERDIR=$(COVER_DIR)/integration ./hack/integration-pin.sh >/dev/null
 	@GOCOVERDIR=$(COVER_DIR)/integration ./hack/integration-duva.sh >/dev/null
 	@GOCOVERDIR=$(COVER_DIR)/integration ./hack/integration-duva-policy.sh >/dev/null
+	@GOCOVERDIR=$(COVER_DIR)/integration ./hack/integration-duva-apply.sh >/dev/null
 	@go tool covdata percent -i=$(COVER_DIR)/integration | sort
 	@echo
 	@echo "== merged"
