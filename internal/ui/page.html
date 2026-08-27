@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>duva{{if .Host}} — {{.Host}}{{end}}</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --fg: #1a1a1a; --muted: #6b6b6b; --bg: #fbfbfb;
+    --card: #fff; --line: #e3e3e3; --accent: #0b5fff;
+    --major: #b3261e; --minor: #8a5a00; --digest: #3a3a3a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --fg: #e8e8e8; --muted: #9a9a9a; --bg: #16171a;
+      --card: #1e2024; --line: #303338; --accent: #6f9bff;
+      --major: #ff6f61; --minor: #e0a458; --digest: #b9b9b9;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 2rem 1rem; background: var(--bg); color: var(--fg);
+    font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 60rem; margin: 0 auto; }
+  header { display: flex; align-items: baseline; gap: .75rem; margin-bottom: 1.5rem; }
+  h1 { font-size: 1.25rem; margin: 0; font-weight: 600; }
+  .host { color: var(--muted); font-size: .9rem; }
+  .count { margin-left: auto; color: var(--muted); font-size: .9rem; }
+  table { width: 100%; border-collapse: collapse; background: var(--card);
+          border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  th, td { text-align: left; padding: .7rem .9rem; border-bottom: 1px solid var(--line); }
+  th { font-size: .75rem; text-transform: uppercase; letter-spacing: .05em;
+       color: var(--muted); font-weight: 600; }
+  tr:last-child td { border-bottom: 0; }
+  .service { font-weight: 600; }
+  .image { color: var(--muted); font-size: .8rem; }
+  code { font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .kind { font-size: .75rem; font-weight: 600; text-transform: uppercase;
+          letter-spacing: .04em; }
+  .kind-major { color: var(--major); }
+  .kind-minor { color: var(--minor); }
+  .kind-digest, .kind-unknown { color: var(--digest); }
+  .arrow { color: var(--muted); padding: 0 .35rem; }
+  .empty { background: var(--card); border: 1px solid var(--line); border-radius: 8px;
+           padding: 3rem 1rem; text-align: center; color: var(--muted); }
+  footer { margin-top: 1.5rem; color: var(--muted); font-size: .8rem; }
+  .wrap { overflow-x: auto; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Updates awaiting approval</h1>
+    {{if .Host}}<span class="host">{{.Host}}</span>{{end}}
+    {{if .Pending}}<span class="count">{{len .Pending}} waiting</span>{{end}}
+  </header>
+
+  {{if .Pending}}
+  <div class="wrap">
+  <table>
+    <thead>
+      <tr><th>Service</th><th>Current</th><th>Available</th><th>Kind</th><th>Since</th></tr>
+    </thead>
+    <tbody>
+      {{range .Pending}}
+      <tr>
+        <td>
+          <div class="service">{{.Service}}</div>
+          <div class="image">{{.Image}}</div>
+        </td>
+        <td><code>{{.CurrentTag}}</code></td>
+        <td>
+          <code>{{.CurrentTag}}</code><span class="arrow">&rarr;</span><code>{{.Candidate}}</code>
+        </td>
+        <td><span class="kind kind-{{.Reason}}">{{.Reason}}</span></td>
+        <td class="image">{{.FirstSeen}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  </div>
+  {{else}}
+  <div class="empty">Nothing waiting. Everything watched is up to date, or applied automatically.</div>
+  {{end}}
+
+  <footer>
+    duva {{.Version}} &middot; checked {{.LastCheck}}
+  </footer>
+</main>
+</body>
+</html>

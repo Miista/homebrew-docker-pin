@@ -6,6 +6,9 @@ import (
 	"path/filepath"
 	"regexp"
 	"testing"
+	"time"
+
+	"github.com/Miista/homebrew-docker-pin/internal/watch"
 )
 
 // setupFixture creates a temp dir with a compose file and points the
@@ -25,209 +28,288 @@ func setupFixture(t *testing.T, composeContent string) string {
 }
 
 const pinnedConstrainedService = `services:
-  qui:
-    image: ghcr.io/autobrr/qui:1.2.0@sha256:aaa
+  app:
+    image: example.com/app:1.2.0@sha256:aaa
     labels:
       duva.include: '^\d+\.\d+\.\d+$'
 `
 
 const pinnedUnconstrainedService = `services:
-  qui:
-    image: ghcr.io/autobrr/qui:latest@sha256:aaa
+  app:
+    image: example.com/app:latest@sha256:aaa
 `
 
 const unpinnedService = `services:
-  qui:
-    image: ghcr.io/autobrr/qui:1.2.0
+  app:
+    image: example.com/app:1.2.0
 `
 
-func fakeReg(tags []string) regFuncs {
-	return regFuncs{listMatchingTags: func(baseImage string, include, exclude *regexp.Regexp, current string) ([]string, error) {
-		return tags, nil
-	}}
-}
+const builtService = `services:
+  app:
+    build: ./app
+    image: app:local
+`
 
-func fakeDigestReg(digest string) regFuncs {
-	return regFuncs{remoteDigest: func(baseImage, tag string) (string, error) { return digest, nil }}
-}
-
-func TestCheckServiceFindsNewerTag(t *testing.T) {
-	composeFile := filepath.Join(setupFixture(t, pinnedConstrainedService), "docker-compose.yml")
-	svc, err := loadServiceRules(composeFile, "qui")
-	if err != nil {
-		t.Fatal(err)
-	}
-	candidate, err := checkService(composeFile, svc, fakeReg([]string{"1.2.0", "1.3.0", "1.2.1"}), map[string]string{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if candidate != "1.3.0" {
-		t.Fatalf("candidate = %q, want 1.3.0", candidate)
+func tagReg(tags []string) watch.Registry {
+	return watch.Registry{
+		ListMatchingTags: func(string, *regexp.Regexp, *regexp.Regexp, string) ([]string, error) {
+			return tags, nil
+		},
 	}
 }
 
-func TestCheckServiceNoNewerTag(t *testing.T) {
-	composeFile := filepath.Join(setupFixture(t, pinnedConstrainedService), "docker-compose.yml")
-	svc, err := loadServiceRules(composeFile, "qui")
-	if err != nil {
-		t.Fatal(err)
-	}
-	candidate, err := checkService(composeFile, svc, fakeReg([]string{"1.2.0", "1.1.0"}), map[string]string{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if candidate != "" {
-		t.Fatalf("candidate = %q, want empty", candidate)
+func digestReg(digest string) watch.Registry {
+	return watch.Registry{
+		RemoteDigest: func(string, string) (string, error) { return digest, nil },
 	}
 }
 
-func TestCheckServiceMovingTag_FirstCheckRecordsBaselineWithoutNotifying(t *testing.T) {
-	composeFile := filepath.Join(setupFixture(t, pinnedUnconstrainedService), "docker-compose.yml")
-	svc, err := loadServiceRules(composeFile, "qui")
-	if err != nil {
-		t.Fatal(err)
+// only returns the single finding for the fixture's one service.
+func only(t *testing.T, findings []watch.Finding) watch.Finding {
+	t.Helper()
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding, got %d: %+v", len(findings), findings)
 	}
-	st := map[string]string{}
-	candidate, err := checkService(composeFile, svc, fakeDigestReg("sha256:aaa"), st)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if candidate != "" {
-		t.Fatalf("candidate = %q, want empty on first check (baseline recorded, not notified)", candidate)
-	}
-	if st["qui"] != "sha256:aaa" {
-		t.Fatalf("st[qui] = %q, want sha256:aaa recorded as baseline", st["qui"])
-	}
+	return findings[0]
 }
 
-func TestCheckServiceMovingTag_DigestChangeIsReported(t *testing.T) {
-	composeFile := filepath.Join(setupFixture(t, pinnedUnconstrainedService), "docker-compose.yml")
-	svc, err := loadServiceRules(composeFile, "qui")
+func check1(t *testing.T, reg watch.Registry, st *watch.State) watch.Finding {
+	t.Helper()
+	findings, err := check(envConfig{}, reg, st, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
-	st := map[string]string{"qui": "sha256:aaa"}
-	candidate, err := checkService(composeFile, svc, fakeDigestReg("sha256:bbb"), st)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if candidate != "sha256:bbb" {
-		t.Fatalf("candidate = %q, want sha256:bbb", candidate)
-	}
+	return only(t, findings)
 }
 
-func TestCheckServiceMovingTag_SameDigestNotReported(t *testing.T) {
-	composeFile := filepath.Join(setupFixture(t, pinnedUnconstrainedService), "docker-compose.yml")
-	svc, err := loadServiceRules(composeFile, "qui")
-	if err != nil {
-		t.Fatal(err)
-	}
-	st := map[string]string{"qui": "sha256:aaa"}
-	candidate, err := checkService(composeFile, svc, fakeDigestReg("sha256:aaa"), st)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if candidate != "" {
-		t.Fatalf("candidate = %q, want empty (digest unchanged)", candidate)
-	}
-}
+// --- detection ---
 
-func TestRunOnceNotifiesOnceThenDedupes(t *testing.T) {
+func TestConstrained_FindsNewerTag(t *testing.T) {
 	setupFixture(t, pinnedConstrainedService)
+	f := check1(t, tagReg([]string{"1.2.0", "1.3.0"}), watch.NewState())
 
-	reg := fakeReg([]string{"1.2.0", "1.3.0"})
-	var out bytes.Buffer
-	if err := runOnce(reg, &out); err != nil {
-		t.Fatal(err)
-	}
-	first := out.String()
-	if !bytes.Contains([]byte(first), []byte("1.3.0 available\n")) {
-		t.Fatalf("first run output = %q, want it to report 1.3.0 available", first)
-	}
-
-	st, err := loadState(stateFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if st["qui"] != "1.3.0" {
-		t.Fatalf("state[qui] = %q, want 1.3.0", st["qui"])
-	}
-
-	out.Reset()
-	if err := runOnce(reg, &out); err != nil {
-		t.Fatal(err)
-	}
-	second := out.String()
-	if !bytes.Contains([]byte(second), []byte("already notified")) {
-		t.Fatalf("second run output = %q, want it to note already notified (no repeat notification)", second)
+	if !f.Available() || f.Candidate != "1.3.0" || f.Kind != watch.KindTag {
+		t.Fatalf("expected 1.3.0 available as a tag, got %+v", f)
 	}
 }
 
-func TestRunOnceMovingTagBaselineThenNotifiesOnChange(t *testing.T) {
+func TestConstrained_NoNewerTag(t *testing.T) {
+	setupFixture(t, pinnedConstrainedService)
+	f := check1(t, tagReg([]string{"1.2.0"}), watch.NewState())
+
+	if f.Available() {
+		t.Fatalf("nothing newer exists, got %+v", f)
+	}
+}
+
+// The first sight of a moving-tag service records where the tag points and
+// says nothing: otherwise every newly watched service reports an "update" on
+// day one regardless of whether anything moved.
+func TestMovingTag_FirstCheckRecordsBaselineSilently(t *testing.T) {
 	setupFixture(t, pinnedUnconstrainedService)
+	st := watch.NewState()
 
-	var out bytes.Buffer
-	if err := runOnce(fakeDigestReg("sha256:aaa"), &out); err != nil {
-		t.Fatal(err)
+	f := check1(t, digestReg("sha256:current"), st)
+	if f.Available() {
+		t.Fatalf("first check must not report, got %+v", f)
 	}
-	if bytes.Contains(out.Bytes(), []byte("available\n")) {
-		t.Fatalf("first run output = %q, want no notification on initial baseline", out.String())
+	if st.Baseline["app"] != "sha256:current" {
+		t.Fatalf("baseline = %q, want sha256:current", st.Baseline["app"])
 	}
-	st, err := loadState(stateFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if st["qui"] != "sha256:aaa" {
-		t.Fatalf("state[qui] = %q, want sha256:aaa baseline recorded", st["qui"])
-	}
-
-	out.Reset()
-	if err := runOnce(fakeDigestReg("sha256:bbb"), &out); err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Contains(out.Bytes(), []byte("sha256:bbb available\n")) {
-		t.Fatalf("second run output = %q, want it to report the changed digest", out.String())
+	if len(st.Pending) != 0 {
+		t.Fatalf("nothing should be pending, got %+v", st.Pending)
 	}
 }
 
-func TestRunOnceSkipsUnpinnedServices(t *testing.T) {
+func TestMovingTag_DigestMoveIsReported(t *testing.T) {
+	setupFixture(t, pinnedUnconstrainedService)
+	st := watch.NewState()
+	st.Baseline["app"] = "sha256:old"
+
+	f := check1(t, digestReg("sha256:new"), st)
+	if !f.Available() || f.Kind != watch.KindDigest || f.Candidate != "sha256:new" {
+		t.Fatalf("expected a digest move, got %+v", f)
+	}
+}
+
+func TestMovingTag_SameDigestIsNotReported(t *testing.T) {
+	setupFixture(t, pinnedUnconstrainedService)
+	st := watch.NewState()
+	st.Baseline["app"] = "sha256:same"
+
+	if f := check1(t, digestReg("sha256:same"), st); f.Available() {
+		t.Fatalf("unchanged digest must not report, got %+v", f)
+	}
+}
+
+// Pin status is the opt-in: an unpinned service has made no versioning
+// decision to watch over.
+func TestSkips_UnpinnedService(t *testing.T) {
 	setupFixture(t, unpinnedService)
+	f := check1(t, tagReg([]string{"9.9.9"}), watch.NewState())
 
-	var out bytes.Buffer
-	if err := runOnce(fakeReg(nil), &out); err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Contains(out.Bytes(), []byte("qui: not pinned, skipping\n")) {
-		t.Fatalf("output = %q, want it to skip the unpinned service", out.String())
-	}
-
-	st, err := loadState(stateFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(st) != 0 {
-		t.Fatalf("state = %v, want empty — unpinned services must never be state-tracked", st)
+	if f.Status != watch.StatusSkipped || f.Reason != "not pinned" {
+		t.Fatalf("expected skipped/not pinned, got %+v", f)
 	}
 }
+
+// A locally built image's digest is local to one daemon, so there is nothing
+// a registry could tell us about it.
+func TestSkips_LocallyBuiltService(t *testing.T) {
+	setupFixture(t, builtService)
+	f := check1(t, tagReg([]string{"9.9.9"}), watch.NewState())
+
+	if f.Status != watch.StatusSkipped {
+		t.Fatalf("expected a built service to be skipped, got %+v", f)
+	}
+}
+
+// --- pending queue ---
+
+func TestPending_AddedThenClearedWhenGone(t *testing.T) {
+	setupFixture(t, pinnedConstrainedService)
+	st := watch.NewState()
+
+	check1(t, tagReg([]string{"1.2.0", "1.3.0"}), st)
+	if len(st.Pending) != 1 {
+		t.Fatalf("expected 1 pending, got %+v", st.Pending)
+	}
+	p := st.Pending["app"]
+	if p.Candidate != "1.3.0" || p.CurrentTag != "1.2.0" || p.Kind != watch.KindTag {
+		t.Fatalf("pending row wrong: %+v", p)
+	}
+
+	// Registry now offers nothing newer (e.g. the pin was upgraded): the row
+	// must disappear, or the queue accumulates updates that no longer exist.
+	check1(t, tagReg([]string{"1.2.0"}), st)
+	if len(st.Pending) != 0 {
+		t.Fatalf("pending should be cleared, got %+v", st.Pending)
+	}
+}
+
+// FirstSeen answers "how long has this been waiting", so it must not reset
+// every run while the same candidate is outstanding.
+func TestPending_FirstSeenIsStableAcrossRuns(t *testing.T) {
+	setupFixture(t, pinnedConstrainedService)
+	st := watch.NewState()
+	reg := tagReg([]string{"1.2.0", "1.3.0"})
+
+	if _, err := check(envConfig{}, reg, st, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	first := st.Pending["app"].FirstSeen
+
+	if _, err := check(envConfig{}, reg, st, time.Date(2026, 2, 2, 0, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.Pending["app"].FirstSeen; got != first {
+		t.Errorf("FirstSeen moved from %q to %q for the same candidate", first, got)
+	}
+}
+
+func TestPending_NewCandidateResetsFirstSeen(t *testing.T) {
+	setupFixture(t, pinnedConstrainedService)
+	st := watch.NewState()
+
+	if _, err := check(envConfig{}, tagReg([]string{"1.2.0", "1.3.0"}), st,
+		time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	first := st.Pending["app"].FirstSeen
+
+	if _, err := check(envConfig{}, tagReg([]string{"1.2.0", "1.3.0", "1.4.0"}), st,
+		time.Date(2026, 2, 2, 0, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	p := st.Pending["app"]
+	if p.Candidate != "1.4.0" {
+		t.Fatalf("candidate = %q, want 1.4.0", p.Candidate)
+	}
+	if p.FirstSeen == first {
+		t.Error("a different candidate should carry its own FirstSeen")
+	}
+}
+
+// --- notification dedupe ---
+
+func TestNotified_RecordedOncePerCandidate(t *testing.T) {
+	setupFixture(t, pinnedConstrainedService)
+	st := watch.NewState()
+	reg := tagReg([]string{"1.2.0", "1.3.0"})
+
+	check1(t, reg, st)
+	if st.Notified["app"] != "1.3.0" {
+		t.Fatalf("Notified = %q, want 1.3.0", st.Notified["app"])
+	}
+
+	// Same candidate again: still recorded, so no second notification fires.
+	check1(t, reg, st)
+	if st.Notified["app"] != "1.3.0" {
+		t.Fatalf("Notified = %q, want 1.3.0", st.Notified["app"])
+	}
+
+	// Nothing outstanding: forget it, so the same tag reappearing later is
+	// announced again rather than silently swallowed.
+	check1(t, tagReg([]string{"1.2.0"}), st)
+	if _, ok := st.Notified["app"]; ok {
+		t.Error("Notified should be cleared once nothing is outstanding")
+	}
+}
+
+// --- state persistence ---
 
 func TestStateRoundTrip(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "nested", "state.json")
-	st, err := loadState(path)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+
+	st := watch.NewState()
+	st.Baseline["a"] = "sha256:x"
+	st.Notified["b"] = "1.2.3"
+	st.Pending["c"] = watch.Pending{Service: "c", Candidate: "2.0.0", Kind: watch.KindTag}
+	if err := st.Save(path); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := watch.LoadState(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(st) != 0 {
-		t.Fatalf("loadState on missing file = %v, want empty map", st)
+	if got.Baseline["a"] != "sha256:x" || got.Notified["b"] != "1.2.3" {
+		t.Errorf("round trip lost data: %+v", got)
 	}
-	st["qui"] = "1.3.0"
-	if err := saveState(path, st); err != nil {
-		t.Fatal(err)
+	if got.Pending["c"].Candidate != "2.0.0" {
+		t.Errorf("pending lost: %+v", got.Pending)
 	}
-	got, err := loadState(path)
+}
+
+func TestLoadState_MissingFileIsEmpty(t *testing.T) {
+	st, err := watch.LoadState(filepath.Join(t.TempDir(), "nope.json"))
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("a missing state file is not an error: %v", err)
 	}
-	if got["qui"] != "1.3.0" {
-		t.Fatalf("reloaded state[qui] = %q, want 1.3.0", got["qui"])
+	if len(st.Baseline) != 0 || len(st.Pending) != 0 {
+		t.Errorf("expected empty state, got %+v", st)
+	}
+}
+
+// --- reporting ---
+
+func TestReport(t *testing.T) {
+	var buf bytes.Buffer
+	report(&buf, []watch.Finding{
+		{Service: "a", Status: watch.StatusAvailable, Candidate: "1.3.0"},
+		{Service: "b", Status: watch.StatusSkipped, Reason: "not pinned"},
+		{Service: "c", Status: watch.StatusUpToDate},
+		{Service: "d", Status: watch.StatusError, Reason: "boom"},
+	})
+	for _, want := range []string{
+		"a: 1.3.0 available",
+		"b: not pinned, skipping",
+		"c: up to date",
+		"d: error: boom",
+	} {
+		if !bytes.Contains(buf.Bytes(), []byte(want)) {
+			t.Errorf("missing %q in:\n%s", want, buf.String())
+		}
 	}
 }
