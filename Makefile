@@ -39,12 +39,11 @@ test: test-unit test-integration
 test-unit:
 	go test ./...
 
-# The Go suites are being converted from shell one at a time; -p 1 keeps them
-# sequential for the same reason the scripts are.
+# -p 1 keeps packages sequential: the suites share a registry port and a
+# testbed, and duva does not run several copies of itself in production
+# either.
 test-integration:
 	go test -tags integration -count=1 -p 1 ./test/...
-	./hack/integration-pin.sh
-	./hack/integration-duva-policy.sh
 
 # --- coverage ---------------------------------------------------------
 # Reports unit and integration coverage separately, then merged. Merging

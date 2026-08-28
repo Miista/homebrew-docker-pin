@@ -4,6 +4,8 @@ package integration
 
 import (
 	"encoding/json"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 )
 
 // A scenario's state: what a test reads and changes between bringing the
@@ -32,7 +35,18 @@ var (
 // repository with uncommitted changes.
 func (s *Scenario) Pin(services ...string) {
 	s.t.Helper()
+	for _, service := range services {
+		if out, ok := s.Run("pin", service); !ok {
+			s.t.Fatalf("pinning %s: %s", service, out)
+		}
+	}
+	s.Commit("pin " + strings.Join(services, ", "))
+}
 
+// dockerPin is the path to a built docker pin, built once per package for the
+// same reason the images are: it is the same binary for every test.
+func (s *Scenario) dockerPin() string {
+	s.t.Helper()
 	dockerPinOnce.Do(func() {
 		dir, err := os.MkdirTemp("", "docker-pin")
 		if err != nil {
@@ -49,15 +63,7 @@ func (s *Scenario) Pin(services ...string) {
 			s.t.Fatalf("building docker pin: %v\n%s", err, out)
 		}
 	})
-
-	for _, service := range services {
-		cmd := exec.Command(dockerPinPath, "pin", service)
-		cmd.Dir = s.Dir
-		if out, err := cmd.CombinedOutput(); err != nil {
-			s.t.Fatalf("pinning %s: %v\n%s", service, err, out)
-		}
-	}
-	s.Commit("pin " + strings.Join(services, ", "))
+	return dockerPinPath
 }
 
 // imageLine matches a service's image, whatever indentation the fixture uses.
@@ -213,4 +219,104 @@ func (s *Scenario) state() duvaState {
 		s.t.Fatalf("reading duva's state: %v", err)
 	}
 	return st
+}
+
+// Pending is what duva recorded about a queued service: the candidate it
+// found, why it needs a human, and how big the change is.
+//
+// Empty for a service that is not queued, which is what a test asserts when
+// something should have been applied or ignored instead.
+func (s *Scenario) Pending(service string) PendingRow {
+	s.t.Helper()
+	row, ok := s.state().Pending[service]
+	if !ok {
+		return PendingRow{}
+	}
+	return PendingRow{
+		Candidate: row.Candidate,
+		Why:       row.Why,
+		Bump:      row.Bump,
+		Auto:      row.Auto,
+	}
+}
+
+// PendingRow is one entry in duva's approval queue.
+type PendingRow struct {
+	Candidate string
+	Why       string
+	Bump      string
+	Auto      string
+}
+
+// Queue fetches duva's approval queue over HTTP.
+//
+// The page is what an operator actually sees, and it is served from the same
+// state file the other assertions read -- so a difference between them is the
+// UI lying about what duva recorded.
+func (s *Scenario) Queue() string {
+	s.t.Helper()
+	var body string
+	s.waitFor("duva's queue to answer", 30*time.Second,
+		func() bool {
+			resp, err := http.Get("http://localhost:" + queuePort + "/")
+			if err != nil {
+				return false
+			}
+			defer resp.Body.Close()
+			raw, err := io.ReadAll(resp.Body)
+			if err != nil {
+				return false
+			}
+			body = string(raw)
+			return resp.StatusCode == http.StatusOK
+		},
+		func() string { return s.Logs("duva") })
+	return body
+}
+
+// queuePort is where a fixture publishes duva's queue when a test reads it.
+const queuePort = "8098"
+
+// Run invokes docker pin in the scenario's project and returns what it said,
+// with whether it succeeded.
+//
+// The exit status matters as much as the output: a mistyped safety flag that
+// exits zero has run for real, which is the bug rejectUnknownFlags exists to
+// prevent.
+func (s *Scenario) Run(args ...string) (string, bool) {
+	s.t.Helper()
+	cmd := exec.Command(s.dockerPin(), args...)
+	cmd.Dir = s.Dir
+	out, err := cmd.CombinedOutput()
+	return strings.TrimSpace(string(out)), err == nil
+}
+
+// Digest is the digest the registry currently serves for a tag.
+func (s *Scenario) Digest(repo, tag string) string {
+	s.t.Helper()
+	ref := registryHost + "/" + repo + ":" + tag
+	out, err := exec.Command("docker", "image", "inspect", ref,
+		"--format", "{{range .RepoDigests}}{{println .}}{{end}}").Output()
+	if err != nil {
+		s.t.Fatalf("no local image for %s: %v", ref, err)
+	}
+	// An image derived from another can carry several repo digests; only the
+	// one for this repository names what was pushed here.
+	for _, line := range strings.Fields(string(out)) {
+		if strings.HasPrefix(line, registryHost+"/"+repo+"@") {
+			return line[strings.Index(line, "@")+1:]
+		}
+	}
+	s.t.Fatalf("no digest for %s in %s", ref, out)
+	return ""
+}
+
+// WriteCompose replaces the scenario's compose file.
+//
+// For the scenarios that are about docker pin rather than duva: what matters
+// there is the image line before and after, and a fixture per permutation
+// would be four files differing by one word.
+func (s *Scenario) WriteCompose(content string) {
+	s.t.Helper()
+	s.writeFile(filepath.Join(s.Dir, "docker-compose.yml"), content)
 }
