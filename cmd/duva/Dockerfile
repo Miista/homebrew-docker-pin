@@ -1,11 +1,9 @@
 # duva watches pinned compose services and applies the updates each service's
 # policy allows: it pulls the image, rewrites the pin, recreates the container
-# and commits the change. That needs the docker CLI, compose and git at
-# runtime, so the final image cannot be distroless-static as it was while duva
-# only reported.
+# and commits the change.
 #
-# docker:cli carries all three. Assembling them by hand would only be a slower
-# way of getting the same binaries.
+# All of the docker work goes through the daemon's API over the mounted
+# socket, so the image needs no docker CLI -- only git, for the commit.
 
 # Base images are pinned by digest, the same way this tool asks a compose file
 # to pin its own: the tag says which stream to follow, the digest records what
@@ -32,7 +30,12 @@ RUN if [ "$COVER" = "1" ]; then \
       CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/duva ./cmd/duva; \
     fi
 
-FROM docker:cli@sha256:000bb62ff495f986c9f5578eb67cc2cb98b91138eda81d7762d5371eb8a497fe
+# Alpine with git, which is all duva needs at runtime. It reaches the docker
+# daemon over its socket rather than through the CLI, so there is nothing to
+# install for that -- the same way Watchtower and WUD work, and for the same
+# reason: the daemon exposes everything the CLI would have run.
+FROM alpine:3@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
+RUN apk add --no-cache git ca-certificates
 # /data must exist in the image: a named volume mounted there inherits this
 # directory's ownership on first use, so `- duva-state:/data` works without
 # any chown ceremony.

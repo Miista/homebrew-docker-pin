@@ -3,11 +3,14 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -279,4 +282,134 @@ func recreateContainer(composeFile, service string) error {
 		return fmt.Errorf("starting the replacement for %s: %w", service, err)
 	}
 	return nil
+}
+
+// pullImageAPI fetches an image through the daemon.
+//
+// The daemon does the pulling: duva names the image and, for a private
+// registry, passes credentials. It does not fetch layers itself -- the image
+// store is the daemon's.
+//
+// The response must be read to the end. It is a stream of progress events,
+// and abandoning it aborts the pull: the request returns promptly and the
+// image is not there, which looks like a registry problem rather than a
+// mistake here. Watchtower and WUD both drain it for the same reason.
+func pullImageAPI(ref string) error {
+	name, tag := splitRef(ref)
+	path := "/images/create?fromImage=" + url.QueryEscape(name) + "&tag=" + url.QueryEscape(tag)
+
+	req, err := http.NewRequest(http.MethodPost, "http://docker"+apiVersion+path, nil)
+	if err != nil {
+		return err
+	}
+	if auth := registryAuth(name); auth != "" {
+		req.Header.Set("X-Registry-Auth", auth)
+	}
+
+	resp, err := dockerHTTP.Do(req)
+	if err != nil {
+		return fmt.Errorf("pulling %s: %w", ref, err)
+	}
+	defer resp.Body.Close()
+
+	body, readErr := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("pulling %s: %s: %s", ref, resp.Status, strings.TrimSpace(string(body)))
+	}
+	if readErr != nil {
+		return fmt.Errorf("pulling %s: %w", ref, readErr)
+	}
+	// A pull can fail mid-stream with a 200 already sent, so the error is in
+	// the body rather than the status.
+	if i := strings.Index(string(body), `"error"`); i != -1 {
+		return fmt.Errorf("pulling %s: %s", ref, strings.TrimSpace(string(body)[i:]))
+	}
+	return nil
+}
+
+// splitRef separates an image reference into the name and the tag or digest.
+//
+// A digest is kept whole -- `fromImage=name&tag=sha256:...` is how the API
+// asks for one -- because duva pulls by digest when following a moving tag it
+// has already resolved.
+func splitRef(ref string) (name, tag string) {
+	if i := strings.Index(ref, "@"); i != -1 {
+		return ref[:i], ref[i+1:]
+	}
+	// A colon in the host part is a port, not a tag separator.
+	if i := strings.LastIndex(ref, ":"); i != -1 && !strings.Contains(ref[i:], "/") {
+		return ref[:i], ref[i+1:]
+	}
+	return ref, "latest"
+}
+
+// registryAuth is the credential for a registry, base64 JSON as the API wants
+// it, or "" for an anonymous pull.
+//
+// From the environment rather than a config file: duva's image carries no
+// docker configuration, and a mounted config.json would mean parsing
+// credential helpers to be useful. Public images -- which is what a stack
+// following upstream tags mostly pulls -- need nothing.
+func registryAuth(image string) string {
+	user, pass := os.Getenv("DUVA_REGISTRY_USER"), os.Getenv("DUVA_REGISTRY_PASSWORD")
+	if user == "" || pass == "" {
+		return ""
+	}
+	cred, err := json.Marshal(map[string]string{
+		"username":      user,
+		"password":      pass,
+		"serveraddress": registryOf(image),
+	})
+	if err != nil {
+		return ""
+	}
+	return base64.URLEncoding.EncodeToString(cred)
+}
+
+// registryOf is the host an image comes from. A first path segment with a dot
+// or a port is a registry; anything else is Docker Hub's implied one.
+func registryOf(image string) string {
+	first, _, found := strings.Cut(image, "/")
+	if !found || (!strings.Contains(first, ".") && !strings.Contains(first, ":")) {
+		return "https://index.docker.io/v1/"
+	}
+	return first
+}
+
+// imageDigest is the repo digest of an image the daemon already has: what it
+// can be pulled by on another host.
+func imageDigest(ref string) (string, error) {
+	raw, err := dockerDo(http.MethodGet, "/images/"+url.PathEscape(ref)+"/json", nil)
+	if err != nil {
+		return "", fmt.Errorf("inspecting %s: %w", ref, err)
+	}
+	var image struct {
+		RepoDigests []string `json:"RepoDigests"`
+	}
+	if err := json.Unmarshal(raw, &image); err != nil {
+		return "", fmt.Errorf("reading the digest of %s: %w", ref, err)
+	}
+	for _, rd := range image.RepoDigests {
+		if i := strings.Index(rd, "@"); i != -1 {
+			return rd[i+1:], nil
+		}
+	}
+	return "", fmt.Errorf("no repo digest for %s", ref)
+}
+
+// containerLabel reads one label from a container.
+func containerLabel(id, label string) (string, error) {
+	raw, err := dockerDo(http.MethodGet, "/containers/"+id+"/json", nil)
+	if err != nil {
+		return "", fmt.Errorf("inspecting %s: %w", id, err)
+	}
+	var c struct {
+		Config struct {
+			Labels map[string]string `json:"Labels"`
+		} `json:"Config"`
+	}
+	if err := json.Unmarshal(raw, &c); err != nil {
+		return "", fmt.Errorf("reading %s from %s: %w", label, id, err)
+	}
+	return c.Config.Labels[label], nil
 }
