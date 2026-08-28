@@ -64,7 +64,7 @@ GOEOF
   (cd "$dir" && CGO_ENABLED=0 GOOS=linux go build -ldflags "-s -w" -o receiver main.go)
   printf 'FROM scratch\nCOPY receiver /receiver\nCMD ["/receiver"]\n' > "$dir/Dockerfile"
 
-  docker build -q -t "$NTFY_IMAGE" "$dir" >/dev/null
+  docker build -q --label "${CTX_LABEL}=${CTX_SUITE}" -t "$NTFY_IMAGE" "$dir" >/dev/null
   ctx_run_image "$NTFY_IMAGE"
 }
 

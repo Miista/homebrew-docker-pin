@@ -355,3 +355,34 @@ func TestCommitMessage(t *testing.T) {
 		t.Errorf("got %q, want %q", got, want)
 	}
 }
+
+// A locked index means something else is committing right now. duva's next
+// run will find the repository quiet, so this is a note rather than a
+// failure -- reporting it as an error would cry wolf every time someone
+// edits the stack while duva happens to wake.
+func TestApply_BusyRepositoryIsDeferred(t *testing.T) {
+	f := fixture.New(t)
+	finding, file := pending(t, f)
+	before := imageLine(t, file, finding.Service)
+
+	r := newRecorder()
+	r.git.IsClean = func(string) (bool, error) { return false, ErrRepoBusy }
+
+	res := apply(finding, r.docker, r.git, applyOptions{Host: "h"})
+
+	if res.Err != nil {
+		t.Errorf("a busy repository is not a failure: %v", res.Err)
+	}
+	if res.Applied {
+		t.Error("nothing should have been applied")
+	}
+	if res.Note == "" {
+		t.Error("the deferral should be noted")
+	}
+	if r.did("pull") || r.did("up") || r.did("commit") {
+		t.Errorf("nothing should have happened: %v", r.calls)
+	}
+	if imageLine(t, file, finding.Service) != before {
+		t.Error("the compose file must be untouched")
+	}
+}

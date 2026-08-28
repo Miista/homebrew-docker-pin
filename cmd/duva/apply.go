@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os/exec"
 	"path/filepath"
@@ -49,6 +50,8 @@ type Git struct {
 	// Push publishes the branch.
 	Push func(dir string) error
 	// IsClean reports whether the repository has no uncommitted changes.
+	// ErrRepoBusy means git could not answer because something else holds
+	// the index -- a person mid-commit, or another tool.
 	IsClean func(dir string) (bool, error)
 }
 
@@ -89,12 +92,30 @@ var realGit = Git{
 	RebaseAbort: func(dir string) error { return run(gitCmd(dir, "rebase", "--abort")) },
 	Push:        func(dir string) error { return run(gitCmd(dir, "push")) },
 	IsClean: func(dir string) (bool, error) {
-		out, err := gitCmd(dir, "status", "--porcelain").Output()
+		cmd := gitCmd(dir, "status", "--porcelain")
+		var stderr strings.Builder
+		cmd.Stderr = &stderr
+		out, err := cmd.Output()
 		if err != nil {
-			return false, err
+			if isRepoBusy(stderr.String()) {
+				return false, ErrRepoBusy
+			}
+			return false, fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
 		}
 		return strings.TrimSpace(string(out)) == "", nil
 	},
+}
+
+// ErrRepoBusy is git declining to answer because the index is locked. It is
+// not a failure: someone is committing, and duva's next run will find the
+// repository quiet.
+var ErrRepoBusy = errors.New("the repository is busy")
+
+// isRepoBusy recognises git's index-lock message. Matched on the text because
+// git reports it as a plain exit 128 with no distinguishing status.
+func isRepoBusy(stderr string) bool {
+	return strings.Contains(stderr, "index.lock") ||
+		strings.Contains(stderr, "Another git process seems to be running")
 }
 
 func gitCmd(dir string, args ...string) *exec.Cmd {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/Miista/homebrew-docker-pin/internal/pin"
@@ -73,6 +74,14 @@ func apply(f watch.Finding, d Docker, g Git, opts applyOptions) Result {
 	// committing on top of someone's half-finished edit is never wanted.
 	if g.IsClean != nil {
 		clean, err := g.IsClean(dirOf(f.File))
+		// A locked index is not a failure: something else is committing right
+		// now, and the next run will find the repository quiet. Reporting it
+		// as an error would cry wolf every time someone edits the stack while
+		// duva happens to wake.
+		if errors.Is(err, ErrRepoBusy) {
+			res.Note = "the repository was busy; will try again on the next check"
+			return res
+		}
 		if err != nil {
 			return fail(res, StepWrite, fmt.Errorf("checking the repository: %w", err))
 		}

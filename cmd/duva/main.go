@@ -548,6 +548,12 @@ func applyResult(cfg envConfig, f *watch.Finding, res Result, st *watch.State) {
 		delete(st.Notified, f.Service)
 		notifyApplied(cfg, *f, res)
 
+	case res.Note != "" && res.Outcome.NewRaw == "":
+		// Nothing was attempted -- the repository was busy. The finding stays
+		// available so the next run tries again, and it is a warning rather
+		// than an error: someone was committing, which is not a fault.
+		fmt.Fprintf(os.Stderr, "duva: %s: %s\n", f.Service, res.Note)
+
 	case res.Err != nil:
 		f.Status = watch.StatusError
 		f.Reason = fmt.Sprintf("%s failed: %v", res.FailedAt, res.Err)
