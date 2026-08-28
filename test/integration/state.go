@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 // A scenario's state: what a test reads and changes between bringing the
@@ -320,26 +322,63 @@ func (s *Scenario) WriteCompose(content string) {
 	s.writeFile(filepath.Join(s.Dir, "docker-compose.yml"), content)
 }
 
-// PushAdditional publishes the tags a scenario's "additional-images" file
-// names: the newer versions duva is meant to find.
+// PushUpdates publishes the tags a scenario's "updates" file names: the newer
+// versions duva is meant to find.
 //
-// Separate from the images the compose file references, which Up pushes so
-// the stack can start -- these are what makes an update available, so a test
-// decides WHEN they appear. The refused-image scenario needs its broken tag
-// to arrive after pinning, not before.
+// The one thing a fixture cannot say in its compose file, since no service
+// references them -- everything the file DOES name is pushed by Up, read
+// from the file itself.
 //
-// The tags live with the fixture rather than in each test so that the sandbox
-// stands up the same world a test does. Two lists of the same tags would
-// drift the moment one changed.
-func (s *Scenario) PushAdditional() {
+// A test calls this rather than Up doing it, because when an update appears
+// is often the point: the refused-image scenario needs its broken tag to
+// arrive after pinning, not before.
+func (s *Scenario) PushUpdates() {
 	s.t.Helper()
-	raw, err := os.ReadFile(filepath.Join(s.Dir, "additional-images"))
+	// The repo is the one the compose file references: a scenario offers
+	// newer versions OF something it runs.
+	repo := s.repo()
+	for _, tag := range s.manifest().Updates {
+		s.Push(repo, tag)
+	}
+}
+
+// manifest is what a scenario declares beyond its compose file.
+//
+// A file rather than more constants in the harness, so that standing a
+// scenario up by hand produces the same world a test does -- and yaml rather
+// than a bare list so it can say which of its parts is which, and explain
+// itself in comments.
+type manifest struct {
+	// Updates are the newer tags duva should find. Nothing references them,
+	// which is why they cannot come from the compose file.
+	Updates []string `yaml:"updates"`
+}
+
+func (s *Scenario) manifest() manifest {
+	s.t.Helper()
+	var m manifest
+	raw, err := os.ReadFile(filepath.Join(s.Dir, "scenario.yaml"))
 	if err != nil {
-		return // a scenario need not offer anything newer
+		return m // a scenario need not declare anything
 	}
-	for _, tag := range strings.Fields(string(raw)) {
-		s.Push("app", tag)
+	if err := yaml.Unmarshal(raw, &m); err != nil {
+		s.t.Fatalf("reading %s's scenario.yaml: %v", s.Name, err)
 	}
+	return m
+}
+
+// repo is the image name a scenario's services use.
+func (s *Scenario) repo() string {
+	s.t.Helper()
+	raw, err := os.ReadFile(filepath.Join(s.Dir, "docker-compose.yml"))
+	if err != nil {
+		s.t.Fatalf("reading the compose file: %v", err)
+	}
+	m := testImageRe.FindStringSubmatch(string(raw))
+	if m == nil {
+		s.t.Fatalf("no %s image in %s's compose file", registryHost, s.Name)
+	}
+	return m[1]
 }
 
 // Watched is every service carrying a duva.* label, which is what a fixture

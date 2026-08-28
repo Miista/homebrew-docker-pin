@@ -60,7 +60,7 @@ func main() {
 		s.Pin(watched...)
 	}
 	// The newer tags the scenario means duva to find, if it names any.
-	s.PushUpdates()
+	s.PushAdditional()
 	s.Start()
 
 	fmt.Println()
