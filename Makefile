@@ -44,7 +44,6 @@ test-unit:
 test-integration:
 	go test -tags integration -count=1 -p 1 ./test/...
 	./hack/integration-pin.sh
-	./hack/integration-duva.sh
 	./hack/integration-duva-policy.sh
 
 # --- coverage ---------------------------------------------------------

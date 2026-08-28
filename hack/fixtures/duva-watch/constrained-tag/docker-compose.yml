@@ -1,0 +1,38 @@
+# A service pinned within a version line, with a newer tag available. duva
+# reports it and announces it once -- it applies nothing here, since no
+# duva.auto is set.
+#
+# Every path is relative to this file, so the fixture needs no variables and
+# says the same thing wherever the repo lives.
+include:
+  # The receiver duva announces to. The registry is not here: it is
+  # infrastructure the suite runs, like GHCR is in production, rather than
+  # part of the world under test.
+  - common/ntfy.yml
+
+services:
+  app:
+    image: localhost:5555/app:1.0.0-alpine
+    labels:
+      duva.include: '^\d+\.\d+\.\d+-alpine$'
+
+  # duva watches from inside the stack, as in production. No docker socket:
+  # this scenario is about what duva notices and announces, and it applies
+  # nothing -- which is what a service with no duva.auto gets.
+  duva:
+    image: duva:integration
+    command: serve
+    environment:
+      DUVA_HOSTNAME: integration
+      DUVA_SCHEDULE: "0 3 * * *"
+      DUVA_NTFY_URL: http://ntfy:8080
+      DUVA_NTFY_TOPIC: duva
+    volumes:
+      - .:/compose
+      - ./data:/data
+      # Only here because the suite's registry is self-signed.
+      - ./certs/cert.pem:/etc/ssl/certs/ca-certificates.crt:ro
+    extra_hosts:
+      # duva reaches the registry through its published port, as the host's
+      # daemon does.
+      - localhost:host-gateway

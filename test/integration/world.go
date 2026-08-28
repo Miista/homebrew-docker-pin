@@ -3,14 +3,7 @@
 package integration
 
 import (
-	"crypto/rand"
-	"crypto/rsa"
-	"crypto/x509"
-	"crypto/x509/pkix"
-	"encoding/pem"
 	"fmt"
-	"math/big"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -29,51 +22,6 @@ const label = "io.github.miista.docker-pin.integration"
 func (s *Scenario) suite() string {
 	suite, _, _ := strings.Cut(s.Name, "/")
 	return suite
-}
-
-// writeCertsTo generates the certificate the registry serves and duva trusts.
-//
-// Called once per package: it is identical for every scenario, and a second
-// RSA key is pure cost. Each scenario gets a copy inside its own project, so
-// the compose file can name it relatively and needs no variable only a test
-// could expand.
-//
-// Scaffolding that exists only because the registry is local: a real one is
-// trusted by the image's own CA bundle.
-func writeCertsTo(dir string) error {
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		return err
-	}
-	tmpl := x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "testregistry"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		// Both names the registry answers to: testregistry from another
-		// container, localhost from the host.
-		DNSNames:    []string{"testregistry", "localhost"},
-		IPAddresses: []net.IP{net.ParseIP("127.0.0.1")},
-	}
-	der, err := x509.CreateCertificate(rand.Reader, &tmpl, &tmpl, &key.PublicKey, key)
-	if err != nil {
-		return err
-	}
-
-	write := func(name string, block *pem.Block) error {
-		f, err := os.Create(filepath.Join(dir, name))
-		if err != nil {
-			return err
-		}
-		defer f.Close()
-		return pem.Encode(f, block)
-	}
-	if err := write("cert.pem", &pem.Block{Type: "CERTIFICATE", Bytes: der}); err != nil {
-		return err
-	}
-	return write("key.pem", &pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
 }
 
 // copyCerts puts the package's certificate where this scenario's fixture
@@ -175,11 +123,22 @@ func (s *Scenario) pushDeclaredImages() {
 
 // Push publishes a runnable image under a tag.
 //
-// The tag is baked into the binary, so two tags never produce the same digest
-// by accident: duva compares digests, and identical content would make "the
-// container was replaced" indistinguishable from "nothing happened".
-func (s *Scenario) Push(repo, tag string) {
+// The content is derived from the tag, so two tags never produce the same
+// digest by accident: duva compares digests, and identical content would make
+// "the container was replaced" indistinguishable from "nothing happened".
+//
+// Pass content to override that, which is how a moving tag is made to move:
+// the tag stays put while what it points at changes, exactly as it does when
+// upstream rebuilds.
+//
+//	s.Push("app", "1.0.1")             // a new tag
+//	s.Push("app", "latest", "second")  // the same tag, new digest
+func (s *Scenario) Push(repo, tag string, content ...string) {
 	s.t.Helper()
+	marker := tag
+	if len(content) > 0 {
+		marker = content[0]
+	}
 	dir := s.scratch("build")
 
 	main := fmt.Sprintf(`package main
@@ -195,7 +154,7 @@ func main() {
 		time.Sleep(5 * time.Second)
 	}
 }
-`, tag)
+`, marker)
 	s.writeFile(filepath.Join(dir, "main.go"), main)
 	s.writeFile(filepath.Join(dir, "go.mod"), "module sleeper\n\ngo 1.22\n")
 	// FROM scratch with a static binary: nothing is pulled, so the suites
@@ -211,8 +170,19 @@ func main() {
 	}
 
 	ref := fmt.Sprintf("%s/%s:%s", registryHost, repo, tag)
-	s.docker("build", "-q", "--label", label+"="+s.suite(), "-t", ref, dir)
+
+	// Remove any image already under this tag before building.
+	//
+	// Building leaves the image on the HOST, so a tag from an earlier test --
+	// or from a run that was killed before it could clean up -- would still
+	// be here. A moving tag would then not move, and content from one test
+	// would silently become another's. Removing it first means the build
+	// cannot see a stale one, whoever left it.
+	_ = exec.Command("docker", "rmi", "-f", ref).Run()
+
+	s.docker("build", "-q", "-t", ref, dir)
 	s.docker("push", "-q", ref)
+	s.pushed = append(s.pushed, ref)
 }
 
 // PushUnrunnable publishes an image that exists but cannot start: FROM
@@ -225,8 +195,19 @@ func (s *Scenario) PushUnrunnable(repo, tag string) {
 	s.writeFile(filepath.Join(dir, "Dockerfile"), "FROM scratch\nCOPY marker /marker\n")
 
 	ref := fmt.Sprintf("%s/%s:%s", registryHost, repo, tag)
-	s.docker("build", "-q", "--label", label+"="+s.suite(), "-t", ref, dir)
+
+	// Remove any image already under this tag before building.
+	//
+	// Building leaves the image on the HOST, so a tag from an earlier test --
+	// or from a run that was killed before it could clean up -- would still
+	// be here. A moving tag would then not move, and content from one test
+	// would silently become another's. Removing it first means the build
+	// cannot see a stale one, whoever left it.
+	_ = exec.Command("docker", "rmi", "-f", ref).Run()
+
+	s.docker("build", "-q", "-t", ref, dir)
 	s.docker("push", "-q", ref)
+	s.pushed = append(s.pushed, ref)
 }
 
 // scratch is a directory for the harness's own working files -- image build
@@ -243,10 +224,6 @@ func (s *Scenario) scratch(name string) string {
 	s.t.Cleanup(func() { os.RemoveAll(filepath.Join(s.root, "testbed-scratch")) })
 	return dir
 }
-
-// registryHost is where images live. localhost, not the registry's network
-// name: duva drives the HOST's daemon, which can only resolve names it knows.
-const registryHost = "localhost:5555"
 
 func (s *Scenario) writeFile(path, content string) {
 	s.t.Helper()

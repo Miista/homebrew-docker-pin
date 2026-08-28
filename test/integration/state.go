@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 )
@@ -143,23 +144,73 @@ func (s *Scenario) BindSource(container, dest string) string {
 // made these tests flaky.
 func (s *Scenario) Queued() []string {
 	s.t.Helper()
-	raw, err := os.ReadFile(filepath.Join(s.Dir, "data", "duva.json"))
-	if err != nil {
-		return nil // duva has recorded nothing yet
-	}
-	var state struct {
-		Pending map[string]struct {
-			Candidate string `json:"candidate"`
-			Why       string `json:"why"`
-			Bump      string `json:"bump"`
-		} `json:"pending"`
-	}
-	if err := json.Unmarshal(raw, &state); err != nil {
-		s.t.Fatalf("reading duva's state: %v", err)
-	}
-	names := make([]string, 0, len(state.Pending))
-	for name := range state.Pending {
+	pending := s.state().Pending
+	names := make([]string, 0, len(pending))
+	for name := range pending {
 		names = append(names, name)
 	}
+	sort.Strings(names)
 	return names
+}
+
+// Notifications is what duva has announced, one entry per notification.
+//
+// Read from the file the receiver appends to, which is the durable record:
+// counting them answers "did it fire once rather than every run", which is
+// the thing that matters. A tool that repeats itself hourly gets muted, and
+// then real news is missed too.
+func (s *Scenario) Notifications() []string {
+	s.t.Helper()
+	raw, err := os.ReadFile(filepath.Join(s.Dir, "notifications", "requests.log"))
+	if err != nil {
+		return nil // nothing has been announced
+	}
+	var sent []string
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		if line != "" {
+			sent = append(sent, line)
+		}
+	}
+	return sent
+}
+
+// Notified is the tag duva last announced for a service, from its state.
+//
+// A constrained service records the tag it announced; a moving tag records
+// the digest it is measured against. Both live under the same key, because
+// what a service "remembers" is whichever of the two applies to it.
+func (s *Scenario) Notified(service string) string {
+	s.t.Helper()
+	return s.state().Notified[service]
+}
+
+// Baseline is the digest duva measures a moving tag against.
+func (s *Scenario) Baseline(service string) string {
+	s.t.Helper()
+	return s.state().Baseline[service]
+}
+
+// duvaState is what duva writes to /data/duva.json.
+type duvaState struct {
+	Baseline map[string]string `json:"baseline"`
+	Notified map[string]string `json:"notified"`
+	Pending  map[string]struct {
+		Candidate string `json:"candidate"`
+		Why       string `json:"why"`
+		Bump      string `json:"bump"`
+		Auto      string `json:"auto"`
+	} `json:"pending"`
+}
+
+func (s *Scenario) state() duvaState {
+	s.t.Helper()
+	var st duvaState
+	raw, err := os.ReadFile(filepath.Join(s.Dir, "data", "duva.json"))
+	if err != nil {
+		return st // duva has recorded nothing yet
+	}
+	if err := json.Unmarshal(raw, &st); err != nil {
+		s.t.Fatalf("reading duva's state: %v", err)
+	}
+	return st
 }

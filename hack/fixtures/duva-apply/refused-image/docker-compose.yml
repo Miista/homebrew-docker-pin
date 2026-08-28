@@ -7,11 +7,6 @@
 #
 # Every path is relative to this file, so the fixture needs no variables and
 # says the same thing wherever the repo lives.
-include:
-  # The registry this scenario pulls from. Shared, because it is identical
-  # everywhere and copies drift.
-  - common/registry.yml
-
 services:
   app:
     image: localhost:5555/app:1.0.0
