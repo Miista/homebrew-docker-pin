@@ -320,17 +320,22 @@ func (s *Scenario) WriteCompose(content string) {
 	s.writeFile(filepath.Join(s.Dir, "docker-compose.yml"), content)
 }
 
-// Available publishes the tags a scenario's "available" file names, if it has
-// one.
+// PushAdditional publishes the tags a scenario's "additional-images" file
+// names: the newer versions duva is meant to find.
 //
-// A test pushes its own candidates, because which are available IS what it is
-// testing. The file is for the sandbox, which has no such opinion and would
-// otherwise stand up a stack with nothing to find.
-func (s *Scenario) Available() {
+// Separate from the images the compose file references, which Up pushes so
+// the stack can start -- these are what makes an update available, so a test
+// decides WHEN they appear. The refused-image scenario needs its broken tag
+// to arrive after pinning, not before.
+//
+// The tags live with the fixture rather than in each test so that the sandbox
+// stands up the same world a test does. Two lists of the same tags would
+// drift the moment one changed.
+func (s *Scenario) PushAdditional() {
 	s.t.Helper()
-	raw, err := os.ReadFile(filepath.Join(s.Dir, "available"))
+	raw, err := os.ReadFile(filepath.Join(s.Dir, "additional-images"))
 	if err != nil {
-		return // a scenario need not offer anything
+		return // a scenario need not offer anything newer
 	}
 	for _, tag := range strings.Fields(string(raw)) {
 		s.Push("app", tag)

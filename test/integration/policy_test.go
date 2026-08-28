@@ -19,9 +19,9 @@ import (
 func TestPolicyDecidesWhatIsQueued(t *testing.T) {
 	s := Up(t, "duva-policy/four-verdicts")
 
-	// A newer patch and a newer minor of the 1.x line.
-	s.Push("app", "1.26.3")
-	s.Push("app", "1.31.4")
+	// A newer patch and a newer minor of the 1.x line; see the scenario's
+	// additional-images.
+	s.PushAdditional()
 
 	// Every watched service shares the image, so they all follow the same
 	// tags and differ only in what their labels allow.

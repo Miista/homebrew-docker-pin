@@ -21,7 +21,7 @@ func TestUpdateWithinPolicyIsApplied(t *testing.T) {
 	s := Up(t, "duva-apply/within-policy")
 
 	// A patch, which duva.auto: patch allows.
-	s.Push("app", "1.0.1")
+	s.PushAdditional()
 	s.Pin("app")
 
 	before := s.Container("app")
@@ -58,7 +58,7 @@ func TestUpdateBeyondPolicyWaitsForAHuman(t *testing.T) {
 	s := Up(t, "duva-apply/beyond-policy")
 
 	// A major, which duva.auto: patch does not cover.
-	s.Push("app", "2.0.0")
+	s.PushAdditional()
 	s.Pin("app")
 
 	before := s.Image("app")
@@ -110,7 +110,7 @@ func TestRefusedImagePutsTheFileBack(t *testing.T) {
 func TestRelativeBindSurvivesARecreate(t *testing.T) {
 	s := Up(t, "duva-apply/relative-bind")
 
-	s.Push("app", "1.0.1")
+	s.PushAdditional()
 	s.Pin("app")
 
 	want := s.Dir + "/conf"
