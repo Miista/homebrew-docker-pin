@@ -93,8 +93,13 @@ func TestPolicyDecidesWhatIsQueued(t *testing.T) {
 	t.Run("the queue is served as what duva recorded", func(t *testing.T) {
 		page := s.Queue()
 
-		if !strings.Contains(page, "2 waiting") {
-			t.Error("the page should report two waiting")
+		// The two queued services appear as rows -- the same >name< form the
+		// negative assertions below use. A rendered count is the page's way
+		// of saying it, and the wording of that is free to change.
+		for _, want := range []string{">exceeds<", ">defaultnone<"} {
+			if !strings.Contains(page, want) {
+				t.Errorf("the page should show a row for %s", want)
+			}
 		}
 		if !strings.Contains(page, "kind-minor") {
 			t.Error("the page should show the minor classification")

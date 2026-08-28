@@ -64,10 +64,11 @@ cover:
 	@go tool covdata percent -i=$(COVER_DIR)/unit | sort
 	@echo
 	@echo "== integration"
-	@GOCOVERDIR=$(COVER_DIR)/integration ./hack/integration-pin.sh >/dev/null
-	@GOCOVERDIR=$(COVER_DIR)/integration ./hack/integration-duva.sh >/dev/null
-	@GOCOVERDIR=$(COVER_DIR)/integration ./hack/integration-duva-policy.sh >/dev/null
-	@GOCOVERDIR=$(COVER_DIR)/integration ./hack/integration-duva-apply.sh >/dev/null
+	@# The suites run duva as a container built with -cover, which writes to
+	@# the mounted GOCOVERDIR. That reaches code no unit test can: the serve
+	@# loop, the HTTP handlers, and everything that only runs against a real
+	@# daemon.
+	@GOCOVERDIR=$(COVER_DIR)/integration go test -tags integration -count=1 -p 1 ./test/... >/dev/null
 	@go tool covdata percent -i=$(COVER_DIR)/integration | sort
 	@echo
 	@echo "== merged"
