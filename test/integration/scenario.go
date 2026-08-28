@@ -1,5 +1,3 @@
-//go:build integration
-
 // Package integration runs duva against a real docker daemon, a real
 // registry and real compose files.
 //
@@ -21,7 +19,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"testing"
 	"time"
 )
 
@@ -29,7 +26,7 @@ import (
 // the testbed is written into it -- deliberately, not $TMPDIR: on macOS that
 // lives under a symlink, so docker records a resolved path that never matches
 // the one a test holds, and any lookup by path silently finds nothing.
-func repoRoot(t *testing.T) string {
+func repoRoot(t T) string {
 	t.Helper()
 	out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
 	if err != nil {
@@ -38,10 +35,23 @@ func repoRoot(t *testing.T) string {
 	return strings.TrimSpace(string(out))
 }
 
+// T is what a Scenario needs from whoever is driving it.
+//
+// *testing.T satisfies this, and so does the small implementation the sandbox
+// uses -- which is the point: standing a scenario up by hand and testing one
+// are the same work, and a second copy of it would drift from the first.
+type T interface {
+	Helper()
+	Logf(format string, args ...any)
+	Fatal(args ...any)
+	Fatalf(format string, args ...any)
+	Cleanup(func())
+}
+
 // Scenario is one test's world: a compose project in the testbed, with
 // whatever it declares running.
 type Scenario struct {
-	t    *testing.T
+	t    T
 	Name string
 	// Dir is the project, a git repository, under testbed/.
 	Dir  string
@@ -56,7 +66,7 @@ type Scenario struct {
 // The name is <suite>/<scenario>, matching the fixture's path. Teardown is
 // registered with the test, so a scenario is removed however the test ends --
 // including a panic or a failed assertion.
-func Up(t *testing.T, name string) *Scenario {
+func Up(t T, name string) *Scenario {
 	t.Helper()
 
 	root := repoRoot(t)
@@ -122,7 +132,7 @@ func Up(t *testing.T, name string) *Scenario {
 // need is a compose file and a registry, and what they assert is the image
 // line before and after. A fixture per permutation would be a directory of
 // files differing by one word.
-func Bare(t *testing.T) *Scenario {
+func Bare(t T) *Scenario {
 	t.Helper()
 
 	root := repoRoot(t)
