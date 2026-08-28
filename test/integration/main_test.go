@@ -5,144 +5,23 @@ package integration
 import (
 	"fmt"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"testing"
 )
 
-// Work that is the same for every scenario happens once per package: building
-// the image under test, and generating the registry's certificate. Both are
-// identical whatever a scenario declares, and neither is what any test is
-// about -- rebuilding a byte-identical image and a second RSA key per test is
-// pure cost.
+// TestMain does the work that is the same for every scenario -- see Setup --
+// once for the package, because a package is what TestMain wraps.
 //
-// A package is the unit here, because a package is what TestMain wraps. Suites
-// that need genuinely different setup want their own package rather than a
-// hook inside this one.
-
-// suiteImage is the duva image every scenario in this package refers to.
-const suiteImage = "duva:integration"
-
-// receiverImage stands in for ntfy, for the scenarios that assert on what
-// duva announced.
-const receiverImage = "duva-receiver:integration"
-
-// suiteCerts holds the certificate the registry serves and duva trusts,
-// generated once and copied into each scenario.
-var suiteCerts string
-
+// No *testing.T here, so a setup failure is an exit rather than a test
+// failure. That is the right shape: nothing can run without it.
 func TestMain(m *testing.M) {
-	root, err := findRoot()
+	root, err := Setup()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "integration: %v\n", err)
-		os.Exit(1)
-	}
-
-	// No *testing.T here, so a setup failure is an exit rather than a test
-	// failure. That is the right shape: nothing can run without these.
-	if err := buildImage(root); err != nil {
-		fmt.Fprintf(os.Stderr, "integration: building %s: %v\n", suiteImage, err)
-		os.Exit(1)
-	}
-	if err := buildReceiver(root); err != nil {
-		fmt.Fprintf(os.Stderr, "integration: building %s: %v\n", receiverImage, err)
-		os.Exit(1)
-	}
-
-	// Under the repo, not $TMPDIR: on macOS that is /var/folders, which
-	// Docker Desktop does not share -- so the mount would be empty and the
-	// registry would exit reporting a missing certificate.
-	dir := filepath.Join(root, "testbed-certs")
-	os.RemoveAll(dir)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		fmt.Fprintf(os.Stderr, "integration: %v\n", err)
-		os.Exit(1)
-	}
-	if err := writeCertsTo(dir); err != nil {
-		fmt.Fprintf(os.Stderr, "integration: generating certificates: %v\n", err)
-		os.RemoveAll(dir)
-		os.Exit(1)
-	}
-	suiteCerts = dir
-
-	// One registry for the package, left up. Starting and stopping it per
-	// test was a race that failed roughly one test per run -- always
-	// whichever happened to be running when the container lost it, so the
-	// failure looked like it belonged to that test. Its contents are still
-	// cleared between tests; see emptyRegistry.
-	if err := startRegistry(root); err != nil {
-		fmt.Fprintf(os.Stderr, "integration: %v\n", err)
-		os.RemoveAll(suiteCerts)
 		os.Exit(1)
 	}
 
 	code := m.Run()
 
-	stopRegistry(root)
-	os.RemoveAll(suiteCerts)
-	// The image is left: it is the artifact under test, rebuilt next run, and
-	// removing it would throw away the layer cache that makes a rerun quick.
+	Teardown(root)
 	os.Exit(code)
-}
-
-// buildReceiver builds the notification receiver from its own source, rather
-// than a heredoc: it is ordinary Go that compiles and vets with everything
-// else.
-func buildReceiver(root string) error {
-	dir, err := os.MkdirTemp("", "duva-receiver")
-	if err != nil {
-		return err
-	}
-	defer os.RemoveAll(dir)
-
-	build := exec.Command("go", "build", "-ldflags", "-s -w", "-o",
-		filepath.Join(dir, "receiver"), "./test/integration/receiver")
-	build.Dir = root
-	build.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux")
-	if out, err := build.CombinedOutput(); err != nil {
-		return fmt.Errorf("%w\n%s", err, out)
-	}
-
-	// FROM scratch: nothing is pulled, so the suites work offline.
-	dockerfile := "FROM scratch\nCOPY receiver /receiver\nCMD [\"/receiver\"]\n"
-	if err := os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte(dockerfile), 0o644); err != nil {
-		return err
-	}
-
-	cmd := exec.Command("docker", "build", "-q",
-		"--label", label+"=integration", "-t", receiverImage, dir)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("%w\n%s", err, out)
-	}
-	return nil
-}
-
-func findRoot() (string, error) {
-	out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
-	if err != nil {
-		return "", fmt.Errorf("finding the repository root: %w", err)
-	}
-	return trimmed(out), nil
-}
-
-// buildImage builds duva from the shipped Dockerfile.
-//
-// The real one, deliberately: a suite that builds its own image tests an
-// artifact nobody ships, and the two drift. That is not hypothetical -- while
-// the test image was FROM scratch and the shipped one was not, duva gained a
-// runtime dependency on git and only the shipped image would have shown it.
-func buildImage(root string) error {
-	args := []string{"build", "-q", "--label", label + "=integration",
-		"-f", filepath.Join("cmd", "duva", "Dockerfile"), "-t", suiteImage}
-	if os.Getenv("GOCOVERDIR") != "" {
-		args = append(args, "--build-arg", "COVER=1")
-	}
-	args = append(args, root)
-
-	cmd := exec.Command("docker", args...)
-	cmd.Dir = root
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("%w\n%s", err, out)
-	}
-	return nil
 }

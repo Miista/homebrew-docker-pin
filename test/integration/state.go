@@ -1,5 +1,3 @@
-//go:build integration
-
 package integration
 
 import (
@@ -10,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -319,4 +318,52 @@ func (s *Scenario) Digest(repo, tag string) string {
 func (s *Scenario) WriteCompose(content string) {
 	s.t.Helper()
 	s.writeFile(filepath.Join(s.Dir, "docker-compose.yml"), content)
+}
+
+// Available publishes the tags a scenario's "available" file names, if it has
+// one.
+//
+// A test pushes its own candidates, because which are available IS what it is
+// testing. The file is for the sandbox, which has no such opinion and would
+// otherwise stand up a stack with nothing to find.
+func (s *Scenario) Available() {
+	s.t.Helper()
+	raw, err := os.ReadFile(filepath.Join(s.Dir, "available"))
+	if err != nil {
+		return // a scenario need not offer anything
+	}
+	for _, tag := range strings.Fields(string(raw)) {
+		s.Push("app", tag)
+	}
+}
+
+// Watched is every service carrying a duva.* label, which is what a fixture
+// means for duva to act on.
+//
+// A test names the services it pins, because which ones it pins is part of
+// what it is testing. The sandbox has no such opinion: it wants the scenario
+// as it is meant to be seen.
+func (s *Scenario) Watched() []string {
+	s.t.Helper()
+	raw, err := os.ReadFile(filepath.Join(s.Dir, "docker-compose.yml"))
+	if err != nil {
+		s.t.Fatalf("reading the compose file: %v", err)
+	}
+
+	var watched []string
+	var service string
+	for _, line := range strings.Split(string(raw), "\n") {
+		trimmed := strings.TrimSpace(line)
+		// A service name is indented two spaces and ends in a colon.
+		if strings.HasPrefix(line, "  ") && !strings.HasPrefix(line, "   ") &&
+			strings.HasSuffix(trimmed, ":") && !strings.Contains(trimmed, " ") {
+			service = strings.TrimSuffix(trimmed, ":")
+			continue
+		}
+		if strings.HasPrefix(trimmed, "duva.") && service != "" &&
+			!slices.Contains(watched, service) {
+			watched = append(watched, service)
+		}
+	}
+	return watched
 }
