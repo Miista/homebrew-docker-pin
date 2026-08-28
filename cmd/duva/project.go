@@ -3,9 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"regexp"
-	"strings"
 )
 
 // duva has to tell compose which project to act on.
@@ -36,14 +34,7 @@ type selfFuncs struct {
 
 var realSelf = selfFuncs{
 	ContainerID: containerID,
-	Label: func(id, label string) (string, error) {
-		out, err := exec.Command("docker", "inspect", id,
-			"--format", "{{index .Config.Labels \""+label+"\"}}").Output()
-		if err != nil {
-			return "", fmt.Errorf("reading %s from %s: %w", label, id, err)
-		}
-		return strings.TrimSpace(string(out)), nil
-	},
+	Label:       containerLabel,
 }
 
 // cgroupID matches the 64-hex container id docker leaves in the mount table.

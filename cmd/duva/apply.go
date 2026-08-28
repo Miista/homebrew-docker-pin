@@ -55,22 +55,12 @@ type Git struct {
 	IsClean func(dir string) (bool, error)
 }
 
+// Through the docker API rather than the CLI, so duva's image needs only git
+// at runtime. Watchtower and WUD both work this way, for the same reason:
+// there is nothing the CLI does here that the daemon does not expose.
 var realDocker = Docker{
-	Pull: func(ref string) error {
-		return run(exec.Command("docker", "pull", "-q", ref))
-	},
-	GetDigest: func(ref string) (string, error) {
-		out, err := exec.Command("docker", "image", "inspect", ref,
-			"--format", "{{index .RepoDigests 0}}").Output()
-		if err != nil {
-			return "", fmt.Errorf("inspect %s: %w", ref, err)
-		}
-		raw := strings.TrimSpace(string(out))
-		if i := strings.Index(raw, "@"); i != -1 {
-			return raw[i+1:], nil
-		}
-		return "", fmt.Errorf("no repo digest for %s", ref)
-	},
+	Pull:      pullImageAPI,
+	GetDigest: imageDigest,
 	ComposeUp: recreateContainer,
 }
 
