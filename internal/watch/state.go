@@ -2,9 +2,11 @@ package watch
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
+	"time"
 
 	"github.com/Miista/homebrew-docker-pin/internal/registry"
 )
@@ -26,6 +28,33 @@ type State struct {
 	Notified map[string]string `json:"notified"`
 	// Pending is what is waiting for a human, keyed by service.
 	Pending map[string]Pending `json:"pending"`
+	// Soaking is what duva.delay is holding back, keyed by service.
+	//
+	// Kept apart from Pending because they are different situations, even
+	// though an operator can act on both: a pending update is waiting for a
+	// decision, a soaking one has been decided and is waiting for time. Taking
+	// a soaking update early is overriding the soak, and code that cannot tell
+	// them apart could do that without meaning to.
+	Soaking map[string]Soaking `json:"soaking"`
+}
+
+// Soaking is a candidate duva.delay is holding back.
+type Soaking struct {
+	Service string `json:"service"`
+	File    string `json:"file"`
+	Image   string `json:"image"`
+	// CurrentTag is what the file pins now; Candidate is what is waiting.
+	CurrentTag string `json:"current_tag"`
+	Candidate  string `json:"candidate"`
+	// Bump is how big the change would be.
+	Bump registry.Kind `json:"bump,omitempty"`
+	// Remaining is how much longer the soak has to run, and Outcome what
+	// happens then -- which depends on the policy: a soaking major on a
+	// service set to patch is not going to be applied when the wait ends, it
+	// is going to be queued. Saying "will be applied" regardless would be a
+	// promise duva does not keep.
+	Remaining string `json:"remaining"`
+	Outcome   string `json:"outcome"`
 }
 
 // Pending is an update duva will not apply on its own. It carries everything
@@ -139,6 +168,63 @@ func (s *State) Save(path string) error {
 // that is gone.
 //
 // now is passed in so callers control the clock (and tests can pin it).
+// ReconcileSoaking records what duva.delay is holding back, and forgets what
+// it is no longer waiting on -- a candidate that has soaked long enough moves
+// to Pending or is applied, and one that vanished from the registry is not
+// coming.
+func (s *State) ReconcileSoaking(seen []Finding) {
+	if s.Soaking == nil {
+		s.Soaking = map[string]Soaking{}
+	}
+	// Only services this run actually looked at: one absent from `seen` was
+	// not checked, which is different from having stopped soaking.
+	for _, f := range seen {
+		if f.Soaking == nil {
+			delete(s.Soaking, f.Service)
+			continue
+		}
+		bump := registry.Classify(f.CurrentTag, f.Soaking.Tag)
+		s.Soaking[f.Service] = Soaking{
+			Service:    f.Service,
+			File:       f.File,
+			Image:      f.Image,
+			CurrentTag: f.CurrentTag,
+			Candidate:  f.Soaking.Tag,
+			Bump:       bump,
+			Remaining:  humanDuration(f.Soaking.Delay - f.Soaking.Age),
+			Outcome:    soakOutcome(bump, f.Auto),
+		}
+	}
+}
+
+// soakOutcome is what happens when the wait ends: duva applies it, or it
+// joins the queue for a human. The soak decides WHEN, the policy decides WHAT.
+func soakOutcome(bump registry.Kind, auto Auto) string {
+	if auto != AutoNone && bumpRank(bump) <= auto.rank() {
+		return "will be applied automatically"
+	}
+	return "moves to approval"
+}
+
+// humanDuration renders a wait in the largest unit that says something: days
+// for a soak measured in days, hours for the last day of it.
+func humanDuration(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	if days := int(d.Hours() / 24); days >= 1 {
+		if days == 1 {
+			return "1 day"
+		}
+		return fmt.Sprintf("%d days", days)
+	}
+	hours := int(d.Hours())
+	if hours <= 1 {
+		return "less than an hour"
+	}
+	return fmt.Sprintf("%d hours", hours)
+}
+
 func (s *State) Reconcile(needApproval []Finding, seen []Finding, now string) {
 	wanted := make(map[string]Finding, len(needApproval))
 	for _, f := range needApproval {
@@ -186,6 +272,16 @@ func (s *State) Reconcile(needApproval []Finding, seen []Finding, now string) {
 
 // PendingList returns the pending updates sorted by service name, so the UI
 // and any test see a stable order.
+// SoakingList is what duva.delay is holding back, in a stable order.
+func (s *State) SoakingList() []Soaking {
+	out := make([]Soaking, 0, len(s.Soaking))
+	for _, p := range s.Soaking {
+		out = append(out, p)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Service < out[j].Service })
+	return out
+}
+
 func (s *State) PendingList() []Pending {
 	out := make([]Pending, 0, len(s.Pending))
 	for _, p := range s.Pending {

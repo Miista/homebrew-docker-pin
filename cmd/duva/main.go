@@ -231,6 +231,10 @@ func checkWith(cfg envConfig, reg watch.Registry, st *watch.State, now time.Time
 	}
 
 	st.Reconcile(needApproval, findings, now.UTC().Format(time.RFC3339))
+	// What duva.delay is holding back. Recorded separately from the approval
+	// queue: a soaking update has been decided and is waiting for time, not
+	// for a decision.
+	st.ReconcileSoaking(findings)
 
 	// Notify once per candidate, not once per run. Anything applied above has
 	// already reported its own outcome.
@@ -330,6 +334,48 @@ func (s *store) Pending() []watch.Pending {
 	return s.state.PendingList()
 }
 
+func (s *store) Soaking() []watch.Soaking {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.state.SoakingList()
+}
+
+// queuedFinding is the update waiting under a service's name, from the
+// approval queue or from what duva.delay is holding back.
+//
+// The two are separate deliberately, and this reports which it found: taking
+// a soaking update is overriding the soak, which is a thing an operator
+// chooses and not something a caller should be able to do without noticing.
+func (s *store) queuedFinding(service string) (watch.Finding, bool, error) {
+	if p, ok := s.state.Pending[service]; ok {
+		return watch.Finding{
+			Service:       p.Service,
+			File:          p.File,
+			Image:         p.Image,
+			CurrentTag:    p.CurrentTag,
+			CurrentDigest: p.CurrentDigest,
+			Kind:          p.Kind,
+			Candidate:     p.Candidate,
+			Bump:          p.Bump,
+			Status:        watch.StatusAvailable,
+		}, false, nil
+	}
+	if p, ok := s.state.Soaking[service]; ok {
+		return watch.Finding{
+			Service:    p.Service,
+			File:       p.File,
+			Image:      p.Image,
+			CurrentTag: p.CurrentTag,
+			Kind:       watch.KindTag,
+			Candidate:  p.Candidate,
+			Bump:       p.Bump,
+			Status:     watch.StatusAvailable,
+		}, true, nil
+	}
+	return watch.Finding{}, false, fmt.Errorf(
+		"%s has no update waiting: nothing for approval, nothing soaking", service)
+}
+
 // Apply performs a queued update, so the page and a scheduled run reach the
 // container by the same path -- a click cannot do something an unattended run
 // would not.
@@ -340,20 +386,9 @@ func (s *store) Apply(service string) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	p, ok := s.state.Pending[service]
-	if !ok {
-		return "", fmt.Errorf("%s is not waiting for approval", service)
-	}
-	f := watch.Finding{
-		Service:       p.Service,
-		File:          p.File,
-		Image:         p.Image,
-		CurrentTag:    p.CurrentTag,
-		CurrentDigest: p.CurrentDigest,
-		Kind:          p.Kind,
-		Candidate:     p.Candidate,
-		Bump:          p.Bump,
-		Status:        watch.StatusAvailable,
+	f, soaking, err := s.queuedFinding(service)
+	if err != nil {
+		return "", err
 	}
 
 	res := s.act(f)
@@ -361,8 +396,10 @@ func (s *store) Apply(service string) (string, error) {
 		return "", fmt.Errorf("%s failed: %v", res.FailedAt, res.Err)
 	}
 
-	// It reached the container, so it is no longer waiting.
+	// It reached the container, so it is no longer waiting -- for a decision
+	// or for time, whichever it was.
 	delete(s.state.Pending, service)
+	delete(s.state.Soaking, service)
 	delete(s.state.Notified, service)
 	if f.Kind == watch.KindDigest {
 		s.state.Baseline[service] = f.Candidate
@@ -372,6 +409,11 @@ func (s *store) Apply(service string) (string, error) {
 	}
 
 	msg := fmt.Sprintf("updated to %s", res.Outcome.Tag)
+	if soaking {
+		// Worth saying: the operator did something duva would not have done
+		// on its own yet, and the record should show that they chose to.
+		msg += ", ahead of its soak"
+	}
 	if res.Note != "" {
 		msg += " (" + res.Note + ")"
 	}

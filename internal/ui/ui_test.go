@@ -13,9 +13,11 @@ import (
 
 type fakeSource struct {
 	pending []watch.Pending
+	soaking []watch.Soaking
 }
 
 func (f fakeSource) Pending() []watch.Pending { return f.pending }
+func (f fakeSource) Soaking() []watch.Soaking { return f.soaking }
 func (f fakeSource) LastCheck() string        { return "2 hours ago" }
 func (f fakeSource) LastCheckExact() string   { return "2026-01-01 00:00:00 CET" }
 
@@ -265,5 +267,70 @@ func TestIndex_FormWhenApplierPresent(t *testing.T) {
 	body := get(t, queueWith(&fakeApplier{}), "/").Body.String()
 	if !strings.Contains(body, `action="/apply"`) {
 		t.Error("the form should post to /apply, where the handler is")
+	}
+}
+
+// Soaking updates are shown apart from the queue: a pending one is waiting
+// for a decision, a soaking one has been decided and is waiting for time.
+// They look the same to act on, which is the point -- the soak is a default,
+// not a lock.
+func TestIndex_ShowsWhatIsSoaking(t *testing.T) {
+	s := &Server{
+		Source: fakeSource{soaking: []watch.Soaking{{
+			Service: "app", Image: "example.com/app", CurrentTag: "1.2.0",
+			Candidate: "1.3.0", Bump: registry.KindMinor,
+			Remaining: "4 days", Outcome: "will be applied automatically",
+		}}},
+		Applier: &fakeApplier{},
+	}
+	body := get(t, s, "/").Body.String()
+
+	// The service and its candidate, which are data rather than copy: a
+	// reader cannot act on a row that does not say what it offers.
+	for _, want := range []string{"app", "1.3.0"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the page should show %q:\n%s", want, body)
+		}
+	}
+	// Actionable: taking one early is the reason it is shown at all.
+	if !strings.Contains(body, `action="/apply"`) {
+		t.Error("a soaking update should be offered for updating early")
+	}
+}
+
+// What happens when the wait ends depends on the policy, so the page must not
+// promise an automatic apply for something that will need approval.
+func TestIndex_SoakingOutcomeIsNotAssumed(t *testing.T) {
+	s := &Server{Source: fakeSource{soaking: []watch.Soaking{{
+		Service: "app", CurrentTag: "1.2.0", Candidate: "2.0.0",
+		Bump: registry.KindMajor, Remaining: "6 days", Outcome: "moves to approval",
+	}}}}
+	body := get(t, s, "/").Body.String()
+
+	// The outcome comes from the state, not from the template: what the page
+	// must not do is invent one. Whatever Soaking.Outcome said is what
+	// appears, so a policy change shows up here without the page deciding
+	// anything.
+	if !strings.Contains(body, "moves to approval") {
+		t.Errorf("the page should render the recorded outcome:\n%s", body)
+	}
+	if !strings.Contains(body, "6 days") {
+		t.Errorf("the page should render the recorded remaining time:\n%s", body)
+	}
+}
+
+// The two lists are separate, so an empty queue must not hide a soaking one.
+func TestIndex_SoakingShowsWithAnEmptyQueue(t *testing.T) {
+	s := &Server{Source: fakeSource{soaking: []watch.Soaking{{
+		Service: "app", CurrentTag: "1.2.0", Candidate: "1.3.0",
+		Remaining: "2 days", Outcome: "moves to approval",
+	}}}}
+	body := get(t, s, "/").Body.String()
+
+	// The soaking candidate is rendered even though the approval queue has
+	// nothing in it: they are two lists, and one being empty must not hide
+	// the other.
+	if !strings.Contains(body, "1.3.0") {
+		t.Errorf("the soaking list should still be shown:\n%s", body)
 	}
 }

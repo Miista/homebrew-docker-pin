@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/Miista/homebrew-docker-pin/internal/registry"
 )
@@ -230,5 +231,87 @@ func TestPendingList_SortedByService(t *testing.T) {
 func TestPendingList_EmptyIsEmptyNotNil(t *testing.T) {
 	if got := NewState().PendingList(); got == nil {
 		t.Error("PendingList should return an empty slice, not nil")
+	}
+}
+
+// A soak that says nothing looks like nothing found. duva decided this update
+// is wanted and is waiting on time, which is worth seeing -- not least so it
+// can be taken early.
+func TestReconcileSoaking_RecordsWhatIsHeldBack(t *testing.T) {
+	st := NewState()
+	st.ReconcileSoaking([]Finding{{
+		Service: "app", File: "/compose/docker-compose.yml",
+		Image: "example.com/app", CurrentTag: "1.2.0", Auto: AutoMinor,
+		Soaking: &SoakingTag{
+			Tag: "1.3.0", Age: 3 * 24 * time.Hour, Delay: 7 * 24 * time.Hour,
+		},
+	}})
+
+	got, ok := st.Soaking["app"]
+	if !ok {
+		t.Fatal("the soaking candidate should be recorded")
+	}
+	if got.Candidate != "1.3.0" {
+		t.Errorf("candidate = %q, want 1.3.0", got.Candidate)
+	}
+	if got.Remaining != "4 days" {
+		t.Errorf("remaining = %q, want 4 days", got.Remaining)
+	}
+	// Within duva.auto: minor, so when the wait ends duva applies it.
+	if got.Outcome != "will be applied automatically" {
+		t.Errorf("outcome = %q, want it to say duva will apply it", got.Outcome)
+	}
+}
+
+// The soak decides WHEN, the policy decides WHAT. A major soaking on a
+// service that only auto-applies minors is not going to be applied when the
+// wait ends -- saying so would be a promise duva does not keep.
+func TestReconcileSoaking_OutcomeFollowsThePolicy(t *testing.T) {
+	st := NewState()
+	st.ReconcileSoaking([]Finding{{
+		Service: "app", CurrentTag: "1.2.0", Auto: AutoMinor,
+		Soaking: &SoakingTag{
+			Tag: "2.0.0", Age: time.Hour, Delay: 48 * time.Hour,
+		},
+	}})
+
+	if got := st.Soaking["app"].Outcome; got != "moves to approval" {
+		t.Errorf("outcome = %q: a major beyond duva.auto is not applied when the soak ends", got)
+	}
+}
+
+// A candidate that has soaked long enough is no longer soaking: it has moved
+// to the queue or been applied, and a stale row would offer an update twice.
+func TestReconcileSoaking_ForgetsWhatIsNoLongerHeld(t *testing.T) {
+	st := NewState()
+	st.ReconcileSoaking([]Finding{{
+		Service: "app", CurrentTag: "1.2.0",
+		Soaking: &SoakingTag{Tag: "1.3.0", Age: time.Hour, Delay: 48 * time.Hour},
+	}})
+	if len(st.Soaking) != 1 {
+		t.Fatalf("expected one soaking entry, got %d", len(st.Soaking))
+	}
+
+	// The next check finds it no longer held back.
+	st.ReconcileSoaking([]Finding{{Service: "app", CurrentTag: "1.2.0"}})
+
+	if _, ok := st.Soaking["app"]; ok {
+		t.Error("a candidate that finished soaking should not still be listed")
+	}
+}
+
+// A service absent from a check was not looked at -- its file may not have
+// been read -- which is different from having stopped soaking.
+func TestReconcileSoaking_KeepsWhatWasNotChecked(t *testing.T) {
+	st := NewState()
+	st.ReconcileSoaking([]Finding{{
+		Service: "app", CurrentTag: "1.2.0",
+		Soaking: &SoakingTag{Tag: "1.3.0", Age: time.Hour, Delay: 48 * time.Hour},
+	}})
+
+	st.ReconcileSoaking([]Finding{{Service: "other", CurrentTag: "1.0.0"}})
+
+	if _, ok := st.Soaking["app"]; !ok {
+		t.Error("a service that was not checked should keep its soaking entry")
 	}
 }

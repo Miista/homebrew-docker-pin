@@ -26,6 +26,8 @@
   main { max-width: 60rem; margin: 0 auto; }
   header { display: flex; align-items: baseline; gap: .75rem; margin-bottom: 1.5rem; }
   h1 { font-size: 1.25rem; margin: 0; font-weight: 600; }
+  h2 { font-size: 1rem; margin: 2rem 0 .25rem; font-weight: 600; }
+  .lede { color: var(--muted); font-size: .9rem; margin: 0 0 .75rem; max-width: 46rem; }
   .host { color: var(--muted); font-size: .9rem; }
   .count { margin-left: auto; color: var(--muted); font-size: .9rem; }
   table { width: 100%; border-collapse: collapse; background: var(--card);
@@ -105,7 +107,43 @@
   </table>
   </div>
   {{else}}
-  <div class="empty">Nothing waiting. Everything watched is up to date, or applied automatically.</div>
+  <div class="empty">Nothing waiting for approval.</div>
+  {{end}}
+
+  {{if .Soaking}}
+  <h2>Soaking</h2>
+  <p class="lede">Held back by <code>duva.delay</code> until the release has been
+  out long enough. The wait is a default, not a lock &mdash; take one early if
+  you know it is fine.</p>
+  <div class="wrap">
+  <table>
+    <thead>
+      <tr><th>Service</th><th>Current</th><th>Available</th><th>Kind</th><th>Then</th>{{if $.CanApply}}<th></th>{{end}}</tr>
+    </thead>
+    <tbody>
+      {{range .Soaking}}
+      <tr>
+        <td>
+          <div class="service">{{.Service}}</div>
+          <div class="image">{{.Image}}</div>
+        </td>
+        <td><code>{{.CurrentTag}}</code></td>
+        <td><code>{{.Candidate}}</code></td>
+        <td><span class="kind kind-{{.Kind}}">{{.Kind}}</span></td>
+        <td class="image">{{.Why}}</td>
+        {{if $.CanApply}}
+        <td>
+          <form method="post" action="/apply">
+            <input type="hidden" name="service" value="{{.Service}}">
+            <button type="submit">Update</button>
+          </form>
+        </td>
+        {{end}}
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  </div>
   {{end}}
 
   <footer>
