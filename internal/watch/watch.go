@@ -19,6 +19,7 @@ import (
 	"github.com/Miista/homebrew-docker-pin/internal/compose"
 	"github.com/Miista/homebrew-docker-pin/internal/pin"
 	"github.com/Miista/homebrew-docker-pin/internal/registry"
+	"github.com/Miista/homebrew-docker-pin/internal/schedule"
 )
 
 // Registry is the registry access detection needs, seamed for tests.
@@ -92,6 +93,25 @@ type Finding struct {
 	// in the explanation of what it rejected.
 	Auto Auto
 	Why  string
+
+	// Soaking is a candidate held back by duva.delay: newer than what is
+	// pinned, matching the include, but not yet as old as the service asks
+	// for. Empty unless a delay is set and something is waiting on it.
+	//
+	// Carried because a soak that says nothing looks like nothing found. The
+	// wait is a default, not a lock -- an operator who knows a release is
+	// fine can take it early, which they cannot do if duva never mentions it.
+	Soaking *SoakingTag
+}
+
+// SoakingTag is a candidate waiting out its delay.
+type SoakingTag struct {
+	// Tag is the version being held back, and Age how long since it was
+	// published. Delay is what the service asks for, so a reader can see how
+	// much longer it has to wait.
+	Tag   string
+	Age   time.Duration
+	Delay time.Duration
 }
 
 // NeedsApproval reports whether this finding is waiting on a human.
@@ -255,6 +275,19 @@ func constrained(f Finding, rules Rules, reg Registry) Finding {
 	if err != nil {
 		return errorf(f, err)
 	}
+	// The newest candidate held back by the soak, if any. Reported whether or
+	// not something older did qualify: a service can be offered 1.2.0 while
+	// 1.3.0 is still soaking, and both are worth seeing.
+	if len(c.TooFresh) > 0 {
+		if delay, err := schedule.ParseDelay(rules.Delay); err == nil {
+			f.Soaking = &SoakingTag{
+				Tag:   c.TooFresh[0].Tag,
+				Age:   c.TooFresh[0].Age,
+				Delay: delay,
+			}
+		}
+	}
+
 	if c.Tag == "" {
 		f.Status, f.Reason = StatusUpToDate, c.Hold
 		return f

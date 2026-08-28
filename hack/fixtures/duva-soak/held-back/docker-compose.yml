@@ -1,0 +1,31 @@
+# A service with a soak: duva.delay holds a candidate back until the release
+# has been out long enough. The registry's images are published as the test
+# runs, so nothing has soaked -- which is the state this scenario is about.
+#
+# duva.auto covers the bump, so when the wait ends duva would apply it by
+# itself. The point of the test is that it can be taken early instead.
+services:
+  app:
+    image: localhost:5555/app:1.0.0
+    labels:
+      duva.include: '^1\.\d+\.\d+$'
+      duva.delay: 7d
+      duva.auto: minor
+
+  duva:
+    image: duva:integration
+    command: serve
+    environment:
+      DUVA_HOSTNAME: integration
+      DUVA_SCHEDULE: "0 3 * * *"
+    ports:
+      # The approval queue, so a test can act on it the way an operator would.
+      - "8098:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - .:/compose
+      - ./data:/data
+      # Only here because the suite's registry is self-signed.
+      - ./certs/cert.pem:/etc/ssl/certs/ca-certificates.crt:ro
+    extra_hosts:
+      - localhost:host-gateway

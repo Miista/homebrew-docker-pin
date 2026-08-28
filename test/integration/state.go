@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -408,4 +409,26 @@ func (s *Scenario) Watched() []string {
 		}
 	}
 	return watched
+}
+
+// UpdateNow presses the Update button for a service, as an operator would.
+//
+// A form POST rather than a call into duva: what is being tested is that the
+// page's button reaches the container, and a test that skipped the HTTP round
+// trip would not know whether it did.
+func (s *Scenario) UpdateNow(service string) string {
+	s.t.Helper()
+	resp, err := http.PostForm("http://localhost:"+queuePort+"/apply",
+		url.Values{"service": {service}})
+	if err != nil {
+		s.t.Fatalf("pressing Update for %s: %v", service, err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+
+	// The handler redirects back to the page carrying the result.
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusSeeOther {
+		s.t.Fatalf("pressing Update for %s: %s\n%s", service, resp.Status, body)
+	}
+	return string(body)
 }

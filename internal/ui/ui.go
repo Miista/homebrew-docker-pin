@@ -30,6 +30,8 @@ var page = template.Must(template.New("page").Parse(pageHTML))
 type Source interface {
 	// Pending returns the updates awaiting approval, sorted.
 	Pending() []watch.Pending
+	// Soaking is what duva.delay is holding back: decided, waiting on time.
+	Soaking() []watch.Soaking
 	// LastCheck describes when detection last ran, for the footer, as an age
 	// rather than a timestamp: the question a reader has is whether it was
 	// recent.
@@ -123,6 +125,7 @@ func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pending := s.Source.Pending()
+	soaking := s.Source.Soaking()
 	rows := make([]row, 0, len(pending))
 	for _, p := range pending {
 		rows = append(rows, row{
@@ -137,9 +140,25 @@ func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	// Soaking rows are the same shape: an operator acts on them the same way,
+	// and the difference -- that duva decided already and is waiting on time
+	// rather than on a person -- is in what the row says, not what it is.
+	waiting := make([]row, 0, len(soaking))
+	for _, p := range soaking {
+		waiting = append(waiting, row{
+			Service:    p.Service,
+			Image:      p.Image,
+			CurrentTag: p.CurrentTag,
+			Candidate:  p.Candidate,
+			Kind:       string(p.Bump),
+			Why:        p.Outcome + " in " + p.Remaining,
+		})
+	}
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := page.Execute(w, struct {
 		Pending        []row
+		Soaking        []row
 		Host           string
 		Version        string
 		LastCheck      string
@@ -150,6 +169,7 @@ func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 		Message        string
 	}{
 		Pending:        rows,
+		Soaking:        waiting,
 		Host:           s.Host,
 		Version:        s.Version,
 		LastCheck:      s.Source.LastCheck(),
