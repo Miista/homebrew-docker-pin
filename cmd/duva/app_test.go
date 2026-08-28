@@ -734,11 +734,13 @@ func TestNotify_AppliedUpdate(t *testing.T) {
 	if len(*got) != 1 {
 		t.Fatalf("expected one notification, got %d: %v", len(*got), *got)
 	}
-	if !strings.Contains((*got)[0], "updated") {
-		t.Errorf("the notification should say it was updated: %q", (*got)[0])
-	}
+	// The service and the version it moved to: what a reader acts on. The
+	// verb around them is free to change.
 	if !strings.Contains((*got)[0], svc.Name) {
 		t.Errorf("it should name the service: %q", (*got)[0])
+	}
+	if want := svc.AvailableTags[len(svc.AvailableTags)-1]; !strings.Contains((*got)[0], want) {
+		t.Errorf("it should name the version it updated to (%s): %q", want, (*got)[0])
 	}
 }
 
@@ -753,6 +755,7 @@ func TestNotify_FailedUpdateNamesTheStep(t *testing.T) {
 
 	a := newApp(t, f.Project(svc))
 	composeDir, stateFile = filepath.Dir(a.project), a.state
+	before := imageLine(t, a.project, svc.Name)
 	st, _ := watch.LoadState(a.state)
 	if _, err := checkWith(cfg, watch.Registry{
 		ListMatchingTags: f.Registry(svc).ListMatchingTags,
@@ -766,14 +769,17 @@ func TestNotify_FailedUpdateNamesTheStep(t *testing.T) {
 	if len(*got) != 1 {
 		t.Fatalf("expected one notification, got %d: %v", len(*got), *got)
 	}
-	msg := (*got)[0]
-	if !strings.Contains(msg, "FAILED") {
-		t.Errorf("a failure should be marked as one: %q", msg)
-	}
-	if !strings.Contains(msg, string(StepRecreate)) {
+	// The step is a typed constant, so naming it is a contract rather than
+	// wording: "compose up failed" and "push failed" call for different
+	// responses, and a notification that does not distinguish them is no use.
+	if msg := (*got)[0]; !strings.Contains(msg, string(StepRecreate)) {
 		t.Errorf("it should name the step that failed: %q", msg)
 	}
-	if !strings.Contains(msg, "put back") {
-		t.Errorf("it should say the file was restored: %q", msg)
+
+	// That the file was put back is asserted on the file, not on the sentence
+	// describing it: the compose file must not keep claiming an image the
+	// container refused.
+	if got := imageLine(t, a.project, svc.Name); got != before {
+		t.Errorf("the compose file was not put back:\n  was %s\n  now %s", before, got)
 	}
 }

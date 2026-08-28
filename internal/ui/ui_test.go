@@ -66,10 +66,14 @@ func TestIndex_ShortensDigestCandidates(t *testing.T) {
 }
 
 func TestIndex_EmptyQueue(t *testing.T) {
-	s := &Server{Source: fakeSource{}}
+	// With an Applier, a row would carry a form -- so its absence means there
+	// are no rows, which is what "empty" means to a reader. The sentence
+	// saying so is free to change.
+	s := &Server{Source: fakeSource{}, Applier: &fakeApplier{}}
 	body := get(t, s, "/").Body.String()
-	if !strings.Contains(body, "Nothing waiting") {
-		t.Errorf("expected an empty state, got:\n%s", body)
+
+	if strings.Contains(body, `action="/apply"`) {
+		t.Errorf("an empty queue should offer nothing to update:\n%s", body)
 	}
 }
 

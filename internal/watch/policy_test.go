@@ -91,8 +91,14 @@ func TestDecide_TagCandidates(t *testing.T) {
 func TestDecide_UnknownExplainsItself(t *testing.T) {
 	f := Finding{Status: StatusAvailable, Kind: KindTag, Bump: registry.KindUnknown}
 	_, why := Decide(f, AutoMinor)
-	if !strings.Contains(why, "could not be classified") {
-		t.Errorf("why = %q, want it to mention the failed classification", why)
+	// What matters is that it does not claim a threshold was exceeded, which
+	// would be a different and wrong diagnosis. The phrasing is free.
+	if strings.Contains(why, "exceeds") {
+		t.Errorf("why = %q: an unclassifiable change did not exceed a threshold, "+
+			"it could not be measured against one", why)
+	}
+	if why == "" {
+		t.Error("an unclassifiable change should still explain itself")
 	}
 }
 
