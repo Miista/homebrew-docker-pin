@@ -31,7 +31,7 @@ services:
   # container's compose project label to know which project to recreate
   # containers in. Outside a project there is no label and it refuses to guess.
   duva_copenhagen:
-    image: duva:integration-duva-timezones
+    image: duva:integration
     command: serve
     environment:
       DUVA_HOSTNAME: integration
@@ -54,7 +54,7 @@ services:
       - localhost:host-gateway
 
   duva_auckland:
-    image: duva:integration-duva-timezones
+    image: duva:integration
     command: serve
     environment:
       DUVA_HOSTNAME: integration
