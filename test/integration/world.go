@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 )
@@ -113,26 +112,39 @@ func (s *Scenario) Status() string {
 // so it comes from the scenario's updates.
 func (s *Scenario) pushDeclaredImages() {
 	s.t.Helper()
-	raw, err := os.ReadFile(filepath.Join(s.Dir, "docker-compose.yml"))
-	if err != nil {
-		s.t.Fatalf("reading the compose file: %v", err)
-	}
-
-	seen := map[string]bool{}
-	for _, ref := range testImageRe.FindAllStringSubmatch(string(raw), -1) {
-		repo, tag := ref[1], ref[2]
-		if seen[repo+":"+tag] {
-			continue
-		}
-		seen[repo+":"+tag] = true
+	for _, ref := range s.declaredImages() {
+		repo, tag, _ := strings.Cut(strings.TrimPrefix(ref, registryHost+"/"), ":")
 		s.Push(repo, tag)
 	}
 }
 
-// testImageRe matches the images a scenario expects this suite to publish:
-// those in the local registry. Anything else -- duva's own image, the
-// receiver -- is built once for the package and is not a scenario's to push.
-var testImageRe = regexp.MustCompile(regexp.QuoteMeta(registryHost) + `/([a-z0-9-]+):([a-zA-Z0-9._-]+)`)
+// declaredImages is every image from this suite's registry that the fixture
+// refers to, deduplicated.
+//
+// Asked of compose rather than read out of the yaml: compose resolves
+// variables and includes, and knows what an image reference is. Matching them
+// by hand would be guessing at a format someone else defines.
+//
+// Only the ones from the local registry: duva's own image and the receiver
+// are built once for the package and are not a scenario's to publish.
+func (s *Scenario) declaredImages() []string {
+	s.t.Helper()
+	out, err := s.compose("config", "--images")
+	if err != nil {
+		s.t.Fatalf("listing %s's images: %v\n%s", s.Name, err, out)
+	}
+
+	var refs []string
+	seen := map[string]bool{}
+	for _, ref := range strings.Fields(out) {
+		if !strings.HasPrefix(ref, registryHost+"/") || seen[ref] {
+			continue
+		}
+		seen[ref] = true
+		refs = append(refs, ref)
+	}
+	return refs
+}
 
 // Push publishes a runnable image under a tag.
 //

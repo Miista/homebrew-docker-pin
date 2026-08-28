@@ -367,18 +367,16 @@ func (s *Scenario) manifest() manifest {
 	return m
 }
 
-// repo is the image name a scenario's services use.
+// repo is the image name a scenario's services use, so that its updates are
+// newer versions of something it actually runs.
 func (s *Scenario) repo() string {
 	s.t.Helper()
-	raw, err := os.ReadFile(filepath.Join(s.Dir, "docker-compose.yml"))
-	if err != nil {
-		s.t.Fatalf("reading the compose file: %v", err)
+	declared := s.declaredImages()
+	if len(declared) == 0 {
+		s.t.Fatalf("%s references no image from %s", s.Name, registryHost)
 	}
-	m := testImageRe.FindStringSubmatch(string(raw))
-	if m == nil {
-		s.t.Fatalf("no %s image in %s's compose file", registryHost, s.Name)
-	}
-	return m[1]
+	repo, _, _ := strings.Cut(strings.TrimPrefix(declared[0], registryHost+"/"), ":")
+	return repo
 }
 
 // Watched is every service carrying a duva.* label, which is what a fixture
