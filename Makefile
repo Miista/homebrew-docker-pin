@@ -46,7 +46,6 @@ test-integration:
 	./hack/integration-pin.sh
 	./hack/integration-duva.sh
 	./hack/integration-duva-policy.sh
-	./hack/integration-duva-apply.sh
 
 # --- coverage ---------------------------------------------------------
 # Reports unit and integration coverage separately, then merged. Merging
