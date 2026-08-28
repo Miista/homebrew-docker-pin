@@ -16,13 +16,11 @@ import (
 // own machine, which has zoneinfo, and pass whether or not the import exists
 // -- failing only once shipped.
 func TestTimezoneIsHonoured(t *testing.T) {
-	t.Skip("parked: Up stops the service called duva, and this fixture names " +
-		"its two duvas by timezone -- so nothing is held back and Start has " +
-		"nothing to start. Kept because the behaviour it guards is real and " +
-		"was a bug: TZ was silently ignored on an image with no zoneinfo.")
-
+	// No Start() here: this test reads what the duvas print as they come up,
+	// so there is nothing to hold them back for. Up stops the service named
+	// duva, and these are named for their zones -- which is what a scenario
+	// wanting its duvas running from the start says by not calling them that.
 	s := Up(t, "duva-timezones/two-zones")
-	s.Start()
 
 	// Two duvas, same instant, zones ten hours apart. Each announces when it
 	// will next check, rendered in its own local time.
