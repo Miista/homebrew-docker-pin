@@ -115,6 +115,30 @@ func Up(t *testing.T, name string) *Scenario {
 	return s
 }
 
+// Bare prepares an empty project in the testbed, with no fixture and nothing
+// running.
+//
+// For the scenarios that are about docker pin rather than duva: what those
+// need is a compose file and a registry, and what they assert is the image
+// line before and after. A fixture per permutation would be a directory of
+// files differing by one word.
+func Bare(t *testing.T) *Scenario {
+	t.Helper()
+
+	root := repoRoot(t)
+	s := &Scenario{t: t, Name: "bare", root: root, Dir: filepath.Join(root, "testbed")}
+
+	s.sweep()
+	t.Cleanup(s.sweep)
+	if err := os.MkdirAll(s.Dir, 0o755); err != nil {
+		t.Fatalf("preparing the testbed: %v", err)
+	}
+	if err := emptyRegistry(); err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
 // Start runs duva, which checks once as it comes up.
 //
 // A test calls this when its world is complete: images pushed, services
