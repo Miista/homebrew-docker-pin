@@ -21,7 +21,7 @@ func TestPolicyDecidesWhatIsQueued(t *testing.T) {
 
 	// A newer patch and a newer minor of the 1.x line; see the scenario's
 	// additional-images.
-	s.PushUpdates()
+	s.PushAdditional()
 
 	// Every watched service shares the image, so they all follow the same
 	// tags and differ only in what their labels allow.

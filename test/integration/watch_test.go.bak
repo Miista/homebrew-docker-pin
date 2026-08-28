@@ -18,7 +18,7 @@ import (
 func TestNewerTagIsAnnouncedOnce(t *testing.T) {
 	s := Up(t, "duva-watch/constrained-tag")
 
-	s.PushUpdates()
+	s.PushAdditional()
 	s.Pin("app")
 	before := s.Image("app")
 
@@ -93,7 +93,7 @@ func TestMovedDigestIsAnnounced(t *testing.T) {
 func TestUnpinnedServiceIsNotWatched(t *testing.T) {
 	s := Up(t, "duva-watch/unpinned")
 
-	s.PushUpdates()
+	s.PushAdditional()
 	// Deliberately not pinned: that is what this test is about.
 
 	s.Start()

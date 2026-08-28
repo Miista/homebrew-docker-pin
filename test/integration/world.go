@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -103,21 +104,35 @@ func (s *Scenario) Status() string {
 	return s.git("status", "--porcelain")
 }
 
-// pushDeclaredImages publishes the tags the fixture's own compose file refers
+// pushDeclaredImages publishes every image the fixture's compose file refers
 // to, so the stack can start.
 //
-// Only those: what is AVAILABLE to update to is the variable a test is about,
-// so a test pushes that itself.
+// Read from the compose file rather than from a list beside it: the file
+// already names them, and a second copy is a thing to keep in step. Only
+// these -- what is AVAILABLE to update to is not referenced by any service,
+// so it comes from the scenario's updates.
 func (s *Scenario) pushDeclaredImages() {
 	s.t.Helper()
-	raw, err := os.ReadFile(filepath.Join(s.Dir, "images"))
+	raw, err := os.ReadFile(filepath.Join(s.Dir, "docker-compose.yml"))
 	if err != nil {
-		return // a scenario need not declare any
+		s.t.Fatalf("reading the compose file: %v", err)
 	}
-	for _, tag := range strings.Fields(string(raw)) {
-		s.Push("app", tag)
+
+	seen := map[string]bool{}
+	for _, ref := range testImageRe.FindAllStringSubmatch(string(raw), -1) {
+		repo, tag := ref[1], ref[2]
+		if seen[repo+":"+tag] {
+			continue
+		}
+		seen[repo+":"+tag] = true
+		s.Push(repo, tag)
 	}
 }
+
+// testImageRe matches the images a scenario expects this suite to publish:
+// those in the local registry. Anything else -- duva's own image, the
+// receiver -- is built once for the package and is not a scenario's to push.
+var testImageRe = regexp.MustCompile(regexp.QuoteMeta(registryHost) + `/([a-z0-9-]+):([a-zA-Z0-9._-]+)`)
 
 // Push publishes a runnable image under a tag.
 //
