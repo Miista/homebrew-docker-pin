@@ -39,7 +39,10 @@ test: test-unit test-integration
 test-unit:
 	go test ./...
 
+# The Go suites are being converted from shell one at a time; -p 1 keeps them
+# sequential for the same reason the scripts are.
 test-integration:
+	go test -tags integration -count=1 -p 1 ./test/...
 	./hack/integration-pin.sh
 	./hack/integration-duva.sh
 	./hack/integration-duva-policy.sh
