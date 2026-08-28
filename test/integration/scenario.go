@@ -67,7 +67,7 @@ func Up(t *testing.T, name string) *Scenario {
 		t:     t,
 		Name:  name,
 		root:  root,
-		Image: "duva:integration-" + suite,
+		Image: suiteImage,
 		Dir:   filepath.Join(root, "testbed", suite+"-"+scenarioName),
 	}
 
@@ -86,8 +86,7 @@ func Up(t *testing.T, name string) *Scenario {
 	}
 	s.copyTree(src, s.Dir)
 
-	s.buildDuvaImage()
-	s.writeCerts()
+	s.copyCerts()
 	s.initRepo()
 
 	// The registry alone first: nothing else can start until it holds the

@@ -22,29 +22,6 @@ import (
 // image under test, the registry's certificate, the git repository duva
 // commits into, and the images the fixture refers to.
 
-// buildDuvaImage builds the image the fixture names, from the shipped
-// Dockerfile.
-//
-// The real one, deliberately: a suite that builds its own image tests an
-// artifact nobody ships, and the two drift. That is not hypothetical -- while
-// the test image was FROM scratch and the shipped one was not, duva gained a
-// runtime dependency on git and only the shipped image would have shown it.
-func (s *Scenario) buildDuvaImage() {
-	s.t.Helper()
-	args := []string{"build", "-q", "--label", label + "=" + s.suite(),
-		"-f", filepath.Join("cmd", "duva", "Dockerfile"), "-t", s.Image}
-	if dir := os.Getenv("GOCOVERDIR"); dir != "" {
-		args = append(args, "--build-arg", "COVER=1")
-	}
-	args = append(args, s.root)
-
-	cmd := exec.Command("docker", args...)
-	cmd.Dir = s.root
-	if out, err := cmd.CombinedOutput(); err != nil {
-		s.t.Fatalf("building %s: %v\n%s", s.Image, err, out)
-	}
-}
-
 // label marks everything a scenario creates, so a run killed outright can
 // still be swept by the next one.
 const label = "io.github.miista.docker-pin.integration"
@@ -54,22 +31,19 @@ func (s *Scenario) suite() string {
 	return suite
 }
 
-// writeCerts puts a self-signed certificate where the fixture expects it.
+// writeCertsTo generates the certificate the registry serves and duva trusts.
 //
-// Inside the project, so the compose file can name it relatively and needs no
-// variable only a test could expand. The registry serves TLS with it, and
-// duva trusts it by mounting it over the image's CA bundle -- scaffolding
-// that exists only because the registry is local. A real one needs neither.
-func (s *Scenario) writeCerts() {
-	s.t.Helper()
-	dir := filepath.Join(s.Dir, "certs")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		s.t.Fatal(err)
-	}
-
+// Called once per package: it is identical for every scenario, and a second
+// RSA key is pure cost. Each scenario gets a copy inside its own project, so
+// the compose file can name it relatively and needs no variable only a test
+// could expand.
+//
+// Scaffolding that exists only because the registry is local: a real one is
+// trusted by the image's own CA bundle.
+func writeCertsTo(dir string) error {
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
-		s.t.Fatal(err)
+		return err
 	}
 	tmpl := x509.Certificate{
 		SerialNumber: big.NewInt(1),
@@ -85,22 +59,37 @@ func (s *Scenario) writeCerts() {
 	}
 	der, err := x509.CreateCertificate(rand.Reader, &tmpl, &tmpl, &key.PublicKey, key)
 	if err != nil {
-		s.t.Fatal(err)
+		return err
 	}
 
-	write := func(name string, block *pem.Block) {
+	write := func(name string, block *pem.Block) error {
 		f, err := os.Create(filepath.Join(dir, name))
 		if err != nil {
-			s.t.Fatal(err)
+			return err
 		}
 		defer f.Close()
-		if err := pem.Encode(f, block); err != nil {
-			s.t.Fatal(err)
-		}
+		return pem.Encode(f, block)
 	}
-	write("cert.pem", &pem.Block{Type: "CERTIFICATE", Bytes: der})
-	write("key.pem", &pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
+	if err := write("cert.pem", &pem.Block{Type: "CERTIFICATE", Bytes: der}); err != nil {
+		return err
+	}
+	return write("key.pem", &pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
 }
+
+// copyCerts puts the package's certificate where this scenario's fixture
+// expects it.
+func (s *Scenario) copyCerts() {
+	s.t.Helper()
+	dir := filepath.Join(s.Dir, "certs")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		s.t.Fatal(err)
+	}
+	if out, err := exec.Command("cp", suiteCerts+"/cert.pem", suiteCerts+"/key.pem", dir).CombinedOutput(); err != nil {
+		s.t.Fatalf("copying the certificate: %v: %s", err, out)
+	}
+}
+
+func trimmed(b []byte) string { return strings.TrimSpace(string(b)) }
 
 // initRepo makes the project a git repository and commits it.
 //
