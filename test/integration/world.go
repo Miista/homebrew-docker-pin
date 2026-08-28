@@ -180,10 +180,7 @@ func (s *Scenario) pushDeclaredImages() {
 // container was replaced" indistinguishable from "nothing happened".
 func (s *Scenario) Push(repo, tag string) {
 	s.t.Helper()
-	dir := filepath.Join(s.Dir, ".build")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		s.t.Fatal(err)
-	}
+	dir := s.scratch("build")
 
 	main := fmt.Sprintf(`package main
 
@@ -223,16 +220,28 @@ func main() {
 // refuses the image it was just pinned to.
 func (s *Scenario) PushUnrunnable(repo, tag string) {
 	s.t.Helper()
-	dir := filepath.Join(s.Dir, ".broken")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		s.t.Fatal(err)
-	}
+	dir := s.scratch("broken")
 	s.writeFile(filepath.Join(dir, "marker"), repo+":"+tag)
 	s.writeFile(filepath.Join(dir, "Dockerfile"), "FROM scratch\nCOPY marker /marker\n")
 
 	ref := fmt.Sprintf("%s/%s:%s", registryHost, repo, tag)
 	s.docker("build", "-q", "--label", label+"="+s.suite(), "-t", ref, dir)
 	s.docker("push", "-q", ref)
+}
+
+// scratch is a directory for the harness's own working files -- image build
+// contexts, mostly.
+//
+// Outside the project, because the project is a git repository that duva
+// refuses to act on when it is dirty: a build context left inside would look
+// like a half-applied change.
+func (s *Scenario) scratch(name string) string {
+	dir := filepath.Join(s.root, "testbed-scratch", name)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		s.t.Fatal(err)
+	}
+	s.t.Cleanup(func() { os.RemoveAll(filepath.Join(s.root, "testbed-scratch")) })
+	return dir
 }
 
 // registryHost is where images live. localhost, not the registry's network

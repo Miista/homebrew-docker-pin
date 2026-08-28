@@ -22,7 +22,7 @@ services:
   # container's compose project label to know which project to recreate
   # containers in. Outside a project there is no label and it refuses to guess.
   duva:
-    image: duva:integration-apply
+    image: duva:integration
     command: serve
     environment:
       DUVA_HOSTNAME: integration

@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // repoRoot is the checkout this test runs from. Fixtures are read from it and
@@ -43,10 +44,8 @@ type Scenario struct {
 	t    *testing.T
 	Name string
 	// Dir is the project, a git repository, under testbed/.
-	Dir string
-	// Image is the duva image this scenario's fixture refers to.
-	Image string
-	root  string
+	Dir  string
+	root string
 }
 
 // Up copies a fixture into the testbed and brings up everything it declares.
@@ -64,19 +63,23 @@ func Up(t *testing.T, name string) *Scenario {
 	}
 
 	s := &Scenario{
-		t:     t,
-		Name:  name,
-		root:  root,
-		Image: suiteImage,
-		Dir:   filepath.Join(root, "testbed", suite+"-"+scenarioName),
+		t:    t,
+		Name: name,
+		root: root,
+		Dir:  filepath.Join(root, "testbed"),
 	}
 
-	// A fixed directory, never a random one: compose derives a project name
-	// from it, so a random name is a project nothing can find afterwards --
-	// which is how containers and networks used to survive teardown.
-	if err := os.RemoveAll(s.Dir); err != nil {
-		t.Fatalf("clearing the testbed: %v", err)
-	}
+	// One directory, always the same one. Compose derives a project name from
+	// it, so a fixed name is a project that can always be found again --
+	// which is what teardown needs, and a random one was how containers used
+	// to survive it. Tests run sequentially, so there is nothing a
+	// per-scenario name would protect against.
+	//
+	// Swept before the fixture is copied in as well as after the test: a run
+	// killed part way through leaves the testbed populated, and the next one
+	// must not inherit it. The order matters -- sweep reads the compose file
+	// to bring the project down, so deleting the directory first would strand
+	// the containers.
 	s.sweep()
 	t.Cleanup(s.sweep)
 
@@ -96,11 +99,85 @@ func Up(t *testing.T, name string) *Scenario {
 	s.pushDeclaredImages()
 	s.composeUp()
 
+	// The duvas are stopped again straight away. They come up with everything
+	// else -- a fixture declares them like any other service, and compose has
+	// no way to say "all but these" -- but a test is not finished building its
+	// world yet, and duva checking a half-built one is noise at best.
+	// Start() puts them back when the test is ready.
+	s.stop(s.duvaServices()...)
+
 	return s
 }
 
-// sweep removes everything this scenario created: the compose project, and
-// the directory it lived in.
+// Start runs duva, which checks once as it comes up.
+//
+// A test calls this when its world is complete: images pushed, services
+// pinned, everything committed. duva's first check is then the one the test
+// is about, rather than one that happened to run while the world was still
+// being built.
+func (s *Scenario) Start(services ...string) {
+	s.t.Helper()
+	if len(services) == 0 {
+		services = s.duvaServices()
+	}
+	s.composeUp(services...)
+	for _, service := range services {
+		s.waitFor("a check by "+service, 60*time.Second,
+			func() bool { return s.checksDone(service) > 0 },
+			func() string { return s.Logs(service) })
+	}
+}
+
+// duvaServices is every service in the fixture that runs duva.
+//
+// Asked of compose rather than assumed: a scenario decides what it is made
+// of, and one that runs two duvas in different timezones names them
+// accordingly.
+func (s *Scenario) duvaServices() []string {
+	s.t.Helper()
+	out, err := s.compose("config", "--services")
+	if err != nil {
+		s.t.Fatalf("reading the fixture's services: %v\n%s", err, out)
+	}
+	var duvas []string
+	for _, name := range strings.Fields(out) {
+		if strings.HasPrefix(name, "duva") {
+			duvas = append(duvas, name)
+		}
+	}
+	if len(duvas) == 0 {
+		s.t.Fatalf("the fixture for %s declares no duva service", s.Name)
+	}
+	return duvas
+}
+
+// hasService reports whether the fixture declares a service by this name.
+func (s *Scenario) hasService(name string) bool {
+	s.t.Helper()
+	out, err := s.compose("config", "--services")
+	if err != nil {
+		s.t.Fatalf("reading the fixture's services: %v\n%s", err, out)
+	}
+	for _, declared := range strings.Fields(out) {
+		if declared == name {
+			return true
+		}
+	}
+	return false
+}
+
+// stop halts services without removing them, so they keep their logs and can
+// be started again.
+func (s *Scenario) stop(services ...string) {
+	s.t.Helper()
+	if out, err := s.compose(append([]string{"stop", "-t", "2"}, services...)...); err != nil {
+		s.t.Fatalf("stopping %s: %v\n%s", strings.Join(services, ", "), err, out)
+	}
+}
+
+// sweep empties the testbed: the compose project it holds, then the directory
+// itself. It runs before a scenario as well as after, so a run killed outright
+// cannot influence the next one.
 func (s *Scenario) sweep() {
 	if _, err := os.Stat(filepath.Join(s.Dir, "docker-compose.yml")); err == nil {
 		cmd := exec.Command("docker", "compose", "down",
