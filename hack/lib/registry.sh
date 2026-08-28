@@ -101,7 +101,7 @@ push_versions() {
   for tag in "$@"; do
     local dir; dir="$(build_dir)"
     printf '%s\n' "$repo:$tag" > "$dir/marker"
-    docker build -q -t "${REGISTRY_HOST}/${repo}:${tag}" "$dir" >/dev/null
+    docker build -q --label "${CTX_LABEL}=${CTX_SUITE}" -t "${REGISTRY_HOST}/${repo}:${tag}" "$dir" >/dev/null
     docker push -q "${REGISTRY_HOST}/${repo}:${tag}" >/dev/null
     ctx_image "${REGISTRY_HOST}/${repo}:${tag}"
   done
@@ -118,7 +118,7 @@ push_moving() {
   local repo="$1" tag="$2" generation="$3"
   local dir; dir="$(build_dir)"
   printf '%s\n' "$repo:$tag:$generation" > "$dir/marker"
-  docker build -q -t "${REGISTRY_HOST}/${repo}:${tag}" "$dir" >/dev/null
+  docker build -q --label "${CTX_LABEL}=${CTX_SUITE}" -t "${REGISTRY_HOST}/${repo}:${tag}" "$dir" >/dev/null
   docker push -q "${REGISTRY_HOST}/${repo}:${tag}" >/dev/null
   ctx_image "${REGISTRY_HOST}/${repo}:${tag}"
 }
@@ -156,7 +156,7 @@ push_unrunnable() {
   local repo="$1" tag="$2" dir
   dir="$(build_dir)"
   printf '%s\n' "$repo:$tag:broken" > "$dir/marker"
-  docker build -q -t "${REGISTRY_HOST}/${repo}:${tag}" "$dir" >/dev/null
+  docker build -q --label "${CTX_LABEL}=${CTX_SUITE}" -t "${REGISTRY_HOST}/${repo}:${tag}" "$dir" >/dev/null
   docker push -q "${REGISTRY_HOST}/${repo}:${tag}" >/dev/null
   ctx_image "${REGISTRY_HOST}/${repo}:${tag}"
 }
@@ -189,7 +189,7 @@ GOEOF
   (cd "$dir" && CGO_ENABLED=0 GOOS=linux go build -ldflags "-s -w" -o sleeper main.go)
   printf 'FROM scratch\nCOPY sleeper /sleeper\nCMD ["/sleeper"]\n' > "$dir/Dockerfile"
 
-  docker build -q -t "${REGISTRY_HOST}/${repo}:${tag}" "$dir" >/dev/null
+  docker build -q --label "${CTX_LABEL}=${CTX_SUITE}" -t "${REGISTRY_HOST}/${repo}:${tag}" "$dir" >/dev/null
   docker push -q "${REGISTRY_HOST}/${repo}:${tag}" >/dev/null
   ctx_image "${REGISTRY_HOST}/${repo}:${tag}"
 }
@@ -200,7 +200,7 @@ GOEOF
 push_multiarch() {
   local repo="$1" tag="$2"
   printf '%s\n' "$repo:$tag:multiarch" > "$(build_dir)/marker"
-  docker buildx build --platform linux/amd64,linux/arm64 \
+  docker buildx build --label "${CTX_LABEL}=${CTX_SUITE}" --platform linux/amd64,linux/arm64 \
     -t "${REGISTRY_HOST}/${repo}:${tag}" --push "$(build_dir)" >/dev/null 2>&1
 }
 

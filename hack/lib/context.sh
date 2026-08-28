@@ -80,6 +80,16 @@ ctx_sweep() {
     docker rm -f $stale >/dev/null 2>&1 || true
   fi
 
+  # Images this suite built, including the ones left dangling when a tag was
+  # rebuilt and repointed. A dangling layer under a repo a later suite reuses
+  # is exactly the stale cache these tests must not read.
+  local images
+  images=$(docker images -q --filter "label=${CTX_LABEL}=${CTX_SUITE}" 2>/dev/null || true)
+  if [ -n "$images" ]; then
+    # shellcheck disable=SC2086
+    docker rmi -f $images >/dev/null 2>&1 || true
+  fi
+
   rm -rf "${CTX_ROOT}/testbed/${CTX_SUITE}"*
   return 0
 }
@@ -320,6 +330,6 @@ ctx_build_duva_image() {
     cover="--build-arg COVER=1"
   fi
   # shellcheck disable=SC2086
-  docker build -q $cover -f cmd/duva/Dockerfile -t "$tag" "$CTX_ROOT" >/dev/null
+  docker build -q --label "${CTX_LABEL}=${CTX_SUITE}" $cover -f cmd/duva/Dockerfile -t "$tag" "$CTX_ROOT" >/dev/null
   ctx_run_image "$tag"
 }
