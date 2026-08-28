@@ -23,6 +23,10 @@ import (
 // suiteImage is the duva image every scenario in this package refers to.
 const suiteImage = "duva:integration"
 
+// receiverImage stands in for ntfy, for the scenarios that assert on what
+// duva announced.
+const receiverImage = "duva-receiver:integration"
+
 // suiteCerts holds the certificate the registry serves and duva trusts,
 // generated once and copied into each scenario.
 var suiteCerts string
@@ -40,9 +44,17 @@ func TestMain(m *testing.M) {
 		fmt.Fprintf(os.Stderr, "integration: building %s: %v\n", suiteImage, err)
 		os.Exit(1)
 	}
+	if err := buildReceiver(root); err != nil {
+		fmt.Fprintf(os.Stderr, "integration: building %s: %v\n", receiverImage, err)
+		os.Exit(1)
+	}
 
-	dir, err := os.MkdirTemp("", "duva-certs")
-	if err != nil {
+	// Under the repo, not $TMPDIR: on macOS that is /var/folders, which
+	// Docker Desktop does not share -- so the mount would be empty and the
+	// registry would exit reporting a missing certificate.
+	dir := filepath.Join(root, "testbed-certs")
+	os.RemoveAll(dir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		fmt.Fprintf(os.Stderr, "integration: %v\n", err)
 		os.Exit(1)
 	}
@@ -53,12 +65,56 @@ func TestMain(m *testing.M) {
 	}
 	suiteCerts = dir
 
+	// One registry for the package, left up. Starting and stopping it per
+	// test was a race that failed roughly one test per run -- always
+	// whichever happened to be running when the container lost it, so the
+	// failure looked like it belonged to that test. Its contents are still
+	// cleared between tests; see emptyRegistry.
+	if err := startRegistry(root); err != nil {
+		fmt.Fprintf(os.Stderr, "integration: %v\n", err)
+		os.RemoveAll(suiteCerts)
+		os.Exit(1)
+	}
+
 	code := m.Run()
 
+	stopRegistry(root)
 	os.RemoveAll(suiteCerts)
 	// The image is left: it is the artifact under test, rebuilt next run, and
 	// removing it would throw away the layer cache that makes a rerun quick.
 	os.Exit(code)
+}
+
+// buildReceiver builds the notification receiver from its own source, rather
+// than a heredoc: it is ordinary Go that compiles and vets with everything
+// else.
+func buildReceiver(root string) error {
+	dir, err := os.MkdirTemp("", "duva-receiver")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(dir)
+
+	build := exec.Command("go", "build", "-ldflags", "-s -w", "-o",
+		filepath.Join(dir, "receiver"), "./test/integration/receiver")
+	build.Dir = root
+	build.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux")
+	if out, err := build.CombinedOutput(); err != nil {
+		return fmt.Errorf("%w\n%s", err, out)
+	}
+
+	// FROM scratch: nothing is pulled, so the suites work offline.
+	dockerfile := "FROM scratch\nCOPY receiver /receiver\nCMD [\"/receiver\"]\n"
+	if err := os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte(dockerfile), 0o644); err != nil {
+		return err
+	}
+
+	cmd := exec.Command("docker", "build", "-q",
+		"--label", label+"=integration", "-t", receiverImage, dir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("%w\n%s", err, out)
+	}
+	return nil
 }
 
 func findRoot() (string, error) {

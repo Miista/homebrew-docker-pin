@@ -46,6 +46,9 @@ type Scenario struct {
 	// Dir is the project, a git repository, under testbed/.
 	Dir  string
 	root string
+	// pushed is every image reference this scenario built, so teardown can
+	// remove exactly those.
+	pushed []string
 }
 
 // Up copies a fixture into the testbed and brings up everything it declares.
@@ -92,11 +95,14 @@ func Up(t *testing.T, name string) *Scenario {
 	s.copyCerts()
 	s.initRepo()
 
-	// The registry alone first: nothing else can start until it holds the
-	// image the fixture names, since a service whose image does not exist
-	// cannot be created.
-	s.composeUp("testregistry")
+	// The registry is shared and already up, but its contents are this
+	// scenario's alone: what another test pushed must not look like a newer
+	// tag to this one.
+	if err := emptyRegistry(); err != nil {
+		t.Fatal(err)
+	}
 	s.pushDeclaredImages()
+
 	s.composeUp()
 
 	// The duvas are stopped again straight away. They come up with everything
@@ -175,9 +181,9 @@ func (s *Scenario) stop(services ...string) {
 	}
 }
 
-// sweep empties the testbed: the compose project it holds, then the directory
-// itself. It runs before a scenario as well as after, so a run killed outright
-// cannot influence the next one.
+// sweep empties the testbed: the compose project it holds, the images a
+// scenario pushed, then the directory itself. It runs before a scenario as
+// well as after, so a run killed outright cannot influence the next one.
 func (s *Scenario) sweep() {
 	if _, err := os.Stat(filepath.Join(s.Dir, "docker-compose.yml")); err == nil {
 		cmd := exec.Command("docker", "compose", "down",
@@ -185,6 +191,21 @@ func (s *Scenario) sweep() {
 		cmd.Dir = s.Dir
 		_ = cmd.Run()
 	}
+
+	// The registry goes down with the project, taking what was pushed to it.
+	// The images themselves are on the HOST though: building one leaves it
+	// tagged here, and a later scenario building the same tag would find that
+	// tag already present -- so a moving tag would not move, and content from
+	// one test would leak into the next.
+	//
+	// Removed by reference rather than by label: the scenario built them, so
+	// it knows exactly which they are, and a filter cannot match something it
+	// should not have.
+	if len(s.pushed) > 0 {
+		_ = exec.Command("docker", append([]string{"rmi", "-f"}, s.pushed...)...).Run()
+		s.pushed = nil
+	}
+
 	_ = os.RemoveAll(s.Dir)
 }
 
@@ -234,7 +255,11 @@ func (s *Scenario) composeUp(services ...string) {
 	// test never has to poll for the registry to accept pushes.
 	args := append([]string{"up", "-d", "--wait", "--remove-orphans"}, services...)
 	if out, err := s.compose(args...); err != nil {
-		s.t.Fatalf("bringing up %s: %v\n%s", s.Name, err, out)
+		// A service that would not start explains itself in its own log,
+		// which compose's error does not include.
+		logs, _ := s.compose("logs", "--no-log-prefix")
+		s.t.Fatalf("bringing up %s: %v\n%s\nservice logs:\n%s",
+			s.Name, err, indent(out), indent(logs))
 	}
 }
 

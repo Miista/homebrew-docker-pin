@@ -119,7 +119,16 @@ func isRepoBusy(stderr string) bool {
 }
 
 func gitCmd(dir string, args ...string) *exec.Cmd {
-	cmd := exec.Command("git", args...)
+	// The compose directory is a mounted volume, so its files belong to
+	// whoever owns them on the host -- not to the user duva runs as. Git
+	// refuses to touch a repository owned by someone else ("detected dubious
+	// ownership"), which is a sensible default for a shell and wrong for a
+	// tool whose entire job is this one directory.
+	//
+	// Declared per invocation rather than in a config file, so duva's image
+	// carries no git configuration and the exception covers nothing else.
+	full := append([]string{"-c", "safe.directory=" + dir}, args...)
+	cmd := exec.Command("git", full...)
 	cmd.Dir = dir
 	return cmd
 }
