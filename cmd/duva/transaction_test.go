@@ -349,8 +349,8 @@ func TestApply_MovingTagPullsTheTagNotTheDigest(t *testing.T) {
 }
 
 func TestCommitMessage(t *testing.T) {
-	got := commitMessage("optiplex", "radarr", "1.2.0", "1.3.0")
-	want := "optiplex/radarr: 1.2.0 -> 1.3.0"
+	got := commitMessage("myhost", "radarr", "1.2.0", "1.3.0")
+	want := "myhost/radarr: 1.2.0 -> 1.3.0"
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}

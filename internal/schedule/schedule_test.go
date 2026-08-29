@@ -220,13 +220,13 @@ func TestUnitNames(t *testing.T) {
 
 func TestUnits(t *testing.T) {
 	cfg := &Config{Schedule: "0 6 * * 1"}
-	svc, tmr, err := Units(cfg, "/srv/caddy", "/usr/libexec/docker/cli-plugins/docker-pin", "soren")
+	svc, tmr, err := Units(cfg, "/srv/caddy", "/usr/libexec/docker/cli-plugins/docker-pin", "testuser")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
 		"Type=oneshot",
-		"User=soren",
+		"User=testuser",
 		"WorkingDirectory=/srv/caddy",
 		"ExecStart=/usr/libexec/docker/cli-plugins/docker-pin schedule run",
 	} {
