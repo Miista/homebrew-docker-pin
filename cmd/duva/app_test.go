@@ -783,3 +783,135 @@ func TestNotify_FailedUpdateNamesTheStep(t *testing.T) {
 		t.Errorf("the compose file was not put back:\n  was %s\n  now %s", before, got)
 	}
 }
+
+// Taking a soaking update early is the one place a human overrides a safety
+// control, so it must leave nothing behind: a row that survived being applied
+// would go on offering an update that has already happened.
+func TestStoreApply_TakesASoakingUpdateEarly(t *testing.T) {
+	f := fixture.New(t)
+	r := newRecorder()
+	svc := f.WithAuto(f.WithUpdate(f.PinnedService(), fixture.BumpMinor), "patch")
+	file := f.Project(svc)
+
+	a := newApp(t, file)
+	st, err := watch.LoadState(a.state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := svc.AvailableTags[len(svc.AvailableTags)-1]
+	st.Soaking[svc.Name] = watch.Soaking{
+		Service: svc.Name, File: file, Image: svc.Image,
+		CurrentTag: svc.Tag, Candidate: candidate,
+		Remaining: "4 days", Outcome: "moves to approval",
+	}
+	s := &store{state: st, act: func(fd watch.Finding) Result {
+		return apply(fd, r.docker, r.git, applyOptions{Host: "testhost"})
+	}}
+
+	msg, err := s.Apply(svc.Name)
+	if err != nil {
+		t.Fatalf("a soaking update should be applyable: %v", err)
+	}
+	if len(st.Soaking) != 0 {
+		t.Errorf("the soaking row should be gone, still holds %v", st.Soaking)
+	}
+	// The record should show the operator chose to override the wait, not that
+	// duva decided the release was old enough.
+	if !strings.Contains(msg, "soak") {
+		t.Errorf("the result should say the soak was overridden: %q", msg)
+	}
+	if !r.did("up") {
+		t.Errorf("the container should have been recreated: %v", r.calls)
+	}
+}
+
+// The other half of the soak: a candidate old enough is adopted, and nothing
+// is left recorded as waiting.
+//
+// Without this, a soak that withheld unconditionally -- a swapped comparison,
+// or a delay parsed as the wrong magnitude -- would pass every other test.
+// Services with a delay would quietly never update, which is exactly the kind
+// of failure that is discovered months later.
+func TestApp_AgedCandidateIsReleasedBySoak(t *testing.T) {
+	f := fixture.New(t)
+	svc := f.WithAuto(f.WithUpdate(f.PinnedService(), fixture.BumpPatch), "patch")
+	svc.Labels["duva.delay"] = "7d"
+	svc.Published = time.Now().Add(-30 * 24 * time.Hour)
+
+	findings, st := app(t, f.Project(svc), f.Registry(svc))
+
+	got := findingFor(t, findings, svc.Name)
+	if !got.Available() {
+		t.Fatalf("a 30-day-old tag should satisfy a 7d soak: %+v", got)
+	}
+	if !got.AutoApplies() {
+		t.Errorf("duva.auto: patch covers this patch, so it should apply: %s", got.Why)
+	}
+	// Released, so it is no longer something duva is waiting on.
+	if len(st.Soaking) != 0 {
+		t.Errorf("an adopted candidate should not still be soaking: %v", st.Soaking)
+	}
+}
+
+// A soak holds the candidate back but says so: the update is recorded as
+// waiting on time, not discarded. Duva reporting nothing would look like
+// nothing was found.
+func TestApp_WithheldCandidateIsRecordedAsSoaking(t *testing.T) {
+	f := fixture.New(t)
+	svc := f.WithAuto(f.WithUpdate(f.PinnedService(), fixture.BumpPatch), "patch")
+	svc.Labels["duva.delay"] = "7d"
+	svc.Published = time.Now().Add(-2 * time.Hour)
+
+	_, st := app(t, f.Project(svc), f.Registry(svc))
+
+	row, ok := st.Soaking[svc.Name]
+	if !ok {
+		t.Fatalf("a withheld candidate should be recorded, state holds %v", st.Soaking)
+	}
+	if row.Candidate != svc.AvailableTags[len(svc.AvailableTags)-1] {
+		t.Errorf("the soaking row names the wrong candidate: %+v", row)
+	}
+	if row.Remaining == "" || row.Outcome == "" {
+		t.Errorf("a soaking row should say how long and what happens then: %+v", row)
+	}
+}
+
+// A busy repository defers rather than fails, and the finding must stay
+// available so the next run tries again.
+//
+// The branch that decides this is discriminated by a note with no outcome. If
+// that misfired the update would fall through to "already at this digest" --
+// silently forgotten, dropped from the queue, and the service would stop
+// updating while reporting itself healthy.
+func TestApp_BusyRepositoryLeavesTheUpdateOutstanding(t *testing.T) {
+	f := fixture.New(t)
+	svc := f.WithAuto(f.WithUpdate(f.PinnedService(), fixture.BumpPatch), "patch")
+	file := f.Project(svc)
+	before := imageLine(t, file, svc.Name)
+
+	r := newRecorder()
+	r.git.IsClean = func(string) (bool, error) { return false, ErrRepoBusy }
+
+	a := newApp(t, file)
+	composeDir, stateFile = filepath.Dir(a.project), a.state
+	st, _ := watch.LoadState(a.state)
+	findings, err := checkWith(loadEnvConfig(), watch.Registry{
+		ListMatchingTags: f.Registry(svc).ListMatchingTags,
+		TagCreated:       f.Registry(svc).TagCreated,
+	}, st, time.Now(), func(fd watch.Finding) Result {
+		return apply(fd, r.docker, r.git, applyOptions{Host: "testhost"})
+	}, r.docker, r.git)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := findingFor(t, findings, svc.Name); !got.Available() {
+		t.Errorf("a deferred update should still be available next run: %+v", got)
+	}
+	if got := imageLine(t, a.project, svc.Name); got != before {
+		t.Errorf("nothing should have been written:\n  was %s\n  now %s", before, got)
+	}
+	if r.did("up") || r.did("commit") {
+		t.Errorf("nothing should have been attempted: %v", r.calls)
+	}
+}

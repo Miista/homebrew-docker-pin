@@ -95,6 +95,7 @@ func NewState() *State {
 		Baseline: Baseline{},
 		Notified: map[string]string{},
 		Pending:  map[string]Pending{},
+		Soaking:  map[string]Soaking{},
 	}
 }
 
@@ -122,6 +123,9 @@ func LoadState(path string) (*State, error) {
 	}
 	if st.Pending == nil {
 		st.Pending = map[string]Pending{}
+	}
+	if st.Soaking == nil {
+		st.Soaking = map[string]Soaking{}
 	}
 	return st, nil
 }
@@ -173,12 +177,14 @@ func (s *State) Save(path string) error {
 // to Pending or is applied, and one that vanished from the registry is not
 // coming.
 func (s *State) ReconcileSoaking(seen []Finding) {
-	if s.Soaking == nil {
-		s.Soaking = map[string]Soaking{}
-	}
-	// Only services this run actually looked at: one absent from `seen` was
-	// not checked, which is different from having stopped soaking.
+	// Only services this run actually looked at, and only those it could
+	// answer for: a service absent from `seen` was not checked, and one whose
+	// check errored says nothing about whether it is still soaking -- the
+	// registry was unreachable, not the release suddenly old enough.
 	for _, f := range seen {
+		if f.Status == StatusError {
+			continue
+		}
 		if f.Soaking == nil {
 			delete(s.Soaking, f.Service)
 			continue
