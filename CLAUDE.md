@@ -2,8 +2,9 @@
 
 Two Docker CLI plugins — `docker pin` and `docker unpin` — that
 pin/upgrade/unpin a Docker Compose service's image to a specific tag **and** SHA
-digest (`image:tag@sha256:...`), rewriting the `image:` line in place. The repo
-is also the Homebrew tap it's distributed through
+digest (`image:tag@sha256:...`), rewriting the `image:` line in place; and
+**duva**, a container that watches pinned services and applies the updates each
+one's policy allows. The repo is also the Homebrew tap it's distributed through
 (`github.com/Miista/homebrew-docker-pin`), so the module path is
 `github.com/Miista/homebrew-docker-pin`.
 
@@ -13,8 +14,18 @@ is also the Homebrew tap it's distributed through
 make build      # builds docker-pin, docker-unpin in repo root
 make install    # build + install -m 755 into ~/.docker/cli-plugins/
 make clean      # remove built binaries
-go test ./...   # unit tests (internal/compose, internal/registry)
+
+make test             # unit + integration
+make test-unit        # fast, no docker
+make test-integration # real registry, real daemon, all local
+make cover            # unit / integration / merged breakdown
 ```
+
+Integration tests are Go behind a build tag (`-tags integration`) in
+`test/integration`, driving real containers against a local registry. Nothing
+upstream is contacted, so they work offline. `go run ./test/sandbox
+<suite>/<scenario>` stands one of their scenarios up by hand and leaves it
+running.
 
 Each binary is built from its own `cmd/<name>` package. `version` is injected via
 `-ldflags "-X main.version=..."` (defaults to `dev`).
@@ -40,41 +51,76 @@ it prints the metadata JSON Docker expects; otherwise it strips a leading
   re-serialization) so all surrounding formatting and comments are preserved.
 
 ### `internal/docker`
-Shells out to the `docker` CLI. `Pull` streams `docker pull`; `GetDigest` runs
-`docker image inspect --format '{{index .RepoDigests 0}}'` and extracts the
-`sha256:...` repo digest of a locally-present image.
+Shells out to the `docker` CLI, for the plugins: `Pull` streams `docker pull`;
+`GetDigest` extracts the `sha256:...` repo digest of a locally-present image;
+`RunningDigest` finds what a service's container is actually running. duva does
+not use this — it runs in a container and talks to the daemon's API over the
+mounted socket, so its image needs no CLI.
 
 ### `internal/registry`
-Tag listing/selection for `upgrade` and `schedule`, plus a resolver that maps a
-digest back to a *version* tag (e.g. `1.2.3`). **The resolver is no longer wired
-into pinning** — see "The tag is the tag to follow" — so `ResolveVersionTag` and
-friends currently have no production caller. They are kept for a planned
-readability feature (annotating a pinned line with the concrete version as a
-trailing comment), not because anything depends on them today.
-- `ResolveVersionTag(baseImage, digest)` dispatches by registry: `ghcr.io/` →
-  GHCR; no dot in first path segment or `docker.io/` prefix → Docker Hub;
-  anything else → generic OCI Distribution (`oci.go`), discovering bearer auth
-  from the `WWW-Authenticate` challenge and a `/token` realm request.
-- Each resolver lists tags, keeps only version-like tags (`versionRe`:
-  digits-and-dots with optional suffixes), sorts newest-first by
-  `CompareVersions` (numeric dotted-core comparison, not string specificity —
-  a registry can have hundreds of version tags, e.g. linuxserver images, and
-  only the top N are checked, so a naive specificity sort can starve out the
-  real match), and matches each tag's manifest digest against the local
-  digest (OCI/GHCR cap manifest checks at 20).
-- `Result` carries the matched `Tag`, `VersionTagsSeen`, and `ChecksFailed`
-  (manifest checks that errored rather than genuinely not matching — e.g.
-  registry throttling — so a "no match" caused by failed checks is
-  distinguishable from a confident one).
-- `ResolveOrWarn(baseImage, pullTag, digest, service)` is the entry point
-  **plain `docker pin` (not `upgrade`)** calls. It prints progress and, on
-  failure, distinguishes three cases: resolution error, registry publishes no
-  version tags, or version tags exist but **none match the local digest**
-  (orphaned/stale image — warns that a newer build replaced the tag and
-  suggests `docker pin upgrade <service>`). In every failure case it falls
-  back to pinning with `pullTag` unchanged. `ResolveTag` is the same logic
-  without printing, returning the warning text instead, for callers that need
-  to defer/buffer it.
+Tag listing and selection for `upgrade`, `schedule` and duva. Talks to
+registries directly over HTTPS — GHCR, Docker Hub, or any OCI Distribution
+registry — discovering bearer auth from the `WWW-Authenticate` challenge.
+- `ListMatchingTags` / `MatchingCandidates` keep only version-like tags and
+  sort them newest-first by `CompareVersions` (numeric dotted cores, so a
+  suffixed build ranks below the bare release).
+- `TagCreated` is a tag's publish time, for the `duva.delay` soak: the Docker
+  Hub tag API's `tag_last_pushed`, or manifest→config-blob `created` elsewhere.
+- `Classify(from, to)` sizes a change as patch/minor/major, or unknown when the
+  two tags cannot be compared — which duva treats as major, since a change it
+  cannot measure is not one to make unattended.
+
+Until 2026-08 this package also resolved a digest back to a version tag, so a
+pin could be labelled with the version it matched. That is gone: see "The tag
+is the tag to follow".
+
+### `internal/pin`
+The shared write engine. `Compute` works out what an image line should become
+and `Apply` writes it; `SelectCandidate` picks the upgrade target for a
+constrained service, subject to the `duva.delay` soak, and reports what it held
+back as too fresh. Both `docker pin` and duva go through it, so they cannot
+disagree about what a pinned line looks like.
+
+### `internal/watch`
+duva's detection and policy. `Check` turns a compose file into findings;
+`Decide` says whether `duva.auto` allows duva to apply one itself; `State`
+records what is queued for approval, what `duva.delay` is holding back, and
+what has already been announced, so nothing is reported twice.
+
+### `internal/ui`
+duva's approval queue: one page listing what needs a human and what is soaking,
+with a button that applies through the same path an unattended run uses.
+
+### duva (`cmd/duva`)
+A container, not a CLI plugin. It watches the compose project mounted at
+`/compose` and records state in `/data/duva.json` — both fixed, because duva
+runs in a container where they are the contract.
+
+**It must be a service in the stack it watches.** duva reads its own
+container's compose labels to learn which project it is in; outside one there
+are no labels and it refuses to act rather than guess. With a root compose file
+that `include:`s the rest, one duva covers everything.
+
+Applying is a transaction in `apply.go`, with `transaction.go` deciding what a
+failure means: pull → write the pin → recreate the container → commit → push.
+There is no rollback except one case — if the container refuses the new image,
+the file is put back, because leaving a claim there would be a lie. Everything
+after the container is record-keeping and cannot make the update untrue.
+
+Recreating goes through the docker API (`recreate.go`), not `docker compose
+up`. duva sees the compose file at its own mount point while the daemon sees
+the stack at the host's path, and one `--project-directory` cannot satisfy both
+kinds of relative path: a bind must resolve to a host path, an `include:` to a
+path inside duva. A running container's configuration is already resolved, so
+swapping its image needs no path interpreted at all. Anonymous volumes are
+carried across explicitly — they exist only in the container's `Mounts`, and a
+replacement built from `Config` alone would come up healthy and empty.
+
+Per-service policy lives as labels: `duva.include` / `duva.exclude` constrain
+which tags qualify, `duva.delay` soaks a release before adopting it, and
+`duva.auto` (none/patch/minor/major, default none) says what duva may apply
+unattended. An unknown label is an error, not something ignored.
+
 
 ## Command semantics
 
@@ -229,5 +275,11 @@ This means:
 - New subcommand on `docker pin` = new `case` in `cmd/docker-pin/main.go`'s `main()` switch.
 - New top-level plugin = new `cmd/docker-<name>` package; register in `Makefile` `BINARIES`,
   `.goreleaser.yaml` `builds`/`archives`, and the formula `install` line.
-- Only the standard library plus `gopkg.in/yaml.v3`; the `docker` CLI must be on
-  PATH at runtime.
+- Only the standard library plus `gopkg.in/yaml.v3`. The plugins need the
+  `docker` CLI on PATH at runtime; duva does not — it talks to the daemon's API
+  over the socket, so its image carries only git, for the commit.
+- Base images are pinned by digest, and the released image must be built on the
+  same base the integration suites build. Both are held by tests in
+  `cmd/duva/dockerfile_test.go`: the released image was distroless-static long
+  after duva needed git at runtime, so every test passed against an image
+  nobody shipped.
