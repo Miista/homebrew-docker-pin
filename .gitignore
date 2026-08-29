@@ -10,3 +10,10 @@ coverage.out
 
 # Integration suites build their world here; see hack/lib/context.sh.
 /testbed/
+
+# A leftover from an earlier layout; certificates are generated beside the
+# registry compose file now and removed with it.
+/testbed-certs/
+
+# Editor and sed leftovers.
+*.bak
