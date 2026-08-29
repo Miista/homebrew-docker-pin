@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/rs/zerolog"
 	"time"
 
 	"github.com/Miista/homebrew-docker-pin/internal/fixture"
@@ -37,6 +39,10 @@ type runner struct {
 	state   string
 }
 
+// testLog discards: these tests assert on what duva did, not on what it
+// said. The lines themselves are covered by TestReport.
+func testLog() zerolog.Logger { return zerolog.New(io.Discard) }
+
 func newApp(t *testing.T, project string) *runner {
 	t.Helper()
 	origCompose, origState := composeDir, stateFile
@@ -56,7 +62,7 @@ func (r *runner) run(t *testing.T, reg fixture.RegistryAnswers) ([]watch.Finding
 	if err != nil {
 		t.Fatal(err)
 	}
-	findings, err := check(envConfig{}, watch.Registry{
+	findings, err := check(envConfig{}, testLog(), watch.Registry{
 		ListMatchingTags: reg.ListMatchingTags,
 		RemoteDigest:     reg.RemoteDigest,
 		TagCreated:       reg.TagCreated,
@@ -473,7 +479,7 @@ func appApply(t *testing.T, project string, reg fixture.RegistryAnswers, r *reco
 	act := func(f watch.Finding) Result {
 		return apply(f, r.docker, r.git, applyOptions{Host: "testhost"})
 	}
-	findings, err := checkWith(envConfig{}, watch.Registry{
+	findings, err := checkWith(envConfig{}, testLog(), watch.Registry{
 		ListMatchingTags: reg.ListMatchingTags,
 		RemoteDigest:     reg.RemoteDigest,
 		TagCreated:       reg.TagCreated,
@@ -559,7 +565,7 @@ func TestApp_BaselineAdvancesOnlyWhenApplied(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := check(envConfig{}, watch.Registry{
+	if _, err := check(envConfig{}, testLog(), watch.Registry{
 		RemoteDigest: f.Registry(svc).RemoteDigest,
 	}, st, time.Now()); err != nil {
 		t.Fatal(err)
@@ -572,7 +578,7 @@ func TestApp_BaselineAdvancesOnlyWhenApplied(t *testing.T) {
 	r := newRecorder()
 	r.docker.ComposeUp = func(string, string) error { return errBoundary }
 
-	if _, err := checkWith(envConfig{}, watch.Registry{
+	if _, err := checkWith(envConfig{}, testLog(), watch.Registry{
 		RemoteDigest: f.Registry(moved).RemoteDigest,
 	}, st, time.Now(), func(fd watch.Finding) Result {
 		return apply(fd, r.docker, r.git, applyOptions{Host: "h"})
@@ -722,7 +728,7 @@ func TestNotify_AppliedUpdate(t *testing.T) {
 	a := newApp(t, f.Project(svc))
 	composeDir, stateFile = filepath.Dir(a.project), a.state
 	st, _ := watch.LoadState(a.state)
-	if _, err := checkWith(cfg, watch.Registry{
+	if _, err := checkWith(cfg, testLog(), watch.Registry{
 		ListMatchingTags: f.Registry(svc).ListMatchingTags,
 		TagCreated:       f.Registry(svc).TagCreated,
 	}, st, time.Now(), func(fd watch.Finding) Result {
@@ -757,7 +763,7 @@ func TestNotify_FailedUpdateNamesTheStep(t *testing.T) {
 	composeDir, stateFile = filepath.Dir(a.project), a.state
 	before := imageLine(t, a.project, svc.Name)
 	st, _ := watch.LoadState(a.state)
-	if _, err := checkWith(cfg, watch.Registry{
+	if _, err := checkWith(cfg, testLog(), watch.Registry{
 		ListMatchingTags: f.Registry(svc).ListMatchingTags,
 		TagCreated:       f.Registry(svc).TagCreated,
 	}, st, time.Now(), func(fd watch.Finding) Result {
@@ -895,7 +901,7 @@ func TestApp_BusyRepositoryLeavesTheUpdateOutstanding(t *testing.T) {
 	a := newApp(t, file)
 	composeDir, stateFile = filepath.Dir(a.project), a.state
 	st, _ := watch.LoadState(a.state)
-	findings, err := checkWith(loadEnvConfig(), watch.Registry{
+	findings, err := checkWith(loadEnvConfig(), testLog(), watch.Registry{
 		ListMatchingTags: f.Registry(svc).ListMatchingTags,
 		TagCreated:       f.Registry(svc).TagCreated,
 	}, st, time.Now(), func(fd watch.Finding) Result {

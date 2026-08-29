@@ -27,7 +27,7 @@ package main
 import (
 	"context"
 	"fmt"
-	"io"
+	"github.com/rs/zerolog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -89,16 +89,18 @@ func main() {
 		usage()
 		os.Exit(1)
 	}
+	log := newLogger(os.Getenv("DUVA_LOG_LEVEL"))
+
 	switch os.Args[1] {
 	case "version", "--version", "-v":
 		fmt.Println("duva", version)
 	case "run":
-		if err := runOnce(realRegistry, os.Stdout); err != nil {
+		if err := runOnce(realRegistry, log); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
 	case "serve":
-		if err := serve(realRegistry, os.Stdout); err != nil {
+		if err := serve(realRegistry, log); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
@@ -159,12 +161,12 @@ func boolEnv(key string, fallback bool) bool {
 // already decided per service by duva.auto -- which defaults to none, so a
 // service is only ever updated because someone said so. A global switch on
 // top would be a second brake on the same pedal.
-func actor(cfg envConfig, out io.Writer) func(watch.Finding) Result {
+func actor(cfg envConfig, log zerolog.Logger) func(watch.Finding) Result {
 	opts := applyOptions{
 		Host: hostLabel(cfg),
 		Push: cfg.Push,
 		Log: func(format string, args ...any) {
-			fmt.Fprintf(out, format+"\n", args...)
+			log.Info().Msgf(format, args...)
 		},
 	}
 	return func(f watch.Finding) Result {
@@ -190,17 +192,16 @@ func hostLabel(cfg envConfig) string {
 // are reconciled, and anything newly available is notified about. It returns
 // the findings so callers can report them.
 //
-// Everything needing approval is pending for now. Deciding what may be applied
-// unattended arrives with the policy work; until then duva reports and does
-// not act, which is what it has always done.
-func check(cfg envConfig, reg watch.Registry, st *watch.State, now time.Time) ([]watch.Finding, error) {
-	return checkWith(cfg, reg, st, now, nil, Docker{}, Git{})
+// This one only looks: act is nil, so nothing is applied whatever policy
+// allows. For callers that want the findings without the consequences.
+func check(cfg envConfig, log zerolog.Logger, reg watch.Registry, st *watch.State, now time.Time) ([]watch.Finding, error) {
+	return checkWith(cfg, log, reg, st, now, nil, Docker{}, Git{})
 }
 
 // checkWith is check with the acting half injectable, so tests can drive it
 // without a docker daemon. act is nil when duva only reports.
-func checkWith(cfg envConfig, reg watch.Registry, st *watch.State, now time.Time,
-	act func(watch.Finding) Result, d Docker, g Git) ([]watch.Finding, error) {
+func checkWith(cfg envConfig, log zerolog.Logger, reg watch.Registry, st *watch.State,
+	now time.Time, act func(watch.Finding) Result, d Docker, g Git) ([]watch.Finding, error) {
 	rootFile, err := compose.FindFile(composeDir)
 	if err != nil {
 		return nil, err
@@ -220,7 +221,7 @@ func checkWith(cfg envConfig, reg watch.Registry, st *watch.State, now time.Time
 				continue
 			}
 			res := act(f)
-			applyResult(cfg, &findings[i], res, st)
+			applyResult(cfg, log, &findings[i], res, st)
 		}
 	}
 
@@ -245,7 +246,7 @@ func checkWith(cfg envConfig, reg watch.Registry, st *watch.State, now time.Time
 		if !f.Available() || st.Notified[f.Service] == f.Candidate {
 			continue
 		}
-		notifyAvailable(cfg, f)
+		notifyAvailable(cfg, log, f)
 		st.Notified[f.Service] = f.Candidate
 	}
 	// Forget notifications for services with nothing outstanding, so the
@@ -260,18 +261,18 @@ func checkWith(cfg envConfig, reg watch.Registry, st *watch.State, now time.Time
 }
 
 // runOnce performs a single check and prints what it found.
-func runOnce(reg watch.Registry, out io.Writer) error {
+func runOnce(reg watch.Registry, log zerolog.Logger) error {
 	cfg := loadEnvConfig()
 	st, err := watch.LoadState(stateFile)
 	if err != nil {
 		return fmt.Errorf("loading state: %w", err)
 	}
 
-	findings, err := checkWith(cfg, reg, st, time.Now(), actor(cfg, out), realDocker, realGit)
+	findings, err := checkWith(cfg, log, reg, st, time.Now(), actor(cfg, log), realDocker, realGit)
 	if err != nil {
 		return err
 	}
-	report(out, findings)
+	report(log, findings)
 
 	if err := st.Save(stateFile); err != nil {
 		return fmt.Errorf("saving state: %w", err)
@@ -286,30 +287,31 @@ func runOnce(reg watch.Registry, out io.Writer) error {
 // not pinned, skipping" said none of those: it assumed the reader knew that
 // pinned means a digest in the image line, that duva watches only pinned
 // services, and that skipping meant this one would be left alone.
-func report(out io.Writer, findings []watch.Finding) {
+func report(log zerolog.Logger, findings []watch.Finding) {
 	for _, f := range findings {
 		switch {
 		case f.Status == watch.StatusAvailable:
 			// Still available after acting means policy did not allow duva to
-			// apply it -- anything it could apply, it already has.
-			fmt.Fprintf(out, "%s: %s is available, waiting for you to approve it (%s)\n",
+			// apply it -- anything it could apply, it already has. Warn
+			// rather than Info: it is waiting on a person.
+			log.Warn().Msgf("%s: %s is available and waiting for you to approve it (%s)",
 				f.Service, f.Candidate, f.Why)
 
 		case f.Status == watch.StatusSkipped:
-			fmt.Fprintf(out, "%s: not watching it — %s\n", f.Service, skipReason(f))
+			log.Debug().Msgf("%s: not watching it — %s", f.Service, skipReason(f))
 
 		case f.Status == watch.StatusError:
-			fmt.Fprintf(out, "%s: could not check it — %s\n", f.Service, f.Reason)
+			log.Error().Msgf("%s: could not check it — %s", f.Service, f.Reason)
 
 		case f.Reason == "applied":
-			fmt.Fprintf(out, "%s: updated to %s (%s)\n", f.Service, f.Candidate, f.Why)
+			log.Info().Msgf("%s: updated to %s (%s)", f.Service, f.Candidate, f.Why)
 
 		case f.Soaking != nil:
-			fmt.Fprintf(out, "%s: %s is available but too new; waiting %s longer\n",
+			log.Info().Msgf("%s: %s is available but too new; waiting %s longer",
 				f.Service, f.Soaking.Tag, (f.Soaking.Delay - f.Soaking.Age).Round(time.Hour))
 
 		default:
-			fmt.Fprintf(out, "%s: nothing newer\n", f.Service)
+			log.Debug().Msgf("%s: nothing newer", f.Service)
 		}
 	}
 }
@@ -330,7 +332,7 @@ func skipReason(f watch.Finding) string {
 
 // notifyAvailable reports one newly-seen update via ntfy. Notification
 // failures only warn — a lost notification must not fail the check.
-func notifyAvailable(cfg envConfig, f watch.Finding) {
+func notifyAvailable(cfg envConfig, log zerolog.Logger, f watch.Finding) {
 	if cfg.NtfyURL == "" || cfg.NtfyTopic == "" {
 		return
 	}
@@ -347,7 +349,7 @@ func notifyAvailable(cfg envConfig, f watch.Finding) {
 			f.Service, f.Image, f.CurrentTag, f.Why)
 	}
 	if err := n.Send(title, body, notify.PriorityDefault); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: notification failed: %v\n", err)
+		log.Warn().Msgf("could not send the notification, but the check itself was fine: %v", err)
 	}
 }
 
@@ -359,19 +361,16 @@ type store struct {
 	lastCheck time.Time
 	// act applies an update, or is nil when duva only reports.
 	act func(watch.Finding) Result
-	// out is where an update triggered from the page is recorded. Someone
+	// log is where an update triggered from the page is recorded. Someone
 	// pressing a button is an event worth a line: without one, the only
 	// account of what happened is a redirect the operator may not have read,
 	// and the logs show nothing between one scheduled check and the next.
-	out io.Writer
+	log zerolog.Logger
 }
 
-// logf records what duva did, when there is somewhere to record it.
+// logf records what duva did when asked from the page.
 func (s *store) logf(format string, args ...any) {
-	if s.out == nil {
-		return
-	}
-	fmt.Fprintf(s.out, format+"\n", args...)
+	s.log.Info().Msgf(format, args...)
 }
 
 func (s *store) Pending() []watch.Pending {
@@ -523,7 +522,7 @@ func (s *store) LastCheckExact() string {
 // serve loops forever, running the same check as `run` on cfg.Schedule (a
 // 5-field cron expression), until SIGTERM/SIGINT, serving the approval queue
 // alongside it.
-func serve(reg watch.Registry, out io.Writer) error {
+func serve(reg watch.Registry, log zerolog.Logger) error {
 	cfg := loadEnvConfig()
 	if _, err := croncal.Next(cfg.Schedule, time.Now()); err != nil {
 		return fmt.Errorf("schedule %q: %w", cfg.Schedule, err)
@@ -533,7 +532,7 @@ func serve(reg watch.Registry, out io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("loading state: %w", err)
 	}
-	s := &store{state: st, act: actor(cfg, out), out: out}
+	s := &store{state: st, act: actor(cfg, log), log: log}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -550,9 +549,9 @@ func serve(reg watch.Registry, out io.Writer) error {
 			ReadHeaderTimeout: 10 * time.Second,
 		}
 		go func() {
-			fmt.Fprintf(out, "duva: approval queue on %s\n", uiAddr)
+			log.Info().Msgf("the approval queue is on %s", uiAddr)
 			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				fmt.Fprintf(os.Stderr, "duva: ui: %v\n", err)
+				log.Error().Msgf("the approval queue stopped serving: %v", err)
 			}
 		}()
 		defer func() {
@@ -566,7 +565,7 @@ func serve(reg watch.Registry, out io.Writer) error {
 	// schedule would otherwise leave duva idle for up to a day, showing a
 	// queue from some earlier run under a footer saying it had not looked yet.
 	// It is also what makes restarting duva a way to ask for a check now.
-	checkOnce(cfg, reg, s, out)
+	checkOnce(cfg, reg, s, log)
 
 	for {
 		next, err := croncal.Next(cfg.Schedule, time.Now())
@@ -577,19 +576,19 @@ func serve(reg watch.Registry, out io.Writer) error {
 		// Local, with the zone named: an operator reading this wants to know
 		// when it fires in their own time. TZ selects the zone, which needs
 		// the embedded database -- see the tzdata import.
-		fmt.Fprintf(out, "duva: next check at %s (in %s)\n",
+		log.Info().Msgf("next check at %s, in %s",
 			next.Local().Format("2006-01-02 15:04:05 MST"), wait.Round(time.Second))
 
 		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			fmt.Fprintln(out, "duva: shutting down")
+			log.Info().Msg("shutting down")
 			return nil
 		case <-timer.C:
 		}
 
-		checkOnce(cfg, reg, s, out)
+		checkOnce(cfg, reg, s, log)
 	}
 }
 
@@ -597,22 +596,22 @@ func serve(reg watch.Registry, out io.Writer) error {
 // every scheduled one. They were separate blocks that drifted: the startup
 // one recorded its findings but never printed them, so duva looked like it
 // had found nothing.
-func checkOnce(cfg envConfig, reg watch.Registry, s *store, out io.Writer) {
+func checkOnce(cfg envConfig, reg watch.Registry, s *store, log zerolog.Logger) {
 	now := time.Now()
 	s.mu.Lock()
-	findings, err := checkWith(cfg, reg, s.state, now, s.act, realDocker, realGit)
+	findings, err := checkWith(cfg, log, reg, s.state, now, s.act, realDocker, realGit)
 	if err == nil {
 		s.lastCheck = now
 	}
 	s.mu.Unlock()
 
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "duva: check failed: %v\n", err)
+		log.Error().Msgf("the check failed, nothing was changed: %v", err)
 		return
 	}
-	report(out, findings)
+	report(log, findings)
 	if err := s.saveState(); err != nil {
-		fmt.Fprintf(os.Stderr, "duva: saving state: %v\n", err)
+		log.Error().Msgf("could not save what was found, so it may be reported again: %v", err)
 	}
 }
 
@@ -629,7 +628,7 @@ func (s *store) saveState() error {
 // The baseline is deliberately not advanced on detection alone -- only when
 // the update is applied -- so a move that could not be applied is still
 // waiting on the next run rather than being silently forgotten.
-func applyResult(cfg envConfig, f *watch.Finding, res Result, st *watch.State) {
+func applyResult(cfg envConfig, log zerolog.Logger, f *watch.Finding, res Result, st *watch.State) {
 	switch {
 	case res.Applied:
 		if f.Kind == watch.KindDigest {
@@ -638,7 +637,7 @@ func applyResult(cfg envConfig, f *watch.Finding, res Result, st *watch.State) {
 		f.Status = watch.StatusUpToDate
 		f.Reason = "applied"
 		delete(st.Notified, f.Service)
-		notifyApplied(cfg, *f, res)
+		notifyApplied(cfg, log, *f, res)
 
 	case res.Note != "" && res.Outcome.NewRaw == "":
 		// Nothing was attempted -- the repository was busy. The finding stays
@@ -649,7 +648,7 @@ func applyResult(cfg envConfig, f *watch.Finding, res Result, st *watch.State) {
 	case res.Err != nil:
 		f.Status = watch.StatusError
 		f.Reason = fmt.Sprintf("%s failed: %v", res.FailedAt, res.Err)
-		notifyFailed(cfg, *f, res)
+		notifyFailed(cfg, log, *f, res)
 
 	default:
 		// Nothing to do: the registry offered what the file already pins.
@@ -660,7 +659,7 @@ func applyResult(cfg envConfig, f *watch.Finding, res Result, st *watch.State) {
 
 // notifyApplied announces an update duva made itself. Notification failures
 // only warn: a lost message must not make a successful update look failed.
-func notifyApplied(cfg envConfig, f watch.Finding, res Result) {
+func notifyApplied(cfg envConfig, log zerolog.Logger, f watch.Finding, res Result) {
 	if cfg.NtfyURL == "" || cfg.NtfyTopic == "" {
 		return
 	}
@@ -675,13 +674,13 @@ func notifyApplied(cfg envConfig, f watch.Finding, res Result) {
 		body += fmt.Sprintf("\nnote: %s failed: %v", res.FailedAt, res.Err)
 	}
 	if err := n.Send(title, body, notify.PriorityDefault); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: notification failed: %v\n", err)
+		log.Warn().Msgf("could not send the notification, but the check itself was fine: %v", err)
 	}
 }
 
 // notifyFailed announces an update that did not reach the container, at high
 // priority: something needs a human.
-func notifyFailed(cfg envConfig, f watch.Finding, res Result) {
+func notifyFailed(cfg envConfig, log zerolog.Logger, f watch.Finding, res Result) {
 	if cfg.NtfyURL == "" || cfg.NtfyTopic == "" {
 		return
 	}
@@ -692,6 +691,6 @@ func notifyFailed(cfg envConfig, f watch.Finding, res Result) {
 		body += "\nthe compose file was put back; the container is unchanged"
 	}
 	if err := n.Send(title, body, notify.PriorityHigh); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: notification failed: %v\n", err)
+		log.Warn().Msgf("could not send the notification, but the check itself was fine: %v", err)
 	}
 }

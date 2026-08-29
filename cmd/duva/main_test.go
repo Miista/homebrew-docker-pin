@@ -2,11 +2,14 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/rs/zerolog"
 	"time"
 
 	"github.com/Miista/homebrew-docker-pin/internal/registry"
@@ -77,7 +80,7 @@ func only(t *testing.T, findings []watch.Finding) watch.Finding {
 
 func check1(t *testing.T, reg watch.Registry, st *watch.State) watch.Finding {
 	t.Helper()
-	findings, err := check(envConfig{}, reg, st, time.Now())
+	findings, err := check(envConfig{}, testLog(), reg, st, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,12 +199,12 @@ func TestPending_FirstSeenIsStableAcrossRuns(t *testing.T) {
 	st := watch.NewState()
 	reg := tagReg([]string{"1.2.0", "1.3.0"})
 
-	if _, err := check(envConfig{}, reg, st, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)); err != nil {
+	if _, err := check(envConfig{}, testLog(), reg, st, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)); err != nil {
 		t.Fatal(err)
 	}
 	first := st.Pending["app"].FirstSeen
 
-	if _, err := check(envConfig{}, reg, st, time.Date(2026, 2, 2, 0, 0, 0, 0, time.UTC)); err != nil {
+	if _, err := check(envConfig{}, testLog(), reg, st, time.Date(2026, 2, 2, 0, 0, 0, 0, time.UTC)); err != nil {
 		t.Fatal(err)
 	}
 	if got := st.Pending["app"].FirstSeen; got != first {
@@ -213,13 +216,13 @@ func TestPending_NewCandidateResetsFirstSeen(t *testing.T) {
 	setupFixture(t, pinnedConstrainedService)
 	st := watch.NewState()
 
-	if _, err := check(envConfig{}, tagReg([]string{"1.2.0", "1.3.0"}), st,
+	if _, err := check(envConfig{}, testLog(), tagReg([]string{"1.2.0", "1.3.0"}), st,
 		time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)); err != nil {
 		t.Fatal(err)
 	}
 	first := st.Pending["app"].FirstSeen
 
-	if _, err := check(envConfig{}, tagReg([]string{"1.2.0", "1.3.0", "1.4.0"}), st,
+	if _, err := check(envConfig{}, testLog(), tagReg([]string{"1.2.0", "1.3.0", "1.4.0"}), st,
 		time.Date(2026, 2, 2, 0, 0, 0, 0, time.UTC)); err != nil {
 		t.Fatal(err)
 	}
@@ -302,7 +305,10 @@ func TestLoadState_MissingFileIsEmpty(t *testing.T) {
 // those is free to change.
 func TestReport(t *testing.T) {
 	var buf bytes.Buffer
-	report(&buf, []watch.Finding{
+	// Debug level, because a check that found nothing worth acting on still
+	// says so -- those lines are the ones a reader turns the level up for.
+	log := zerolog.New(&buf).Level(zerolog.DebugLevel)
+	report(log, []watch.Finding{
 		{Service: "available", Status: watch.StatusAvailable, Candidate: "1.3.0"},
 		{Service: "unpinned", Status: watch.StatusSkipped, Reason: "not pinned",
 			Image: "example.com/app:1.2.0"},
@@ -311,9 +317,16 @@ func TestReport(t *testing.T) {
 		{Service: "updated", Status: watch.StatusUpToDate, Reason: "applied", Candidate: "2.0.0"},
 	})
 
+	// One entry per service, keyed by the service its message names.
 	lines := map[string]string{}
-	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
-		name, rest, _ := strings.Cut(line, ":")
+	for _, raw := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		var entry struct {
+			Message string `json:"message"`
+		}
+		if err := json.Unmarshal([]byte(raw), &entry); err != nil {
+			t.Fatalf("log line is not readable: %v\n%s", err, raw)
+		}
+		name, rest, _ := strings.Cut(entry.Message, ":")
 		lines[name] = rest
 	}
 	if len(lines) != 5 {
@@ -396,7 +409,7 @@ func TestPolicy_QueueHoldsOnlyWhatNeedsAHuman(t *testing.T) {
 	st := watch.NewState()
 
 	// Every service is offered the same patch bump: 1.0.0 -> 1.0.1.
-	findings, err := check(envConfig{}, tagReg([]string{"1.0.0", "1.0.1"}), st, time.Now())
+	findings, err := check(envConfig{}, testLog(), tagReg([]string{"1.0.0", "1.0.1"}), st, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -435,7 +448,7 @@ func TestPolicy_ExceedingTheThresholdQueues(t *testing.T) {
 	st := watch.NewState()
 
 	// 1.0.0 -> 2.0.0 is major: beyond patch, beyond none, within major.
-	if _, err := check(envConfig{}, tagReg([]string{"1.0.0", "2.0.0"}), st, time.Now()); err != nil {
+	if _, err := check(envConfig{}, testLog(), tagReg([]string{"1.0.0", "2.0.0"}), st, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{"autopatch", "strict"} {
@@ -453,7 +466,7 @@ func TestPolicy_ExceedingTheThresholdQueues(t *testing.T) {
 func TestPolicy_PendingCarriesWhy(t *testing.T) {
 	setupFixture(t, mixedPolicyProject)
 	st := watch.NewState()
-	if _, err := check(envConfig{}, tagReg([]string{"1.0.0", "1.0.1"}), st, time.Now()); err != nil {
+	if _, err := check(envConfig{}, testLog(), tagReg([]string{"1.0.0", "1.0.1"}), st, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	if why := st.Pending["strict"].Why; why == "" {
@@ -476,7 +489,7 @@ func TestPolicy_BadLabelDoesNotStopOtherServices(t *testing.T) {
       duva.auto: none
 `)
 	st := watch.NewState()
-	findings, err := check(envConfig{}, tagReg([]string{"1.0.0", "1.0.1"}), st, time.Now())
+	findings, err := check(envConfig{}, testLog(), tagReg([]string{"1.0.0", "1.0.1"}), st, time.Now())
 	if err != nil {
 		t.Fatalf("one bad service must not fail the run: %v", err)
 	}
