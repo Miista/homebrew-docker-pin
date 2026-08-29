@@ -159,10 +159,13 @@ func boolEnv(key string, fallback bool) bool {
 // already decided per service by duva.auto -- which defaults to none, so a
 // service is only ever updated because someone said so. A global switch on
 // top would be a second brake on the same pedal.
-func actor(cfg envConfig) func(watch.Finding) Result {
+func actor(cfg envConfig, out io.Writer) func(watch.Finding) Result {
 	opts := applyOptions{
 		Host: hostLabel(cfg),
 		Push: cfg.Push,
+		Log: func(format string, args ...any) {
+			fmt.Fprintf(out, format+"\n", args...)
+		},
 	}
 	return func(f watch.Finding) Result {
 		return apply(f, realDocker, realGit, opts)
@@ -264,7 +267,7 @@ func runOnce(reg watch.Registry, out io.Writer) error {
 		return fmt.Errorf("loading state: %w", err)
 	}
 
-	findings, err := checkWith(cfg, reg, st, time.Now(), actor(cfg), realDocker, realGit)
+	findings, err := checkWith(cfg, reg, st, time.Now(), actor(cfg, out), realDocker, realGit)
 	if err != nil {
 		return err
 	}
@@ -276,22 +279,52 @@ func runOnce(reg watch.Registry, out io.Writer) error {
 	return nil
 }
 
+// report says what the check found, in sentences that mean something to
+// someone who has not read duva's source.
+//
+// A line names the service, what duva saw, and what follows from it. "app:
+// not pinned, skipping" said none of those: it assumed the reader knew that
+// pinned means a digest in the image line, that duva watches only pinned
+// services, and that skipping meant this one would be left alone.
 func report(out io.Writer, findings []watch.Finding) {
 	for _, f := range findings {
-		switch f.Status {
-		case watch.StatusAvailable:
-			verb := "needs approval"
-			if f.AutoApplies() {
-				verb = "would apply"
-			}
-			fmt.Fprintf(out, "%s: %s available — %s (%s)\n", f.Service, f.Candidate, verb, f.Why)
-		case watch.StatusSkipped:
-			fmt.Fprintf(out, "%s: %s, skipping\n", f.Service, f.Reason)
-		case watch.StatusError:
-			fmt.Fprintf(out, "%s: error: %s\n", f.Service, f.Reason)
+		switch {
+		case f.Status == watch.StatusAvailable:
+			// Still available after acting means policy did not allow duva to
+			// apply it -- anything it could apply, it already has.
+			fmt.Fprintf(out, "%s: %s is available, waiting for you to approve it (%s)\n",
+				f.Service, f.Candidate, f.Why)
+
+		case f.Status == watch.StatusSkipped:
+			fmt.Fprintf(out, "%s: not watching it — %s\n", f.Service, skipReason(f))
+
+		case f.Status == watch.StatusError:
+			fmt.Fprintf(out, "%s: could not check it — %s\n", f.Service, f.Reason)
+
+		case f.Reason == "applied":
+			fmt.Fprintf(out, "%s: updated to %s (%s)\n", f.Service, f.Candidate, f.Why)
+
+		case f.Soaking != nil:
+			fmt.Fprintf(out, "%s: %s is available but too new; waiting %s longer\n",
+				f.Service, f.Soaking.Tag, (f.Soaking.Delay - f.Soaking.Age).Round(time.Hour))
+
 		default:
-			fmt.Fprintf(out, "%s: up to date\n", f.Service)
+			fmt.Fprintf(out, "%s: nothing newer\n", f.Service)
 		}
+	}
+}
+
+// skipReason turns why duva passed over a service into something that says
+// what to do about it, where there is anything to do.
+func skipReason(f watch.Finding) string {
+	switch f.Reason {
+	case "not pinned":
+		return fmt.Sprintf("%s has no digest, and being pinned is how a service opts in "+
+			"(`docker pin %s` adds one)", f.Image, f.Service)
+	case "built locally (build:)":
+		return "it is built here rather than pulled, so there is no upstream to watch"
+	default:
+		return f.Reason
 	}
 }
 
@@ -326,6 +359,19 @@ type store struct {
 	lastCheck time.Time
 	// act applies an update, or is nil when duva only reports.
 	act func(watch.Finding) Result
+	// out is where an update triggered from the page is recorded. Someone
+	// pressing a button is an event worth a line: without one, the only
+	// account of what happened is a redirect the operator may not have read,
+	// and the logs show nothing between one scheduled check and the next.
+	out io.Writer
+}
+
+// logf records what duva did, when there is somewhere to record it.
+func (s *store) logf(format string, args ...any) {
+	if s.out == nil {
+		return
+	}
+	fmt.Fprintf(s.out, format+"\n", args...)
 }
 
 func (s *store) Pending() []watch.Pending {
@@ -388,11 +434,14 @@ func (s *store) Apply(service string) (string, error) {
 
 	f, soaking, err := s.queuedFinding(service)
 	if err != nil {
+		s.logf("%s: asked to update, but nothing is waiting for it", service)
 		return "", err
 	}
+	s.logf("%s: updating to %s, asked for from the queue", service, f.Candidate)
 
 	res := s.act(f)
 	if res.Failed() {
+		s.logf("%s: %s failed: %v", service, res.FailedAt, res.Err)
 		return "", fmt.Errorf("%s failed: %v", res.FailedAt, res.Err)
 	}
 
@@ -420,6 +469,7 @@ func (s *store) Apply(service string) (string, error) {
 	if res.FailedAt != "" {
 		msg += fmt.Sprintf(" — but %s failed: %v", res.FailedAt, res.Err)
 	}
+	s.logf("%s: %s", service, msg)
 	return msg, nil
 }
 
@@ -483,7 +533,7 @@ func serve(reg watch.Registry, out io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("loading state: %w", err)
 	}
-	s := &store{state: st, act: actor(cfg)}
+	s := &store{state: st, act: actor(cfg, out), out: out}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

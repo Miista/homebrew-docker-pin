@@ -64,6 +64,18 @@ type applyOptions struct {
 	// container that already holds the docker socket, for value a human's
 	// next push delivers anyway.
 	Push bool
+	// Log records each step as it happens. Every one of them changes
+	// something on the host -- an image pulled, a file rewritten, a container
+	// replaced, a commit made -- and an update that reported only its outcome
+	// left no way to tell how far it got when a later step failed.
+	Log func(format string, args ...any)
+}
+
+// step records a step, when the caller wanted a record.
+func (o applyOptions) step(format string, args ...any) {
+	if o.Log != nil {
+		o.Log(format, args...)
+	}
 }
 
 // apply runs the transaction for one finding.
@@ -94,6 +106,7 @@ func apply(f watch.Finding, d Docker, g Git, opts applyOptions) Result {
 	ref := candidateRef(f)
 
 	// Pull first: the cheapest failure is the one before anything is written.
+	opts.step("%s: pulling %s", f.Service, ref)
 	if err := pullImage(ref, d); err != nil {
 		return fail(res, StepPull, err)
 	}
@@ -103,14 +116,19 @@ func apply(f watch.Finding, d Docker, g Git, opts applyOptions) Result {
 		return fail(res, StepWrite, err)
 	}
 	res.Outcome = out
+	if out.Changed {
+		opts.step("%s: pinned %s", f.Service, out.NewRaw)
+	}
 	if !out.Changed {
 		// The registry offered something the file already pins. Nothing to
 		// do, and nothing to report as a failure.
 		return res
 	}
 
+	opts.step("%s: recreating the container", f.Service)
 	if err := recreate(f.File, f.Service, d); err != nil {
 		res = fail(res, StepRecreate, err)
+		opts.step("%s: it refused the new image, putting the file back", f.Service)
 		// The container refused the new image, so the file must not keep
 		// claiming it. A failure to restore is worse than the original
 		// problem and is reported as such.
@@ -127,12 +145,14 @@ func apply(f watch.Finding, d Docker, g Git, opts applyOptions) Result {
 	res.Applied = true
 
 	msg := commitMessage(opts.Host, f.Service, pin.TagOf(before), out.Tag)
+	opts.step("%s: committing %q", f.Service, msg)
 	if err := commit(f.File, msg, g); err != nil {
 		res.FailedAt, res.Err = StepCommit, err
 		return res
 	}
 
 	if opts.Push {
+		opts.step("%s: pushing", f.Service)
 		if err := push(f.File, g); err != nil {
 			// A commit that did not reach the remote rides along with the
 			// next push. Worth saying, not worth failing over.
