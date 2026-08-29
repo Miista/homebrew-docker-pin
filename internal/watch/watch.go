@@ -234,6 +234,9 @@ func service(rootFile, name string, reg Registry, baseline Baseline) Finding {
 	// Pin status is the opt-in: an unpinned service has made no versioning
 	// decision to watch over.
 	if !strings.Contains(raw, "@sha256:") {
+		// The image line as written, so the report can show what it looked at
+		// rather than leaving the reader to guess which service it meant.
+		f.Image = raw
 		f.Status, f.Reason = StatusSkipped, "not pinned"
 		return f
 	}

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -295,22 +296,39 @@ func TestLoadState_MissingFileIsEmpty(t *testing.T) {
 
 // --- reporting ---
 
+// Every service a check looked at gets a line, and the line carries what a
+// reader needs to act: which service, and the thing that distinguishes its
+// situation -- the candidate, the reason, the failure. The wording around
+// those is free to change.
 func TestReport(t *testing.T) {
 	var buf bytes.Buffer
 	report(&buf, []watch.Finding{
-		{Service: "a", Status: watch.StatusAvailable, Candidate: "1.3.0"},
-		{Service: "b", Status: watch.StatusSkipped, Reason: "not pinned"},
-		{Service: "c", Status: watch.StatusUpToDate},
-		{Service: "d", Status: watch.StatusError, Reason: "boom"},
+		{Service: "available", Status: watch.StatusAvailable, Candidate: "1.3.0"},
+		{Service: "unpinned", Status: watch.StatusSkipped, Reason: "not pinned",
+			Image: "example.com/app:1.2.0"},
+		{Service: "current", Status: watch.StatusUpToDate},
+		{Service: "broken", Status: watch.StatusError, Reason: "registry unreachable"},
+		{Service: "updated", Status: watch.StatusUpToDate, Reason: "applied", Candidate: "2.0.0"},
 	})
-	for _, want := range []string{
-		"a: 1.3.0 available",
-		"b: not pinned, skipping",
-		"c: up to date",
-		"d: error: boom",
+
+	lines := map[string]string{}
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		name, rest, _ := strings.Cut(line, ":")
+		lines[name] = rest
+	}
+	if len(lines) != 5 {
+		t.Fatalf("every service should get exactly one line, got:\n%s", buf.String())
+	}
+
+	// Each line has to carry the fact that distinguishes it.
+	for service, want := range map[string]string{
+		"available": "1.3.0",                // what is on offer
+		"unpinned":  "docker pin unpinned",  // what to do about it
+		"broken":    "registry unreachable", // why it could not be checked
+		"updated":   "2.0.0",                // what it moved to
 	} {
-		if !bytes.Contains(buf.Bytes(), []byte(want)) {
-			t.Errorf("missing %q in:\n%s", want, buf.String())
+		if !strings.Contains(lines[service], want) {
+			t.Errorf("%s's line should mention %q, got %q", service, want, lines[service])
 		}
 	}
 }
