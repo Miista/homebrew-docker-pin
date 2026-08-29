@@ -315,3 +315,24 @@ func TestReconcileSoaking_KeepsWhatWasNotChecked(t *testing.T) {
 		t.Error("a service that was not checked should keep its soaking entry")
 	}
 }
+
+// A check that errored says nothing about whether a service is still soaking:
+// the registry was unreachable, not the release suddenly old enough. Dropping
+// the row on a transient failure makes the one list an operator uses to decide
+// whether to take a release early flap in and out of existence.
+func TestReconcileSoaking_ErroredServiceKeepsItsRow(t *testing.T) {
+	st := NewState()
+	st.ReconcileSoaking([]Finding{{
+		Service: "app", CurrentTag: "1.2.0",
+		Soaking: &SoakingTag{Tag: "1.3.0", Age: time.Hour, Delay: 48 * time.Hour},
+	}})
+
+	st.ReconcileSoaking([]Finding{{
+		Service: "app", CurrentTag: "1.2.0",
+		Status: StatusError, Reason: "listing tags: registry unreachable",
+	}})
+
+	if _, ok := st.Soaking["app"]; !ok {
+		t.Error("a failed check should not drop what was soaking")
+	}
+}

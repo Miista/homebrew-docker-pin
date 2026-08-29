@@ -835,3 +835,30 @@ func TestResolveServiceIn_UnknownService(t *testing.T) {
 		t.Error("a service in no file must be an error")
 	}
 }
+
+// A PinImage that cannot find its service must not have written anything.
+//
+// restorePin is duva's one undo, and it is a PinImage call: if a failed pin
+// could leave a partial write behind, the undo would be the thing that
+// corrupts the file. The guarantee holds by where the error returns sit, so
+// it is worth pinning down rather than leaving to the next refactor.
+func TestPinImage_FailureLeavesTheFileByteIdentical(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "docker-compose.yml")
+	original := "services:\n  web:\n    image: nginx:1.27  # keep this comment\n"
+	if err := os.WriteFile(file, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := PinImage(file, "not-a-service", "nginx:1.27@sha256:abc"); err == nil {
+		t.Fatal("expected an error for a service that is not there")
+	}
+
+	got, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != original {
+		t.Errorf("a failed pin rewrote the file:\n--- was ---\n%s\n--- now ---\n%s", original, got)
+	}
+}
