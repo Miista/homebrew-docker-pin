@@ -306,12 +306,21 @@ services:
     labels:
       duva.include: '^\d+\.\d+\.\d+$' # only consider tags matching this regex
       duva.exclude: '(alpha|beta|rc)' # drop matching candidates
-      duva.delay: 7d                  # only report a candidate this old
+      duva.delay: 7d                  # let a release age this long first
+      duva.auto: patch                # apply patches unattended; queue the rest
 ```
 
 `duva.auto` decides what may be applied without asking: `none` (the default),
 `patch`, `minor` or `major`. A service with no `duva.auto` is only ever
-reported.
+reported. An unknown `duva.*` label is an error rather than something ignored:
+a misspelled `duva.includ` would otherwise silently mean "follow the moving
+tag", which looks like duva working rather than duva misconfigured.
+
+`duva.delay` soaks a release before adopting it — useful for images whose
+publisher occasionally ships a bad build and fixes it within a day. A soaking
+candidate is not hidden: the queue lists it separately, with what happens when
+the wait ends, and an Update button that takes it early. The wait is a default,
+not a lock.
 
 Everything else is env vars — `DUVA_SCHEDULE` (cron expression),
 `DUVA_HOSTNAME` (optional, defaults to the OS hostname),
