@@ -37,13 +37,19 @@ docker-duva:
 test: test-unit test-integration
 
 test-unit:
-	go test ./...
+	go test -shuffle=on ./...
 
 # -p 1 keeps packages sequential: the suites share a registry port and a
 # testbed, and duva does not run several copies of itself in production
 # either.
+#
+# -shuffle=on because these tests share one testbed directory, one registry
+# and one daemon, so a test can pass on what a previous one left behind. That
+# is not hypothetical: a fixed order hid a test which only ever passed because
+# another had created a directory for it first. Go prints the seed, and
+# -shuffle=<seed> replays a failure exactly.
 test-integration:
-	go test -tags integration -count=1 -p 1 ./test/...
+	go test -tags integration -count=1 -p 1 -shuffle=on ./test/...
 
 # --- coverage ---------------------------------------------------------
 # Reports unit and integration coverage separately, then merged. Merging
@@ -68,7 +74,7 @@ cover:
 	@# the mounted GOCOVERDIR. That reaches code no unit test can: the serve
 	@# loop, the HTTP handlers, and everything that only runs against a real
 	@# daemon.
-	@GOCOVERDIR=$(COVER_DIR)/integration go test -tags integration -count=1 -p 1 ./test/... >/dev/null
+	@GOCOVERDIR=$(COVER_DIR)/integration go test -tags integration -count=1 -p 1 -shuffle=on ./test/... >/dev/null
 	@go tool covdata percent -i=$(COVER_DIR)/integration | sort
 	@echo
 	@echo "== merged"
