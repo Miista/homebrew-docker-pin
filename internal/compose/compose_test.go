@@ -862,3 +862,37 @@ func TestPinImage_FailureLeavesTheFileByteIdentical(t *testing.T) {
 		t.Errorf("a failed pin rewrote the file:\n--- was ---\n%s\n--- now ---\n%s", original, got)
 	}
 }
+
+// HasUnexpandedVariable is the shared answer to "can this reference be acted
+// on?", so it has to be right about both halves: catching a variable, and not
+// crying wolf on a reference that merely contains a $ or a brace.
+func TestHasUnexpandedVariable(t *testing.T) {
+	variable := []string{
+		"nginx:${TAG}",
+		"${REGISTRY}/app:1.0",
+		"nginx:${TAG}@sha256:abc",
+		"nginx:$(TAG)",
+		"${IMAGE}",
+	}
+	for _, image := range variable {
+		if !HasUnexpandedVariable(image) {
+			t.Errorf("HasUnexpandedVariable(%q) = false, want true", image)
+		}
+	}
+
+	literal := []string{
+		"nginx",
+		"nginx:1.25",
+		"localhost:5555/app:1.0.1",
+		"ghcr.io/miista/duva:1.0.0@sha256:abc",
+		// A lone $ or brace is not interpolation. Compose only substitutes
+		// ${...} and $(...), so neither of these should be refused.
+		"weird$name:1.0",
+		"weird{name}:1.0",
+	}
+	for _, image := range literal {
+		if HasUnexpandedVariable(image) {
+			t.Errorf("HasUnexpandedVariable(%q) = true, want false", image)
+		}
+	}
+}

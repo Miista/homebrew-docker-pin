@@ -328,6 +328,21 @@ func pinInFile(composeFile, service string, d dockerFuncs, dryRun bool) (pinOutc
 		return pinOutcome{OldRaw: raw, NewRaw: raw, Tag: tag, Built: true}, nil
 	}
 
+	// An unexpanded variable means the file says `image: nginx:${TAG}`, and
+	// docker pin reads the file as text -- compose would substitute it from
+	// .env or the environment, but nothing does that here.
+	//
+	// Not pinnable either way: the pull fails at the daemon with "invalid
+	// reference format". Caught here so the message names the service and the
+	// cause instead of arriving from docker several steps later, and so no
+	// pull is attempted for something that cannot succeed.
+	if compose.HasUnexpandedVariable(raw) {
+		return pinOutcome{}, fmt.Errorf(
+			"%s has an unexpanded variable in its image (%s): "+
+				"docker pin reads the compose file as written, so the value must be a literal reference",
+			service, raw)
+	}
+
 	if !dryRun {
 		fmt.Printf("Read tag from compose file: %s\n", tag)
 	}
@@ -795,6 +810,14 @@ func resolvePullRef(composeFile, service, targetVersion string, dryRun, quiet bo
 	baseImage, currentTag, err := compose.ParseImage(composeFile, service)
 	if err != nil {
 		return "", "", err
+	}
+	// Everything downstream resolves this reference -- pulls it, or asks a
+	// registry which tags it has. Neither works on the literal "${TAG}".
+	if compose.HasUnexpandedVariable(baseImage + ":" + currentTag) {
+		return "", "", fmt.Errorf(
+			"%s has an unexpanded variable in its image (%s:%s): "+
+				"docker pin reads the compose file as written, so the value must be a literal reference",
+			service, baseImage, currentTag)
 	}
 
 	pullTag := targetVersion

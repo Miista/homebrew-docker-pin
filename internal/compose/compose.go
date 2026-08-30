@@ -233,6 +233,22 @@ func collectServices(file string, seen map[string]bool) error {
 	return nil
 }
 
+// HasUnexpandedVariable reports whether an image reference still contains a
+// compose variable, as in `image: nginx:${TAG}`.
+//
+// These tools read the compose file as written. Compose would substitute the
+// value from .env or the environment before handing the reference to the
+// daemon, but nothing does that here, so what is read is the literal text.
+//
+// Whether that matters depends on the command. Anything that has to resolve
+// the reference -- pulling it, asking a registry about it -- cannot proceed:
+// the daemon rejects "nginx:${TAG}" as an invalid reference format. Anything
+// purely textual, like unpinning, is unaffected and should keep working, so
+// this is a question callers ask rather than a check applied to every read.
+func HasUnexpandedVariable(image string) bool {
+	return strings.Contains(image, "${") || strings.Contains(image, "$(")
+}
+
 // RawImage returns the image string exactly as written in the compose file.
 func RawImage(file, serviceName string) (string, error) {
 	data, err := os.ReadFile(file)

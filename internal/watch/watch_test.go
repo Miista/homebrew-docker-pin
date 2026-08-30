@@ -283,3 +283,64 @@ func TestProject_AppliesPolicyFromLabels(t *testing.T) {
 		t.Errorf("Bump = %q", f.Bump)
 	}
 }
+
+// `image: nginx:${TAG}@sha256:...` has a digest, so it passes the pin check
+// and looks watchable -- but duva reads the file as written, so the tag it
+// would ask a registry about is the literal "${TAG}".
+//
+// Skipped rather than errored: the service is configured in a way this tool
+// does not handle, which is not a fault to retry on every run. And the rest of
+// the project must still be watched.
+func TestProject_UnexpandedVariableIsSkipped(t *testing.T) {
+	file := project(t, `services:
+  templated:
+    image: nginx:${TAG}@sha256:d
+  fine:
+    image: x/z:1.0.0@sha256:d
+`)
+
+	asked := []string{}
+	r := Registry{
+		ListMatchingTags: func(image string, _, _ *regexp.Regexp, _ string) ([]string, error) {
+			asked = append(asked, image)
+			return []string{"1.0.1"}, nil
+		},
+		RemoteDigest: func(string, string) (string, error) { return "sha256:new", nil },
+	}
+
+	findings := mustProject(t, file, r, Baseline{})
+
+	var templated *Finding
+	for i := range findings {
+		if findings[i].Service == "templated" {
+			templated = &findings[i]
+		}
+	}
+	if templated == nil {
+		t.Fatal("the service should be reported, not dropped -- silence reads as nothing to do")
+	}
+	if templated.Status != StatusSkipped {
+		t.Errorf("status = %v, want skipped", templated.Status)
+	}
+	if templated.Reason == "" {
+		t.Error("a skip should say why")
+	}
+
+	// No registry should have been asked about a reference containing "${".
+	for _, image := range asked {
+		if strings.Contains(image, "${") {
+			t.Errorf("asked a registry about %q", image)
+		}
+	}
+
+	// And the well-formed service alongside it is still watched.
+	var fine *Finding
+	for i := range findings {
+		if findings[i].Service == "fine" {
+			fine = &findings[i]
+		}
+	}
+	if fine == nil || fine.Status == StatusSkipped {
+		t.Error("one templated service must not stop the rest of the project")
+	}
+}

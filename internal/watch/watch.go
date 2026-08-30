@@ -241,6 +241,18 @@ func service(rootFile, name string, reg Registry, baseline Baseline) Finding {
 		return f
 	}
 
+	// A digest is enough to look pinned, but `image: nginx:${TAG}@sha256:...`
+	// is not something duva can reason about: it reads the file as written, so
+	// the tag it would ask a registry about is the literal "${TAG}". Skipped
+	// rather than errored -- the service is configured in a way this tool does
+	// not handle, which is the operator's to know about, not a fault to retry
+	// every run.
+	if compose.HasUnexpandedVariable(raw) {
+		f.Image = raw
+		f.Status, f.Reason = StatusSkipped, "image has an unexpanded variable"
+		return f
+	}
+
 	image, tag, err := compose.ParseImage(serviceFile, name)
 	if err != nil {
 		return errorf(f, err)
