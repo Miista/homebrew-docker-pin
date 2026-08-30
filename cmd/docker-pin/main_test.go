@@ -604,3 +604,78 @@ func TestUpgradeInFile_SkipsLocallyBuilt(t *testing.T) {
 		t.Errorf("a built service must not be pinned, got:\n%s", readCompose(t, f))
 	}
 }
+
+// `image: nginx:${TAG}` is compose's to expand, from .env or the environment.
+// docker pin reads the file as written, so it sees the variable itself.
+//
+// Unpinnable either way -- the daemon rejects "nginx:${TAG}" as an invalid
+// reference -- but it failed several steps later, with docker's wording and no
+// mention of which service or why. Caught before the pull instead.
+func TestUnexpandedVariableIsRejectedBeforePulling(t *testing.T) {
+	f := writeTempCompose(t, "services:\n  web:\n    image: nginx:${TAG}\n")
+
+	pulled := false
+	d := dockerFuncs{
+		pull:      func(ref string) error { pulled = true; return nil },
+		getDigest: func(ref string) (string, error) { return "sha256:x", nil },
+	}
+
+	_, err := pinInFile(f, "web", d, false)
+	if err == nil {
+		t.Fatal("an unexpanded variable should be an error, not something to pull")
+	}
+	if !strings.Contains(err.Error(), "web") {
+		t.Errorf("the error should name the service, got: %v", err)
+	}
+	if pulled {
+		t.Error("nothing should be pulled for a reference that cannot resolve")
+	}
+	if got := readCompose(t, f); !strings.Contains(got, "nginx:${TAG}") {
+		t.Errorf("the file should be left alone, got:\n%s", got)
+	}
+}
+
+// The upgrade path resolves the reference before pulling it or asking a
+// registry which tags exist. Neither works on the literal "${TAG}".
+func TestResolvePullRefRejectsAnUnexpandedVariable(t *testing.T) {
+	f := writeTempCompose(t, "services:\n  web:\n    image: nginx:${TAG}@sha256:abc\n")
+
+	_, _, err := resolvePullRef(f, "web", "", false, true)
+	if err == nil {
+		t.Fatal("a variable in the image should stop the upgrade")
+	}
+	if !strings.Contains(err.Error(), "web") {
+		t.Errorf("the error should name the service, got: %v", err)
+	}
+}
+
+// The same path on a literal reference still resolves -- otherwise the guard
+// above would be indistinguishable from refusing everything.
+func TestResolvePullRefResolvesALiteralReference(t *testing.T) {
+	f := writeTempCompose(t, "services:\n  web:\n    image: nginx:1.25@sha256:abc\n")
+
+	ref, _, err := resolvePullRef(f, "web", "1.26", false, true)
+	if err != nil {
+		t.Fatalf("a literal reference should resolve: %v", err)
+	}
+	if ref != "nginx:1.26" {
+		t.Errorf("pullRef = %q, want nginx:1.26", ref)
+	}
+}
+
+// pinInFile's own guard, from the other direction: an ordinary unpinned
+// service is still pinned normally.
+func TestPinInFileStillPinsALiteralReference(t *testing.T) {
+	f := writeTempCompose(t, "services:\n  web:\n    image: nginx:1.25\n")
+	d := dockerFuncs{
+		getDigest: func(string) (string, error) { return "sha256:abc", nil },
+		pull:      func(string) error { return nil },
+	}
+
+	if _, err := pinInFile(f, "web", d, false); err != nil {
+		t.Fatalf("an ordinary service should pin: %v", err)
+	}
+	if got := readCompose(t, f); !strings.Contains(got, "nginx:1.25@sha256:abc") {
+		t.Errorf("the service was not pinned, got:\n%s", got)
+	}
+}

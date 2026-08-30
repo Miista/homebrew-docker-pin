@@ -144,6 +144,13 @@ func run(cmd *exec.Cmd) error {
 // failure -- an image that cannot be fetched -- happens before anything has
 // been written.
 func pullImage(ref string, d Docker) error {
+	// The watcher skips these, so reaching here means a reference that looked
+	// resolved when it was queued and does not now. Refused rather than
+	// attempted: the transaction is about to rewrite a compose file, and it
+	// should not do that on the strength of a reference nothing can pull.
+	if compose.HasUnexpandedVariable(ref) {
+		return fmt.Errorf("cannot pull %s: the image has an unexpanded variable", ref)
+	}
 	if err := d.Pull(ref); err != nil {
 		return fmt.Errorf("pulling %s: %w", ref, err)
 	}
