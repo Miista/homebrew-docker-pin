@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -100,5 +102,51 @@ func TestCommitSubject_NoTemplateUsesTheDefault(t *testing.T) {
 	}
 	if want := "optiplex/radarr: 1.2.0 -> 1.3.0"; got != want {
 		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// Reading the template: most stacks mount nothing, so a missing file is the
+// normal case rather than a problem.
+
+func TestLoadCommitTemplate_MissingFileIsTheDefault(t *testing.T) {
+	commitTemplatePath = filepath.Join(t.TempDir(), "not-there")
+
+	got, err := loadCommitTemplate()
+	if err != nil {
+		t.Fatalf("a missing template is the common case, not an error: %v", err)
+	}
+	if got != defaultCommitTemplate {
+		t.Errorf("got %q, want the default", got)
+	}
+}
+
+func TestLoadCommitTemplate_ReadsWhatIsMounted(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "commit-template")
+	// With a trailing newline, as any editor would leave it.
+	if err := os.WriteFile(path, []byte("bump {{.Container}}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	commitTemplatePath = path
+
+	got, err := loadCommitTemplate()
+	if err != nil {
+		t.Fatalf("unexpected failure: %v", err)
+	}
+	if got != "bump {{.Container}}" {
+		t.Errorf("got %q, want the trailing newline trimmed", got)
+	}
+}
+
+// An empty file is a mistake rather than a preference: someone mounted a
+// template and it is not there. Falling back to the default would hide that.
+func TestLoadCommitTemplate_EmptyFileIsAnError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "commit-template")
+	if err := os.WriteFile(path, []byte("   \n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	commitTemplatePath = path
+
+	if _, err := loadCommitTemplate(); err == nil {
+		t.Error("an empty template file should be reported, not silently ignored")
 	}
 }

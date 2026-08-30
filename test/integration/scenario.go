@@ -102,6 +102,13 @@ func Up(t T, name string) *Scenario {
 	}
 	s.copyTree(src, s.Dir)
 
+	// duva's state directory. Docker would create it as a side effect of the
+	// bind mount, but only when its parent already exists -- so whether it
+	// worked depended on what a previous test happened to leave behind.
+	if err := os.MkdirAll(filepath.Join(s.Dir, "data"), 0o777); err != nil {
+		t.Fatalf("preparing the state directory: %v", err)
+	}
+
 	s.copyCerts()
 	s.initRepo()
 
