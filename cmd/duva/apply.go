@@ -218,11 +218,6 @@ func push(composeFile string, g Git) error {
 	return nil
 }
 
-// commitMessage follows the fleet convention, <host>/<service>: <subject>.
-func commitMessage(host, service, from, to string) string {
-	return fmt.Sprintf("%s/%s: %s -> %s", host, service, from, to)
-}
-
 // --- the finding a step operates on ------------------------------------
 
 // candidateRef is the image reference to pull for a finding: the newer tag

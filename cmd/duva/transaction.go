@@ -64,6 +64,9 @@ type applyOptions struct {
 	// container that already holds the docker socket, for value a human's
 	// next push delivers anyway.
 	Push bool
+	// CommitTemplate is the subject a change is committed under. Empty means
+	// the default; see commit.go.
+	CommitTemplate string
 	// Log records each step as it happens. Every one of them changes
 	// something on the host -- an image pulled, a file rewritten, a container
 	// replaced, a commit made -- and an update that reported only its outcome
@@ -153,7 +156,21 @@ func apply(f watch.Finding, d Docker, g Git, opts applyOptions) Result {
 	// record-keeping: it can fail without making the update untrue.
 	res.Applied = true
 
-	msg := commitMessage(opts.Host, f.Service, pin.TagOf(before), out.Tag)
+	msg, err := commitSubject(opts.CommitTemplate, commitFields{
+		Host:       opts.Host,
+		Container:  f.Service,
+		Image:      f.Image,
+		OldVersion: pin.TagOf(before),
+		NewVersion: out.Tag,
+		OldDigest:  pin.DigestOf(before),
+		NewDigest:  out.Digest,
+	})
+	if err != nil {
+		// The container is already running the new image, so this is
+		// record-keeping that failed rather than an update that did.
+		res.FailedAt, res.Err = StepCommit, err
+		return res
+	}
 	opts.step("committing %q", msg)
 	if err := commit(f.File, msg, g); err != nil {
 		res.FailedAt, res.Err = StepCommit, err
