@@ -37,6 +37,39 @@ func TestSplitRef(t *testing.T) {
 	}
 }
 
+// registryOf decides which registry a password is sent to, so the cases that
+// matter are the ones where a private host could be mistaken for Docker Hub.
+// These follow docker's own splitDockerDomain; two of them were wrong here.
+func TestRegistryOfDoesNotLeakPrivateHostsToHub(t *testing.T) {
+	const hub = "https://index.docker.io/v1/"
+
+	cases := []struct{ image, want string }{
+		// Was broken: localhost is a reserved namespace and always a host,
+		// with or without a port. Without one it has no dot and no colon, so
+		// the dot-or-colon rule alone sent its credential to Docker Hub.
+		{"localhost/app", "localhost"},
+		{"localhost:5555/app", "localhost:5555"},
+
+		// Was broken: a namespace must be lowercase, so a first segment that
+		// is not lowercase is a hostname.
+		{"Registry.Example.COM/app", "Registry.Example.COM"},
+
+		// Unambiguous hosts, by dot, by port, by both.
+		{"ghcr.io/miista/duva", "ghcr.io"},
+		{"127.0.0.1:5000/app", "127.0.0.1:5000"},
+
+		// Genuinely Docker Hub: a bare name, and a plain lowercase namespace.
+		{"nginx", hub},
+		{"miista/duva", hub},
+	}
+
+	for _, c := range cases {
+		if got := registryOf(c.image); got != c.want {
+			t.Errorf("registryOf(%q) = %q, want %q", c.image, got, c.want)
+		}
+	}
+}
+
 // registryAuth is what the daemon is handed for a pull. Anonymous is the
 // common case and must stay anonymous: a half-configured credential silently
 // becoming a real one is how a wrong password reaches a registry.

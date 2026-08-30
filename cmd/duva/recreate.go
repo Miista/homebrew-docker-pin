@@ -14,6 +14,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/distribution/reference"
+
 	"github.com/Miista/homebrew-docker-pin/internal/compose"
 )
 
@@ -387,14 +389,31 @@ func registryAuth(image string) string {
 	return base64.URLEncoding.EncodeToString(cred)
 }
 
-// registryOf is the host an image comes from. A first path segment with a dot
-// or a port is a registry; anything else is Docker Hub's implied one.
+// registryOf is the host an image comes from, and so which registry a
+// credential is sent to. Getting it wrong sends a private registry's password
+// to Docker Hub.
+//
+// Deciding which first path segment is a hostname has more cases than it
+// looks: a dot or a colon marks a domain or a host:port, "localhost" is a
+// reserved host with neither, and a segment that is not all lowercase cannot
+// be a namespace so must be a host. This was hand-written once and had two of
+// those four wrong, so it defers to docker's own parser rather than keeping a
+// copy of rules that only drift.
 func registryOf(image string) string {
-	first, _, found := strings.Cut(image, "/")
-	if !found || (!strings.Contains(first, ".") && !strings.Contains(first, ":")) {
-		return "https://index.docker.io/v1/"
+	// The legacy index URL, not "docker.io": this goes in X-Registry-Auth,
+	// where the daemon still identifies Hub by its v1 address.
+	const hub = "https://index.docker.io/v1/"
+
+	named, err := reference.ParseNormalizedNamed(image)
+	if err != nil {
+		// Not a reference duva can reason about. Anonymous is the safe
+		// answer: no credential is sent anywhere.
+		return hub
 	}
-	return first
+	if domain := reference.Domain(named); domain != "docker.io" {
+		return domain
+	}
+	return hub
 }
 
 // imageDigest is the repo digest of an image the daemon already has: what it
