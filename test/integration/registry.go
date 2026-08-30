@@ -71,7 +71,7 @@ func startRegistry(root string) error {
 	// Anything already holding the port goes first. Its contents are unknown,
 	// and a test that finds unexpected tags is worse than one that waits a
 	// second for a fresh registry.
-	_ = registryCompose(root, "down", "--remove-orphans", "--timeout", "3").Run()
+	_ = registryCompose(root, "down", "--remove-orphans", "--volumes", "--timeout", "3").Run()
 
 	cmd := registryCompose(root, "up", "-d", "--wait")
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -83,8 +83,12 @@ func startRegistry(root string) error {
 	return nil
 }
 
+// The registry's storage goes with it: registry:2 declares VOLUME
+// /var/lib/registry, so every run of this suite otherwise left one more
+// anonymous volume on the host. Its contents are throwaway -- each scenario
+// empties the registry before it pushes anything.
 func stopRegistry(root string) {
-	_ = registryCompose(root, "down", "--remove-orphans", "--timeout", "3").Run()
+	_ = registryCompose(root, "down", "--remove-orphans", "--volumes", "--timeout", "3").Run()
 	_ = os.RemoveAll(filepath.Join(infraDir(root), "certs"))
 }
 

@@ -59,6 +59,10 @@ type Scenario struct {
 	// pushed is every image reference this scenario built, so teardown can
 	// remove exactly those.
 	pushed []string
+	// volumesAtStart is the set of anonymous volumes that already existed when
+	// this scenario began, so teardown can remove the ones it caused without
+	// touching anything else on this host.
+	volumesAtStart map[string]bool
 }
 
 // Up copies a fixture into the testbed and brings up everything it declares.
@@ -120,6 +124,7 @@ func Up(t T, name string) *Scenario {
 	}
 	s.pushDeclaredImages()
 
+	s.volumesAtStart = danglingVolumes()
 	s.composeUp()
 
 	// The duvas are stopped again straight away. They come up with everything
@@ -247,6 +252,29 @@ func (s *Scenario) sweep() {
 		s.pushed = nil
 	}
 
+	// Anonymous volumes outlive `down --volumes`: that removes what compose
+	// considers the project's, and duva does not go through compose -- it
+	// recreates containers over the API, and each recreation leaves the old
+	// container's anonymous volumes behind with no project label on them.
+	// Left alone they accumulate, hundreds per week of running this suite.
+	//
+	// Removed by diffing against what existed before the scenario started,
+	// rather than by pruning: an anonymous volume carries nothing that says
+	// which project made it, so a prune here would also take volumes belonging
+	// to whatever else this host happens to be running.
+	if s.volumesAtStart != nil {
+		var leaked []string
+		for v := range danglingVolumes() {
+			if !s.volumesAtStart[v] {
+				leaked = append(leaked, v)
+			}
+		}
+		if len(leaked) > 0 {
+			_ = exec.Command("docker", append([]string{"volume", "rm", "-f"}, leaked...)...).Run()
+		}
+		s.volumesAtStart = nil
+	}
+
 	_ = os.RemoveAll(s.Dir)
 }
 
@@ -295,7 +323,29 @@ func (s *Scenario) composeUp(services ...string) {
 	// --wait blocks until services with a healthcheck report healthy, so a
 	// test never has to poll for the registry to accept pushes.
 	args := append([]string{"up", "-d", "--wait", "--remove-orphans"}, services...)
-	if out, err := s.compose(args...); err != nil {
+	out, err := s.compose(args...)
+
+	// The daemon runs in a VM with the repository shared in over virtiofs, and
+	// a directory this process has just created is not always visible there
+	// yet: the daemon resolves the bind source, does not find it, and reports
+	// it as missing when it demonstrably exists -- confirmed by stat'ing it
+	// here at the moment the daemon said it was gone.
+	//
+	// A plain mkdir propagates promptly; it takes deleting a populated testbed
+	// whose mounts the daemon still holds, then rebuilding it under the same
+	// path, to open a window wide enough to hit. Which is exactly what runs
+	// between two tests, and why this surfaced only under -shuffle.
+	//
+	// Retried rather than waited out, because there is no event to wait for --
+	// and a second attempt is enough in practice. A genuinely missing path
+	// fails both times and still reports.
+	for attempt := 0; err != nil && attempt < 5 &&
+		strings.Contains(out, "error while creating mount source path"); attempt++ {
+		time.Sleep(500 * time.Millisecond)
+		out, err = s.compose(args...)
+	}
+
+	if err != nil {
 		// A service that would not start explains itself in its own log,
 		// which compose's error does not include.
 		logs, _ := s.compose("logs", "--no-log-prefix")
@@ -308,4 +358,20 @@ func (s *Scenario) composeUp(services ...string) {
 func (s *Scenario) Logs(service string) string {
 	out, _ := s.compose("logs", "--no-log-prefix", service)
 	return out
+}
+
+// danglingVolumes is the set of volumes no container references right now.
+//
+// Best effort: if docker cannot be asked, teardown carries on rather than
+// failing a test over cleanup it could not perform.
+func danglingVolumes() map[string]bool {
+	out, err := exec.Command("docker", "volume", "ls", "-q", "--filter", "dangling=true").Output()
+	if err != nil {
+		return nil
+	}
+	set := map[string]bool{}
+	for _, name := range strings.Fields(string(out)) {
+		set[name] = true
+	}
+	return set
 }
