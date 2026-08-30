@@ -1,0 +1,55 @@
+# Every verdict duva can reach, on one image, differing only by label.
+#
+# The registry holds a newer patch and a newer minor of the 1.26 line, and a
+# 2.x that is only minutes old -- so the soak has something to hold back while
+# the rest are old enough to act on.
+services:
+  # patch available, duva.auto: patch -> applied unattended, never queued
+  autopatch:
+    image: localhost:5555/app:1.26.0
+    labels:
+      duva.include: '^1\.26\.\d+$'
+      duva.auto: patch
+
+  # minor available, duva.auto: patch -> exceeds the threshold, queued
+  exceeds:
+    image: localhost:5555/app:1.26.0
+    labels:
+      duva.include: '^1\.\d+\.\d+$'
+      duva.auto: patch
+
+  # patch available, no duva.auto -> defaults to none, queued
+  defaultnone:
+    image: localhost:5555/app:1.26.0
+    labels:
+      duva.include: '^1\.26\.\d+$'
+
+  # a 2.x is available and its policy would apply it, but it is minutes old
+  # against a 7d soak -- so it waits, and says when it will stop waiting
+  soaking:
+    image: localhost:5555/app:1.26.0
+    labels:
+      duva.include: '^\d+\.\d+\.\d+$'
+      duva.delay: 7d
+      duva.auto: major
+
+  # unpinned: being pinned is the opt-in, so this one is not watched at all
+  loose:
+    image: localhost:5555/app:1.26.0
+
+  duva:
+    image: duva:integration
+    command: serve
+    environment:
+      DUVA_HOSTNAME: sandbox
+      DUVA_SCHEDULE: "0 3 * * *"
+    ports:
+      - "8098:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - .:/compose
+      - ./data:/data
+      # Only here because the suite's registry is self-signed.
+      - ./certs/cert.pem:/etc/ssl/certs/ca-certificates.crt:ro
+    extra_hosts:
+      - localhost:host-gateway

@@ -3,4 +3,5 @@
 # The one thing the compose file cannot say, since no service references
 # them. Everything it does name is published from the file itself.
 updates:
-  - 1.1.0-alpine
+  app:
+    - 1.1.0-alpine

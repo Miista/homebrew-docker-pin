@@ -294,7 +294,7 @@ func report(log zerolog.Logger, findings []watch.Finding) {
 			// Still available after acting means policy did not allow duva to
 			// apply it -- anything it could apply, it already has. Warn
 			// rather than Info: it is waiting on a person.
-			log.Warn().Msgf("%s: %s is available and waiting for you to approve it (%s)",
+			log.Warn().Msgf("%s: %s is available, waiting for approval (%s)",
 				f.Service, f.Candidate, f.Why)
 
 		case f.Status == watch.StatusSkipped:
@@ -307,8 +307,8 @@ func report(log zerolog.Logger, findings []watch.Finding) {
 			log.Info().Msgf("%s: updated to %s (%s)", f.Service, f.Candidate, f.Why)
 
 		case f.Soaking != nil:
-			log.Info().Msgf("%s: %s is available but too new; waiting %s longer",
-				f.Service, f.Soaking.Tag, (f.Soaking.Delay - f.Soaking.Age).Round(time.Hour))
+			log.Info().Msgf("%s: %s is available but still soaking, %s to go",
+				f.Service, f.Soaking.Tag, watch.HumanDuration(f.Soaking.Delay-f.Soaking.Age))
 
 		default:
 			log.Debug().Msgf("%s: nothing newer", f.Service)
