@@ -218,6 +218,27 @@ func toStrings(v any) []string {
 	return out
 }
 
+// containerNameOf is what a service's container is called, or the service
+// name when there is no container to ask -- a service that is not running
+// still has to be named in a log line.
+func containerNameOf(service string) string {
+	id, err := findContainer(service)
+	if err != nil {
+		return service
+	}
+	raw, err := dockerDo(http.MethodGet, "/containers/"+id+"/json", nil)
+	if err != nil {
+		return service
+	}
+	var named struct {
+		Name string `json:"Name"`
+	}
+	if err := json.Unmarshal(raw, &named); err != nil || named.Name == "" {
+		return service
+	}
+	return strings.TrimPrefix(named.Name, "/")
+}
+
 // recreateContainer replaces a service's container with one running the image
 // its compose file now pins.
 //
