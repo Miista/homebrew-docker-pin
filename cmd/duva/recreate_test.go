@@ -70,6 +70,44 @@ func TestRegistryOfDoesNotLeakPrivateHostsToHub(t *testing.T) {
 	}
 }
 
+// Every reference duva watches carries a digest -- that is what pinning means
+// -- so the digest-bearing form is the one that has to work, not the plain one.
+//
+// It is a silent failure if it does not. The parser rejects a digest whose
+// algorithm is unavailable, which depends on crypto/sha256 being linked into
+// the binary; registryOf cannot tell that from "this image is on Docker Hub",
+// so a private registry's password would go to Hub. Nothing about the pull
+// would look wrong until it was refused.
+func TestRegistryOfHandlesDigestPinnedReferences(t *testing.T) {
+	const hub = "https://index.docker.io/v1/"
+
+	// A real digest: the parser validates the encoding, so a made-up one is
+	// rejected for the wrong reason and would pass this test vacuously.
+	const digest = "@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b"
+
+	cases := []struct{ image, want string }{
+		{"ghcr.io/miista/duva:1.0.0" + digest, "ghcr.io"},
+		{"localhost:5555/app:1.0.1" + digest, "localhost:5555"},
+		{"localhost/app" + digest, "localhost"},
+		{"registry.example.com:5000/app:1.0" + digest, "registry.example.com:5000"},
+
+		// Digest with no tag at all, which is a legal reference.
+		{"ghcr.io/miista/duva" + digest, "ghcr.io"},
+
+		// Hub, still Hub with a digest on it.
+		{"nginx:1.25" + digest, hub},
+		{"miista/duva" + digest, hub},
+	}
+
+	for _, c := range cases {
+		if got := registryOf(c.image); got != c.want {
+			t.Errorf("registryOf(%q) = %q, want %q\n"+
+				"a digest-pinned reference must resolve to its own registry",
+				c.image, got, c.want)
+		}
+	}
+}
+
 // registryAuth is what the daemon is handed for a pull. Anonymous is the
 // common case and must stay anonymous: a half-configured credential silently
 // becoming a real one is how a wrong password reaches a registry.
