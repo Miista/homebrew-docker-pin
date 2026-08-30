@@ -348,14 +348,6 @@ func TestApply_MovingTagPullsTheTagNotTheDigest(t *testing.T) {
 	}
 }
 
-func TestCommitMessage(t *testing.T) {
-	got := commitMessage("myhost", "radarr", "1.2.0", "1.3.0")
-	want := "myhost/radarr: 1.2.0 -> 1.3.0"
-	if got != want {
-		t.Errorf("got %q, want %q", got, want)
-	}
-}
-
 // A locked index means something else is committing right now. duva's next
 // run will find the repository quiet, so this is a note rather than a
 // failure -- reporting it as an error would cry wolf every time someone

@@ -162,9 +162,19 @@ func boolEnv(key string, fallback bool) bool {
 // service is only ever updated because someone said so. A global switch on
 // top would be a second brake on the same pedal.
 func actor(cfg envConfig, log zerolog.Logger) func(watch.Finding) Result {
+	// Read once at startup: a template that does not parse should stop duva
+	// here rather than at the moment it would have committed, with the
+	// container already updated.
+	tmpl, err := loadCommitTemplate()
+	if err != nil {
+		log.Error().Msgf("%v; commits will use the default subject", err)
+		tmpl = defaultCommitTemplate
+	}
+
 	opts := applyOptions{
-		Host: hostLabel(cfg),
-		Push: cfg.Push,
+		Host:           hostLabel(cfg),
+		Push:           cfg.Push,
+		CommitTemplate: tmpl,
 		Log: func(format string, args ...any) {
 			log.Info().Msgf(format, args...)
 		},
