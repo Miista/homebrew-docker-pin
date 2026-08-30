@@ -105,8 +105,17 @@ func apply(f watch.Finding, d Docker, g Git, opts applyOptions) Result {
 
 	ref := candidateRef(f)
 
+	// What the container is called, so every line says which one it changed.
+	// The compose service name alone does not: a host runs several stacks,
+	// and a service is often named for what it does rather than what it is,
+	// so "soaking: pulling ..." reads as a fragment.
+	container := f.Service
+	if d.ContainerName != nil {
+		container = d.ContainerName(f.Service)
+	}
+
 	// Pull first: the cheapest failure is the one before anything is written.
-	opts.step("%s: pulling %s", f.Service, ref)
+	opts.step("pulling %s for %s", ref, container)
 	if err := pullImage(ref, d); err != nil {
 		return fail(res, StepPull, err)
 	}
@@ -117,7 +126,7 @@ func apply(f watch.Finding, d Docker, g Git, opts applyOptions) Result {
 	}
 	res.Outcome = out
 	if out.Changed {
-		opts.step("%s: pinned %s", f.Service, out.NewRaw)
+		opts.step("pinned %s to %s", container, out.NewRaw)
 	}
 	if !out.Changed {
 		// The registry offered something the file already pins. Nothing to
@@ -125,10 +134,10 @@ func apply(f watch.Finding, d Docker, g Git, opts applyOptions) Result {
 		return res
 	}
 
-	opts.step("%s: recreating the container", f.Service)
+	opts.step("recreating %s", container)
 	if err := recreate(f.File, f.Service, d); err != nil {
 		res = fail(res, StepRecreate, err)
-		opts.step("%s: it refused the new image, putting the file back", f.Service)
+		opts.step("%s refused the new image, putting the compose file back", container)
 		// The container refused the new image, so the file must not keep
 		// claiming it. A failure to restore is worse than the original
 		// problem and is reported as such.
@@ -145,14 +154,14 @@ func apply(f watch.Finding, d Docker, g Git, opts applyOptions) Result {
 	res.Applied = true
 
 	msg := commitMessage(opts.Host, f.Service, pin.TagOf(before), out.Tag)
-	opts.step("%s: committing %q", f.Service, msg)
+	opts.step("committing %q", msg)
 	if err := commit(f.File, msg, g); err != nil {
 		res.FailedAt, res.Err = StepCommit, err
 		return res
 	}
 
 	if opts.Push {
-		opts.step("%s: pushing", f.Service)
+		opts.step("pushing the commit")
 		if err := push(f.File, g); err != nil {
 			// A commit that did not reach the remote rides along with the
 			// next push. Worth saying, not worth failing over.

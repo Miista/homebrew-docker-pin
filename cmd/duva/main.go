@@ -436,11 +436,15 @@ func (s *store) Apply(service string) (string, error) {
 		s.logf("%s: asked to update, but nothing is waiting for it", service)
 		return "", err
 	}
-	s.logf("%s: updating to %s, asked for from the queue", service, f.Candidate)
+	container := service
+	if realDocker.ContainerName != nil {
+		container = realDocker.ContainerName(service)
+	}
+	s.logf("updating %s to %s, asked for from the queue", container, f.Candidate)
 
 	res := s.act(f)
 	if res.Failed() {
-		s.logf("%s: %s failed: %v", service, res.FailedAt, res.Err)
+		s.logf("%s failed for %s: %v", res.FailedAt, container, res.Err)
 		return "", fmt.Errorf("%s failed: %v", res.FailedAt, res.Err)
 	}
 
@@ -456,6 +460,8 @@ func (s *store) Apply(service string) (string, error) {
 		return "", fmt.Errorf("applied, but saving state failed: %w", err)
 	}
 
+	// The page shows this beside the service name it was clicked for, so it
+	// reads as a fragment there; the log names the container itself.
 	msg := fmt.Sprintf("updated to %s", res.Outcome.Tag)
 	if soaking {
 		// Worth saying: the operator did something duva would not have done
@@ -468,7 +474,7 @@ func (s *store) Apply(service string) (string, error) {
 	if res.FailedAt != "" {
 		msg += fmt.Sprintf(" — but %s failed: %v", res.FailedAt, res.Err)
 	}
-	s.logf("%s: %s", service, msg)
+	s.logf("%s is %s", container, msg)
 	return msg, nil
 }
 

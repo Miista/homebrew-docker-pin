@@ -30,6 +30,12 @@ type Docker struct {
 	GetDigest func(ref string) (string, error)
 	// ComposeUp recreates one service so it runs the newly pinned image.
 	ComposeUp func(composeFile, service string) error
+	// ContainerName is what the service's container is called, for saying
+	// which one is being changed. A compose service name alone does not
+	// identify a container on a host running several stacks -- and reads as a
+	// fragment rather than a thing, since a service is often named for what
+	// it does.
+	ContainerName func(service string) string
 }
 
 // Git is the git access applying an update needs. duva owns this, not
@@ -59,9 +65,10 @@ type Git struct {
 // at runtime. Watchtower and WUD both work this way, for the same reason:
 // there is nothing the CLI does here that the daemon does not expose.
 var realDocker = Docker{
-	Pull:      pullImageAPI,
-	GetDigest: imageDigest,
-	ComposeUp: recreateContainer,
+	Pull:          pullImageAPI,
+	GetDigest:     imageDigest,
+	ComposeUp:     recreateContainer,
+	ContainerName: containerNameOf,
 }
 
 var realGit = Git{
