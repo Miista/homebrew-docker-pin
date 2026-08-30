@@ -335,11 +335,10 @@ func (s *Scenario) WriteCompose(content string) {
 // arrive after pinning, not before.
 func (s *Scenario) PushUpdates() {
 	s.t.Helper()
-	// The repo is the one the compose file references: a scenario offers
-	// newer versions OF something it runs.
-	repo := s.repo()
-	for _, tag := range s.manifest().Updates {
-		s.Push(repo, tag)
+	for repo, tags := range s.manifest().Updates {
+		for _, tag := range tags {
+			s.Push(repo, tag)
+		}
 	}
 }
 
@@ -350,9 +349,14 @@ func (s *Scenario) PushUpdates() {
 // than a bare list so it can say which of its parts is which, and explain
 // itself in comments.
 type manifest struct {
-	// Updates are the newer tags duva should find. Nothing references them,
-	// which is why they cannot come from the compose file.
-	Updates []string `yaml:"updates"`
+	// Updates are the newer tags duva should find, by the repository they
+	// belong to. Nothing references them, which is why they cannot come from
+	// the compose file the way the images a service runs do.
+	//
+	// Keyed by repo so a scenario can run more than one image and offer each
+	// its own releases -- a stack with a database and a web service does not
+	// version them together.
+	Updates map[string][]string `yaml:"updates"`
 }
 
 func (s *Scenario) manifest() manifest {
@@ -366,18 +370,6 @@ func (s *Scenario) manifest() manifest {
 		s.t.Fatalf("reading %s's scenario.yaml: %v", s.Name, err)
 	}
 	return m
-}
-
-// repo is the image name a scenario's services use, so that its updates are
-// newer versions of something it actually runs.
-func (s *Scenario) repo() string {
-	s.t.Helper()
-	declared := s.declaredImages()
-	if len(declared) == 0 {
-		s.t.Fatalf("%s references no image from %s", s.Name, registryHost)
-	}
-	repo, _, _ := strings.Cut(strings.TrimPrefix(declared[0], registryHost+"/"), ":")
-	return repo
 }
 
 // Watched is every service carrying a duva.* label, which is what a fixture

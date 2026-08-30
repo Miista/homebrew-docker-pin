@@ -197,7 +197,7 @@ func (s *State) ReconcileSoaking(seen []Finding) {
 			CurrentTag: f.CurrentTag,
 			Candidate:  f.Soaking.Tag,
 			Bump:       bump,
-			Remaining:  humanDuration(f.Soaking.Delay - f.Soaking.Age),
+			Remaining:  HumanDuration(f.Soaking.Delay - f.Soaking.Age),
 			Outcome:    soakOutcome(bump, f.Auto),
 		}
 	}
@@ -212,9 +212,12 @@ func soakOutcome(bump registry.Kind, auto Auto) string {
 	return "moves to approval"
 }
 
-// humanDuration renders a wait in the largest unit that says something: days
+// HumanDuration renders a wait in the largest unit that says something: days
 // for a soak measured in days, hours for the last day of it.
-func humanDuration(d time.Duration) string {
+//
+// Exported so the log and the page say the same thing. "168h0m0s" is what a
+// duration prints as, not what a week is called.
+func HumanDuration(d time.Duration) string {
 	if d < 0 {
 		d = 0
 	}
