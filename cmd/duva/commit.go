@@ -19,7 +19,11 @@ import (
 // default works with nothing mounted at all.
 
 // commitTemplatePath is where a template is read from, if one is mounted.
-const commitTemplatePath = "/etc/duva/commit-template"
+//
+// A variable rather than a constant so tests can point it at a file they
+// wrote; nothing else changes it, the same way composeDir and stateFile are
+// the contract everywhere but a test.
+var commitTemplatePath = "/etc/duva/commit-template"
 
 // defaultCommitTemplate is used when nothing is mounted -- which is the
 // common case, and should need no configuration.
