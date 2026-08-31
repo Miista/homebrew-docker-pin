@@ -336,3 +336,74 @@ func TestReconcileSoaking_ErroredServiceKeepsItsRow(t *testing.T) {
 		t.Error("a failed check should not drop what was soaking")
 	}
 }
+
+// HumanDuration is what the log and the page both say a wait is, which is why
+// it is exported rather than formatted twice. These are the wordings, not
+// examples of them: a soak with 40 minutes left says "less than an hour", and
+// changing that changes what an operator reads.
+func TestHumanDuration(t *testing.T) {
+	cases := []struct {
+		d    time.Duration
+		want string
+	}{
+		// Days, singular and plural.
+		{7 * 24 * time.Hour, "7 days"},
+		{2 * 24 * time.Hour, "2 days"},
+		{25 * time.Hour, "1 day"},
+
+		// Under a day it switches to hours.
+		{23 * time.Hour, "23 hours"},
+		{2 * time.Hour, "2 hours"},
+
+		// The last hour is not counted down: "1 hour" and "0 hours" would both
+		// be wrong for a wait that is nearly over, and precision here is false
+		// anyway -- the next check is what ends the soak, not the clock.
+		{90 * time.Minute, "less than an hour"},
+		{40 * time.Minute, "less than an hour"},
+		{0, "less than an hour"},
+
+		// A soak that finished between the check and the render is not
+		// negative time; it has no time left.
+		{-5 * time.Hour, "less than an hour"},
+	}
+	for _, c := range cases {
+		if got := HumanDuration(c.d); got != c.want {
+			t.Errorf("HumanDuration(%s) = %q, want %q", c.d, got, c.want)
+		}
+	}
+}
+
+// soakOutcome is the promise the page makes about what happens when the wait
+// ends. Getting it backwards tells someone an update will apply itself when it
+// will actually sit in the queue, or the reverse.
+func TestSoakOutcome(t *testing.T) {
+	const auto = "will be applied automatically"
+	const queue = "moves to approval"
+
+	cases := []struct {
+		bump registry.Kind
+		auto Auto
+		want string
+	}{
+		// Within the policy: duva applies it when the soak ends.
+		{registry.KindPatch, AutoPatch, auto},
+		{registry.KindPatch, AutoMinor, auto},
+		{registry.KindMinor, AutoMinor, auto},
+		{registry.KindMajor, AutoMajor, auto},
+
+		// Beyond it: the soak ends and a person still has to decide.
+		{registry.KindMinor, AutoPatch, queue},
+		{registry.KindMajor, AutoMinor, queue},
+
+		// No policy at all. Every bump waits for a human, including a patch --
+		// this was the untested case, and it is the default a service has
+		// until someone sets duva.auto.
+		{registry.KindPatch, AutoNone, queue},
+		{registry.KindMajor, AutoNone, queue},
+	}
+	for _, c := range cases {
+		if got := soakOutcome(c.bump, c.auto); got != c.want {
+			t.Errorf("soakOutcome(%v, %v) = %q, want %q", c.bump, c.auto, got, c.want)
+		}
+	}
+}
