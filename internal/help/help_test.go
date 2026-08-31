@@ -13,11 +13,10 @@ import (
 // Every command the CLI dispatches must have a topic, or `docker pin help
 // <cmd>` silently falls back to the general usage for a command that exists.
 func TestPinTopics_CoverEveryDispatchedCommand(t *testing.T) {
-	// Kept in step with the switch in cmd/docker-pin/main.go and the
-	// subcommands in runSchedule. A new case there needs a topic here.
+	// Kept in step with the switch in cmd/docker-pin/main.go. A new case
+	// there needs a topic here.
 	for _, cmd := range []string{
-		"pin", "upgrade", "list", "schedule", "version",
-		"schedule apply", "schedule status", "schedule remove", "schedule run",
+		"pin", "upgrade", "list", "version",
 	} {
 		if _, ok := For(PinTopics, cmd); !ok {
 			t.Errorf("no help topic for %q", cmd)
@@ -91,7 +90,7 @@ func TestTopics_UsageLineNamesTheCommand(t *testing.T) {
 // PinUsage and UnpinUsage are what a bare invocation prints, so they must at
 // least list the commands a user can reach.
 func TestUsage_ListsTheMainCommands(t *testing.T) {
-	for _, cmd := range []string{"upgrade", "list", "schedule"} {
+	for _, cmd := range []string{"upgrade", "list"} {
 		if !strings.Contains(PinUsage, cmd) {
 			t.Errorf("PinUsage does not mention %q", cmd)
 		}

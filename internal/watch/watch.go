@@ -24,7 +24,6 @@ import (
 	"github.com/Miista/homebrew-docker-pin/internal/compose"
 	"github.com/Miista/homebrew-docker-pin/internal/pin"
 	"github.com/Miista/homebrew-docker-pin/internal/registry"
-	"github.com/Miista/homebrew-docker-pin/internal/schedule"
 )
 
 // Registry is the registry access detection needs, seamed for tests.
@@ -315,7 +314,7 @@ func constrained(f Finding, rules Rules, reg Registry) Finding {
 	// not something older did qualify: a service can be offered 1.2.0 while
 	// 1.3.0 is still soaking, and both are worth seeing.
 	if len(c.TooFresh) > 0 {
-		if delay, err := schedule.ParseDelay(rules.Delay); err == nil {
+		if delay, err := pin.ParseDelay(rules.Delay); err == nil {
 			f.Soaking = &SoakingTag{
 				Tag:   c.TooFresh[0].Tag,
 				Age:   c.TooFresh[0].Age,

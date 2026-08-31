@@ -83,11 +83,6 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
-	case "schedule":
-		if err := runSchedule(args[1:], realDocker, realSys); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
 	case "list":
 		if err := runList(args[1:]); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -112,12 +107,6 @@ func maybeHelp(args []string) bool {
 	topic := ""
 	if want && len(args) > 1 {
 		topic = args[1]
-		if topic == "schedule" && len(args) > 2 {
-			switch args[2] {
-			case "apply", "status", "remove", "run":
-				topic = "schedule " + args[2]
-			}
-		}
 	}
 	for _, a := range args {
 		if a == "-h" || a == "--help" {
@@ -131,14 +120,6 @@ func maybeHelp(args []string) bool {
 		switch args[0] {
 		case "upgrade", "list", "version":
 			topic = args[0]
-		case "schedule":
-			topic = "schedule"
-			if len(args) > 1 {
-				switch args[1] {
-				case "apply", "status", "remove", "run":
-					topic = "schedule " + args[1]
-				}
-			}
 		case "help":
 			// bare `help`: fall through to full usage
 		case "-h", "--help":
