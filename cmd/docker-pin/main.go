@@ -1,6 +1,8 @@
 package main
 
 import (
+	_ "crypto/sha256"
+
 	"fmt"
 	"io"
 	"os"
@@ -13,6 +15,8 @@ import (
 	"sync/atomic"
 	"text/tabwriter"
 	"time"
+
+	"github.com/opencontainers/go-digest"
 
 	"github.com/Miista/homebrew-docker-pin/internal/compose"
 	"github.com/Miista/homebrew-docker-pin/internal/docker"
@@ -348,6 +352,21 @@ func pinInFile(composeFile, service string, d dockerFuncs, dryRun bool) (pinOutc
 	}
 
 	if strings.Contains(raw, "@sha256:") {
+		// Carrying a digest is not the same as carrying a usable one. Reporting
+		// "already pinned" for `nginx:1.25@sha256:abc` is the worst answer
+		// available: the command whose job is to guarantee a pin says the work
+		// is done, exits 0, and leaves a reference the daemon rejects outright.
+		//
+		// An error rather than a silent re-pin, because overwriting it would
+		// discard something a person wrote -- and the fix is one they should
+		// choose. `docker unpin` strips it, `docker pin upgrade` replaces it;
+		// both work on a malformed digest today.
+		if d := digestOf(raw); digest.Digest(d).Validate() != nil {
+			return pinOutcome{}, fmt.Errorf(
+				"%s is pinned to %s, which is not a valid digest and cannot be pulled: "+
+					"`docker unpin %s` to strip it, or `docker pin upgrade %s <version>` to replace it",
+				service, d, service, service)
+		}
 		if !dryRun {
 			fmt.Printf("%s is already pinned to %s\n", service, raw)
 			fmt.Println("Run `docker unpin` first, or `docker pin upgrade` to move to a new version.")

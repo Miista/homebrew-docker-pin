@@ -703,3 +703,49 @@ func TestPinInFileStillPinsALiteralReference(t *testing.T) {
 		t.Errorf("the service was not pinned, got:\n%s", got)
 	}
 }
+
+// Carrying a digest is not the same as carrying a usable one. `nginx:1.25@sha256:abc`
+// used to report "already pinned" and exit 0 -- the command whose job is to
+// guarantee a pin saying the work was done, for a reference the daemon rejects.
+func TestPinInFileRejectsAMalformedDigest(t *testing.T) {
+	f := writeTempCompose(t, "services:\n  web:\n    image: nginx:1.25@sha256:abc\n")
+
+	touched := false
+	d := dockerFuncs{
+		getDigest: func(string) (string, error) { touched = true; return "", nil },
+		pull:      func(string) error { touched = true; return nil },
+	}
+
+	_, err := pinInFile(f, "web", d, false)
+	if err == nil {
+		t.Fatal("a malformed digest should be an error, not an already-pinned report")
+	}
+	// The remedies matter more than the wording: both work on a bad digest.
+	for _, want := range []string{"unpin", "upgrade"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the error should point at `docker %s`, got: %v", want, err)
+		}
+	}
+	if touched {
+		t.Error("nothing should be pulled for a reference that cannot resolve")
+	}
+	// Left alone: overwriting would discard something a person wrote.
+	if got := readCompose(t, f); !strings.Contains(got, "sha256:abc") {
+		t.Errorf("the file should not be rewritten, got:\n%s", got)
+	}
+}
+
+// The opposite: a well-formed digest still reports already-pinned and succeeds.
+// A check that rejected every digest would pass the test above.
+func TestPinInFileAcceptsAValidDigest(t *testing.T) {
+	const good = "sha256:41b194461e4bae16f9b25d68b0976ed4735b89ca625c89aad88e1c1c3b7e8860"
+	f := writeTempCompose(t, "services:\n  web:\n    image: nginx:1.25@"+good+"\n")
+
+	out, err := pinInFile(f, "web", dockerFuncs{}, false)
+	if err != nil {
+		t.Fatalf("a valid digest should be accepted: %v", err)
+	}
+	if !out.AlreadyPinned {
+		t.Error("a validly pinned service should report as already pinned")
+	}
+}
