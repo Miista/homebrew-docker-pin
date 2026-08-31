@@ -159,3 +159,24 @@ func TestRunAll_SummaryIsSorted(t *testing.T) {
 		}
 	}
 }
+
+// unpin deliberately does NOT validate the digest it removes. Stripping is
+// textual -- nothing is resolved or pulled -- so a malformed digest is exactly
+// the case where unpinning is most useful: it is how a broken pin gets fixed.
+//
+// `docker pin` refuses such a reference and points here, so if this ever
+// started validating too, a broken compose file would have no way out.
+func TestUnpinStripsAMalformedDigest(t *testing.T) {
+	f := writeTempCompose(t, "services:\n  web:\n    image: nginx:1.25@sha256:abc\n")
+
+	if _, err := run("web", false); err != nil {
+		t.Fatalf("unpin should strip a malformed digest, not refuse it: %v", err)
+	}
+	got := readCompose(t, f)
+	if strings.Contains(got, "@sha256:") {
+		t.Errorf("the digest should be gone, got:\n%s", got)
+	}
+	if !strings.Contains(got, "nginx:1.25") {
+		t.Errorf("the tag should survive, got:\n%s", got)
+	}
+}
