@@ -6,7 +6,7 @@ BINARIES     := docker-pin docker-unpin
 # only shares certain host paths -- /tmp is not one of them.
 COVER_DIR   := $(HOME)/.cache/docker-pin-cover
 
-.PHONY: all build install clean docker-duva test test-unit test-integration cover cover-html
+.PHONY: all build install clean docker-duva test test-unit test-integration cover cover-html conditions
 
 all: build
 
@@ -90,3 +90,41 @@ cover-html: cover
 clean:
 	rm -f $(BINARIES) duva
 	rm -rf $(COVER_DIR)
+
+# --- condition coverage --------------------------------------------------
+# `go test -cover` counts statements: whether a line ran, not whether both
+# ways through it were taken. That is blind to a whole class of bug -- duva
+# recorded a notification it had failed to send, and both lines ran in every
+# test; what was never exercised was the path where the first fails and the
+# second happens anyway.
+#
+# gobco instruments each condition and reports the ones that were only ever
+# true, or only ever false. Not part of `make test`: it is a question you ask
+# while writing tests, and most of what it reports is error plumbing that is
+# not worth a fault injector.
+#
+# Install with: go install github.com/rillig/gobco@latest
+#
+# The mkdir is a workaround, not a courtesy: gobco walks the module and fails
+# outright if a directory it saw is gone, and the suites delete testbed*/ when
+# they finish.
+# Every package with tests, less the ones whose conditions are scaffolding:
+# the integration suite and its receiver, the sandbox, the fixture generator
+# and the man-page tool exist to test or build other things, and their branches
+# are not duva's behaviour.
+CONDITION_PKGS ?= $(shell go list ./... \
+	| sed 's|^github.com/Miista/homebrew-docker-pin/||' \
+	| grep -vE '^(github.com|test/|tools/|internal/fixture)')
+GOBCO ?= $(shell command -v gobco 2>/dev/null || echo $(shell go env GOPATH)/bin/gobco)
+
+conditions:
+	@test -x "$(GOBCO)" || { \
+		echo "gobco not found; install with: go install github.com/rillig/gobco@latest"; \
+		exit 1; \
+	}
+	@mkdir -p testbed-scratch
+	@for p in $(CONDITION_PKGS); do \
+		echo "== $$p"; \
+		(cd $$p && "$(GOBCO)" 2>&1 | grep -vE "^(ok|---|PASS|FAIL)[[:space:]]" ) || true; \
+	done
+	@rmdir testbed-scratch 2>/dev/null || true

@@ -397,3 +397,40 @@ func TestProject_ValidDigestIsStillWatched(t *testing.T) {
 		t.Errorf("CurrentDigest = %q, want the pinned digest", f.CurrentDigest)
 	}
 }
+
+// NeedsApproval and AutoApplies are how the rest of duva sorts a finding into
+// "act on this" or "ask about it", and they are not opposites: a service with
+// nothing newer is neither. Untested until now, which gobco noticed before
+// statement coverage could -- both conditions ran, neither was ever false.
+func TestFindingApprovalAndAutoAreNotOpposites(t *testing.T) {
+	cases := []struct {
+		name           string
+		f              Finding
+		approval, auto bool
+	}{
+		{"available and beyond policy",
+			Finding{Status: StatusAvailable, Decision: DecideApprove}, true, false},
+		{"available and within policy",
+			Finding{Status: StatusAvailable, Decision: DecideAuto}, false, true},
+
+		// A decision on a finding with nothing available is stale: it must not
+		// make the service look actionable.
+		{"nothing newer, decision left over",
+			Finding{Status: StatusUpToDate, Decision: DecideApprove}, false, false},
+		{"not watched",
+			Finding{Status: StatusSkipped, Decision: DecideApprove}, false, false},
+		{"the check failed",
+			Finding{Status: StatusError, Decision: DecideAuto}, false, false},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := c.f.NeedsApproval(); got != c.approval {
+				t.Errorf("NeedsApproval() = %v, want %v", got, c.approval)
+			}
+			if got := c.f.AutoApplies(); got != c.auto {
+				t.Errorf("AutoApplies() = %v, want %v", got, c.auto)
+			}
+		})
+	}
+}
