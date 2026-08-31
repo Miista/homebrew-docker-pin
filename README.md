@@ -172,81 +172,6 @@ when any exist, so a single step enforces "everything in this repo is pinned":
 
 Read-only — parses the compose file, never touches Docker or the network.
 
-### Scheduled upgrades (systemd)
-
-Declare a schedule in a git-tracked `pin.yaml` (also accepts `pin.yml`) next
-to the compose file:
-
-```yaml
-schedule: "0 6 * * 1"        # 5-field cron expression, required
-services:                     # optional; omitted = every service
-  - caddy
-  - name: paperless-db        # constrained: upgrade only to registry tags
-    tags: '^17\.\d+-alpine$'  # matching this regex — majors stay pinned
-    exclude: '(alpha|beta|rc)' # optional; drop matching candidates
-    delay: 7d                 # optional; only adopt tags published at least
-                              # this long ago ("48h", "7d", "2w")
-on_change: ./pin-upgraded.sh  # optional; run in the compose dir after
-                              # upgrades changed the compose file
-hostname: myhost              # optional; box name in notification titles
-                              # (defaults to the OS hostname)
-notify:                       # optional; report each run via ntfy
-  ntfy:
-    url: https://ntfy.example.net
-    topic: docker-pin
-    token_env: NTFY_TOKEN     # env var holding the token (this is the default)
-    token_file: /etc/ntfy.env # optional KEY=VALUE file to read it from
-```
-
-```bash
-sudo docker pin schedule apply    # install/update the systemd timer (idempotent)
-docker pin schedule status        # config, install/drift state, next fire time
-sudo docker pin schedule remove   # disable + delete the units; pin.yaml stays
-docker pin schedule run           # one scheduled run in the foreground
-docker pin schedule run --dry-run # full discovery, prints what would upgrade,
-                                  # changes nothing
-```
-
-`apply` translates the cron expression to a systemd `OnCalendar` and writes a
-`docker-pin-<dir>-<hash>.service`/`.timer` pair into `/etc/systemd/system`.
-Each run treats every configured service as its own transaction: upgrade the
-pin like `docker pin upgrade`, `docker compose up -d <service>`, run
-`on_change`, send one notification — independently per service. `on_change`
-receives `PIN_SERVICE`, `PIN_OLD_IMAGE` and `PIN_NEW_IMAGE` in its
-environment, so a hook like
-
-```yaml
-on_change: git add docker-compose.yml && git commit -m "$PIN_SERVICE: upgrade to $PIN_NEW_IMAGE" && git push
-```
-
-produces one revertable commit per service upgrade. The full set of hook
-variables: `PIN_SERVICE`, `PIN_OLD_IMAGE`/`PIN_NEW_IMAGE` (full references),
-`PIN_OLD_TAG`/`PIN_NEW_TAG` and `PIN_OLD_DIGEST`/`PIN_NEW_DIGEST` — so e.g.
-`git commit -m "$PIN_SERVICE: $PIN_OLD_TAG -> $PIN_NEW_TAG"` needs no string
-surgery. A service with a `tags` regex only ever moves to the newest registry
-tag matching that regex (numeric version order, prerelease/build suffixes rank
-below the bare release) and is left untouched when nothing newer matches — it
-never falls back to a moving tag, so e.g. a database can track `17.x-alpine`
-patches while never jumping to 18. `exclude` drops candidates matching a
-second regex. `delay` adds a soak period: the newest candidate published at
-least that long ago wins, so a release gets time in the wild before you adopt
-it (publish time from the Docker Hub tag API, or the image config's `created`
-timestamp on GHCR and other OCI registries; at most 10 candidate dates are
-checked per service per run). With `notify.ntfy` configured, every run
-that upgraded or failed anything posts a summary (failures at high priority);
-the token is read from the environment or a `KEY=VALUE` file, never from
-`pin.yaml`. Runs never leave the system in a bad state: if a service's
-`compose up` fails, only that service's pin is rolled back and re-asserted —
-the other services proceed untouched and the failed upgrade retries next run —
-and a failed `on_change` (e.g. a rejected `git push`) is non-fatal: the local
-commit rides along with the next push. Restricting both day-of-month and
-day-of-week in the cron
-expression is rejected (cron ORs them, systemd ANDs them). Requires Linux with
-systemd.
-
-Because the schedule lives in `pin.yaml`, restoring a host from backup is
-just: clone the repo, `sudo docker pin schedule apply`.
-
 ### Shell completion
 
 Both plugins implement the completion protocol the Docker CLI (v25+) uses to
@@ -421,7 +346,7 @@ pinned. If you have services pinned by an older version, check for ones whose
 tag you did not choose yourself.
 
 The registry tag-listing code is still used to find upgrade candidates
-(`docker pin upgrade`, `schedule`, and duva); it just no longer decides what
+(`docker pin upgrade` and duva); it just no longer decides what
 tag a pin is written under. Supported registries: **Docker Hub**, **GHCR**, and
 any **OCI-compliant registry** (bearer auth discovered via the
 `WWW-Authenticate` challenge).

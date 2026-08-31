@@ -2,9 +2,8 @@ package watch
 
 import (
 	"fmt"
-	"strings"
-
 	"github.com/Miista/homebrew-docker-pin/internal/registry"
+	"strings"
 )
 
 // Auto is how large a change duva may apply without being asked, read from a

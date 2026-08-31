@@ -26,17 +26,13 @@ func runComplete(args []string) {
 	var candidates []string
 	switch {
 	case len(args) == 0:
-		candidates = append([]string{"upgrade", "list", "schedule", "version", "help", "--all"}, composeServices()...)
-	case args[0] == "schedule" && len(args) == 1:
-		candidates = []string{"apply", "status", "remove", "run"}
-	case args[0] == "schedule" && args[1] == "run":
-		candidates = []string{"--dry-run"}
+		candidates = append([]string{"upgrade", "list", "version", "help", "--all"}, composeServices()...)
 	case args[0] == "upgrade" && len(args) == 1:
 		candidates = append([]string{"--all"}, composeServices()...)
 	case args[0] == "list":
 		candidates = []string{"--missing", "--quiet"}
 	case args[0] == "help":
-		candidates = []string{"pin", "upgrade", "list", "schedule", "version"}
+		candidates = []string{"pin", "upgrade", "list", "version"}
 	}
 
 	for _, c := range candidates {

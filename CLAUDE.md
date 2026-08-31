@@ -58,7 +58,7 @@ not use this — it runs in a container and talks to the daemon's API over the
 mounted socket, so its image needs no CLI.
 
 ### `internal/registry`
-Tag listing and selection for `upgrade`, `schedule` and duva. Talks to
+Tag listing and selection for `upgrade` and duva. Talks to
 registries directly over HTTPS — GHCR, Docker Hub, or any OCI Distribution
 registry — discovering bearer auth from the `WWW-Authenticate` challenge.
 - `ListMatchingTags` / `MatchingCandidates` keep only version-like tags and
@@ -95,6 +95,11 @@ with a button that applies through the same path an unattended run uses.
 A container, not a CLI plugin. It watches the compose project mounted at
 `/compose` and records state in `/data/duva.json` — both fixed, because duva
 runs in a container where they are the contract.
+
+`DUVA_SCHEDULE` is a 5-field cron expression, parsed by `internal/croncal`,
+which rejects restricting both day-of-month and day-of-week: cron ORs those,
+systemd ANDs them, and a schedule that means two different things depending on
+who reads it is not a schedule.
 
 **It must be a service in the stack it watches.** duva reads its own
 container's compose labels to learn which project it is in; outside one there
@@ -151,51 +156,7 @@ unattended. An unknown label is an error, not something ignored.
   image/tag/digest/pin-status (compose parse only — no docker/network calls).
   `--missing` shows only unpinned services and exits 1 if any exist (CI gate);
   `-q` prints bare service names for piping.
-- **`docker pin schedule <apply|status|remove|run>`**: declarative scheduled
-  upgrades driven by a `pin.yaml` (or `.yml`) next to the compose file
-  (`schedule:` cron expr, optional `services:` list, optional `on_change:`
-  hook, optional `notify.ntfy:` target). A `services:` entry is either a bare
-  name or `{name, tags, exclude, delay}` (custom `Service.UnmarshalYAML`):
-  `tags` is a regex constraining which registry tags qualify, `exclude` drops
-  matching candidates, and `delay` ("48h"/"7d"/"2w", `schedule.ParseDelay`)
-  requires a candidate to have been published at least that long ago —
-  `constrainedTarget` walks the candidates newest-first (capped at
-  `maxDelayChecks`=10 date lookups) and picks the newest sufficiently aged
-  one. Publish time comes from `registry.TagCreated`: the Docker Hub tag API's
-  `tag_last_pushed`, or manifest→config-blob `created` for GHCR/any OCI
-  registry (multi-arch indexes descend into the first non-attestation
-  sub-manifest). Candidate selection is `registry.ListTags` +
-  `MatchingCandidates` sorted by `registry.CompareVersions` (numeric dotted
-  cores; suffixed builds rank below the bare release), all in
-  `internal/registry/tags.go`. Constrained services are skipped — never
-  falling back to a moving tag — when nothing qualifies. `exclude`/`delay`
-  require `tags`. `run` executes each service as an independent transaction
-  (`upgradeServiceTxn`): pin rewrite → `docker compose up -d <service>` →
-  `on_change` (env: `PIN_SERVICE`, `PIN_OLD_IMAGE`/`PIN_NEW_IMAGE`,
-  `PIN_OLD_TAG`/`PIN_NEW_TAG`, `PIN_OLD_DIGEST`/`PIN_NEW_DIGEST` via
-  `tagAndDigest`, so hooks can commit per service) → per-service ntfy notification
-  (`notifyUpgraded`/`notifyFailed`). A failed `compose up` rolls back only
-  that service's pin (restore pre-txn bytes + re-up) — other services proceed
-  and the upgrade retries next run; a failed `on_change` is non-fatal (warn +
-  note in the notification — a stranded commit rides with the next push).
-  `run --dry-run` (`-n`) does full discovery including pulls but changes
-  nothing — prints "Would upgrade ..." per service; no compose rewrite, up,
-  on_change, or notifications.
-  `notify.ntfy` (url + topic; token via `token_env`, default `NTFY_TOKEN`,
-  optionally sourced from a `token_file` KEY=VALUE file so no secret sits in
-  pin.yaml) makes `run` post a summary when anything upgraded or failed
-  (failures at priority 4, via `internal/notify`); notification failures only
-  warn. `apply`/`remove` install/remove a system-level systemd timer+service
-  pair (`docker-pin-<slug>.*` in /etc/systemd/system; slug = compose-dir
-  basename + path-hash; root + Linux required); `apply` is idempotent.
-  `status` shows config, install/drift state and next fire time. `run` is what
-  the service ExecStart calls: upgrades each configured service (collecting
-  failures), and if the compose file changed runs `docker compose up -d` then
-  `on_change` via `sh -c` in the compose dir. Cron→OnCalendar translation
-  lives in `internal/croncal` (rejects restricting both day-of-month and
-  day-of-week: cron ORs, systemd ANDs); config/unit generation in
-  `internal/schedule` (pure, tested on any OS); systemctl/exec calls are
-  seamed via `sysFuncs` in `cmd/docker-pin/schedule.go`.
+
 - **`docker unpin <service>`**: strips the `@sha256:...` digest, keeping `base:tag`;
   no-op if not pinned.
 - `--all` is supported by all commands.

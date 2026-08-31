@@ -17,6 +17,9 @@ import (
 	"strings"
 
 	"github.com/Miista/homebrew-docker-pin/internal/compose"
+	"regexp"
+	"strconv"
+	"time"
 )
 
 // Docker is the subset of docker operations the engine needs, as a seam so
@@ -126,4 +129,33 @@ func ShortDigest(digest string) string {
 		return digest[:len(prefix)+12]
 	}
 	return digest
+}
+
+// duva.delay is how long a release must have been out before duva will take
+// it. It lived in internal/schedule while `docker pin schedule` owned the
+// concept of waiting; the label is duva's, so the parser is too.
+
+var delayRe = regexp.MustCompile(`^(\d+)(h|d|w)$`)
+
+// ParseDelay parses a release-age delay: "48h", "7d" or "2w".
+//
+// Days and weeks rather than only hours because that is how the wait is
+// actually chosen -- "a week" is a decision, "168h" is arithmetic.
+func ParseDelay(s string) (time.Duration, error) {
+	m := delayRe.FindStringSubmatch(strings.TrimSpace(s))
+	if m == nil {
+		return 0, fmt.Errorf("invalid delay %q (use e.g. \"48h\", \"7d\", \"2w\")", s)
+	}
+	n, err := strconv.Atoi(m[1])
+	if err != nil {
+		return 0, err
+	}
+	unit := time.Hour
+	switch m[2] {
+	case "d":
+		unit = 24 * time.Hour
+	case "w":
+		unit = 7 * 24 * time.Hour
+	}
+	return time.Duration(n) * unit, nil
 }

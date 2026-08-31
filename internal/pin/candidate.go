@@ -7,7 +7,6 @@ import (
 
 	"github.com/Miista/homebrew-docker-pin/internal/compose"
 	"github.com/Miista/homebrew-docker-pin/internal/registry"
-	"github.com/Miista/homebrew-docker-pin/internal/schedule"
 )
 
 // MaxDelayChecks bounds how many candidate publish dates one service may
@@ -89,7 +88,7 @@ func SelectCandidate(composeFile, service string, rules Rules, reg Registry) (Ca
 		return Candidate{Tag: candidates[0]}, nil
 	}
 
-	delay, err := schedule.ParseDelay(rules.Delay)
+	delay, err := ParseDelay(rules.Delay)
 	if err != nil {
 		return Candidate{}, err
 	}
