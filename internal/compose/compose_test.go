@@ -896,3 +896,190 @@ func TestHasUnexpandedVariable(t *testing.T) {
 		}
 	}
 }
+
+// findImageLine decides which line gets overwritten, so it is the one function
+// here where a wrong answer edits somebody's compose file. Both directions
+// matter: finding the right line, and refusing rather than guessing.
+func TestFindImageLine_FindsTheRightLine(t *testing.T) {
+	cases := []struct {
+		name    string
+		body    string
+		service string
+		want    string // the line content expected at the returned index
+		prefix  string
+	}{
+		{
+			name:    "the obvious case",
+			body:    "services:\n  web:\n    image: nginx:1.25\n",
+			service: "web",
+			want:    "    image: nginx:1.25",
+			prefix:  "    image: ",
+		},
+		{
+			// The second service's image, not the first: the walk has to leave
+			// one block before matching in the next.
+			name:    "a later service",
+			body:    "services:\n  web:\n    image: nginx\n  db:\n    image: postgres:16\n",
+			service: "db",
+			want:    "    image: postgres:16",
+			prefix:  "    image: ",
+		},
+		{
+			// A nested image: key -- under build: -- is at a different indent
+			// and must not be mistaken for the service's own.
+			name:    "not the nested one",
+			body:    "services:\n  web:\n    build:\n      image: ignore-me\n    image: nginx:1.25\n",
+			service: "web",
+			want:    "    image: nginx:1.25",
+			prefix:  "    image: ",
+		},
+		{
+			name:    "quoted service name",
+			body:    "services:\n  \"web\":\n    image: nginx:1.25\n",
+			service: "web",
+			want:    "    image: nginx:1.25",
+			prefix:  "    image: ",
+		},
+		{
+			// Blank lines and comments are neutral, not block boundaries.
+			name:    "blanks and comments between",
+			body:    "services:\n\n  # the front end\n  web:\n\n    # what it runs\n    image: nginx:1.25\n",
+			service: "web",
+			want:    "    image: nginx:1.25",
+			prefix:  "    image: ",
+		},
+		{
+			name:    "unusual indentation",
+			body:    "services:\n    web:\n        image: nginx:1.25\n",
+			service: "web",
+			want:    "        image: nginx:1.25",
+			prefix:  "        image: ",
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			lines := strings.Split(c.body, "\n")
+			idx, prefix, err := findImageLine(lines, c.service)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if lines[idx] != c.want {
+				t.Errorf("line %d is %q, want %q", idx, lines[idx], c.want)
+			}
+			if prefix != c.prefix {
+				t.Errorf("prefix = %q, want %q", prefix, c.prefix)
+			}
+		})
+	}
+}
+
+// The negative half. Every one of these must be an error: rewriting a line
+// picked by a wrong guess is worse than refusing, because the caller has no
+// way to tell a bad edit from a good one.
+func TestFindImageLine_RefusesRatherThanGuessing(t *testing.T) {
+	cases := []struct {
+		name    string
+		body    string
+		service string
+	}{
+		{
+			name:    "no services section at all",
+			body:    "version: '3'\nvolumes:\n  data:\n",
+			service: "web",
+		},
+		{
+			// services: exists, this service does not. The image: below
+			// belongs to someone else and must not be taken.
+			name:    "service not present",
+			body:    "services:\n  web:\n    image: nginx\n",
+			service: "db",
+		},
+		{
+			// A top-level key ends the services section. Anything after it is
+			// not a service, however much it looks like one.
+			name:    "service named only after services: ended",
+			body:    "services:\n  web:\n    image: nginx\nvolumes:\n  db:\n    image: postgres\n",
+			service: "db",
+		},
+		{
+			name:    "service present but has no image",
+			body:    "services:\n  web:\n    build: .\n    ports:\n      - 80:80\n",
+			service: "web",
+		},
+		{
+			// The next service starts before an image: is found, so the first
+			// one genuinely has none.
+			name:    "image belongs to the next service",
+			body:    "services:\n  web:\n    build: .\n  db:\n    image: postgres\n",
+			service: "web",
+		},
+		{
+			name:    "empty file",
+			body:    "",
+			service: "web",
+		},
+		{
+			// A partial name must not match: pinning "web" should never edit
+			// "web-backup".
+			name:    "a longer service with the same prefix",
+			body:    "services:\n  web-backup:\n    image: nginx\n",
+			service: "web",
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			lines := strings.Split(c.body, "\n")
+			idx, prefix, err := findImageLine(lines, c.service)
+			if err == nil {
+				t.Fatalf("expected an error, got line %d (%q) with prefix %q",
+					idx, lines[idx], prefix)
+			}
+			// An error must come with no line, not with a line the caller is
+			// trusted to ignore. PinImage writes to whatever index it is
+			// given, so a non-zero index alongside an error is one missed
+			// check away from overwriting an unrelated line.
+			if idx != 0 || prefix != "" {
+				t.Errorf("a refusal should carry no target, got line %d with prefix %q",
+					idx, prefix)
+			}
+		})
+	}
+}
+
+// The specific way this goes wrong: a top-level key ends the services section,
+// and without that boundary the walk keeps going into volumes: or networks:
+// and matches a key there. "db" under volumes: is not a service, and its
+// image: line -- if the file happens to have one -- is not duva's to rewrite.
+//
+// Written as its own test because it is the mutation that matters: removing
+// the indent == 0 guard makes the "service named only after services: ended"
+// case above return a real line number instead of an error, and a test that
+// only asserted "some error" would still have caught it while saying nothing
+// about what went wrong.
+func TestFindImageLine_StopsAtTheEndOfTheServicesSection(t *testing.T) {
+	body := "services:\n" +
+		"  web:\n" +
+		"    image: nginx\n" +
+		"volumes:\n" +
+		"  db:\n" +
+		"    image: postgres\n"
+	lines := strings.Split(body, "\n")
+
+	idx, _, err := findImageLine(lines, "db")
+	if err == nil {
+		t.Fatalf("db is a volume, not a service, but line %d (%q) was offered for rewriting",
+			idx, lines[idx])
+	}
+
+	// And the service that IS there is still found, so the boundary check has
+	// not simply broken the walk.
+	idx, _, err = findImageLine(lines, "web")
+	if err != nil {
+		t.Fatalf("web is a service and should still be found: %v", err)
+	}
+	if got := lines[idx]; got != "    image: nginx" {
+		t.Errorf("found %q, want web's own image line", got)
+	}
+}
