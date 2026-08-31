@@ -60,7 +60,7 @@ func TestIndex_ShortensDigestCandidates(t *testing.T) {
 	if strings.Contains(body, full) {
 		t.Error("full digest should not be rendered")
 	}
-	if !strings.Contains(body, "sha256:41b194461e4b") {
+	if !strings.Contains(body, "sha256:"+strings.TrimPrefix(full, "sha256:")[:12]) {
 		t.Error("short digest missing")
 	}
 }

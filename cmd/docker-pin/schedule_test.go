@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -55,9 +57,9 @@ func fakeSys(goos string, euid int) sysFuncs {
 
 const twoServices = `services:
   caddy:
-    image: caddy:2.7.6@sha256:old1
+    image: caddy:2.7.6@sha256:872737ae8121bc1b984efcbd5f7931d3822326351a30518a018c4c502b95c533
   cloudflared:
-    image: cloudflared:1.0.0@sha256:old2
+    image: cloudflared:1.0.0@sha256:893a3cfd3912a125b2419774d2752a3bb8cc175927cd5b421336e4f028607452
 `
 
 // --- apply / remove gating ---
@@ -122,8 +124,10 @@ func TestScheduleRun_UpgradesListedAndRunsHooks(t *testing.T) {
 
 	var pulled []string
 	d := dockerFuncs{
-		getDigest: func(ref string) (string, error) { return "sha256:new1", nil },
-		pull:      func(ref string) error { pulled = append(pulled, ref); return nil },
+		getDigest: func(ref string) (string, error) {
+			return "sha256:6039092f70864b935e614eaf0ff41bcb91357e8e746997f9af55f5b9f7f8f684", nil
+		},
+		pull: func(ref string) error { pulled = append(pulled, ref); return nil },
 	}
 	composeUps, shells := 0, 0
 	sys := fakeSys("linux", 1000)
@@ -141,12 +145,12 @@ func TestScheduleRun_UpgradesListedAndRunsHooks(t *testing.T) {
 		}
 		env := strings.Join(extraEnv, " ")
 		if !strings.Contains(env, "PIN_SERVICE=caddy") ||
-			!strings.Contains(env, "PIN_OLD_IMAGE=caddy:2.7.6@sha256:old1") ||
+			!strings.Contains(env, "PIN_OLD_IMAGE=caddy:2.7.6@sha256:872737ae8121bc1b984efcbd5f7931d3822326351a30518a018c4c502b95c533") ||
 			!strings.Contains(env, "PIN_NEW_IMAGE=caddy:") ||
 			!strings.Contains(env, "PIN_OLD_TAG=2.7.6") ||
-			!strings.Contains(env, "PIN_OLD_DIGEST=sha256:old1") ||
+			!strings.Contains(env, "PIN_OLD_DIGEST=sha256:872737ae8121bc1b984efcbd5f7931d3822326351a30518a018c4c502b95c533") ||
 			!strings.Contains(env, "PIN_NEW_TAG=") ||
-			!strings.Contains(env, "PIN_NEW_DIGEST=sha256:new1") {
+			!strings.Contains(env, "PIN_NEW_DIGEST=sha256:6039092f70864b935e614eaf0ff41bcb91357e8e746997f9af55f5b9f7f8f684") {
 			t.Errorf("on_change env missing PIN_* vars: %v", extraEnv)
 		}
 		return nil
@@ -167,7 +171,7 @@ func TestScheduleRun_NoChangeSkipsHooks(t *testing.T) {
 	chdirTemp(t, twoServices, "schedule: \"0 6 * * 1\"\non_change: ./hook.sh\n")
 
 	// Digest matches the pinned one, so nothing changes.
-	digests := map[string]string{"caddy": "sha256:old1", "cloudflared": "sha256:old2"}
+	digests := map[string]string{"caddy": "sha256:872737ae8121bc1b984efcbd5f7931d3822326351a30518a018c4c502b95c533", "cloudflared": "sha256:893a3cfd3912a125b2419774d2752a3bb8cc175927cd5b421336e4f028607452"}
 	d := dockerFuncs{
 		getDigest: func(ref string) (string, error) {
 			return digests[strings.SplitN(ref, ":", 2)[0]], nil
@@ -189,8 +193,10 @@ func TestScheduleRun_TagConstraint(t *testing.T) {
 
 	var pulled []string
 	d := dockerFuncs{
-		getDigest: func(ref string) (string, error) { return "sha256:new1", nil },
-		pull:      func(ref string) error { pulled = append(pulled, ref); return nil },
+		getDigest: func(ref string) (string, error) {
+			return "sha256:6039092f70864b935e614eaf0ff41bcb91357e8e746997f9af55f5b9f7f8f684", nil
+		},
+		pull: func(ref string) error { pulled = append(pulled, ref); return nil },
 		listMatchingTags: func(baseImage string, include, exclude *regexp.Regexp, current string) ([]string, error) {
 			return []string{"latest", "2.7.6", "2.8.4", "3.0.0", "2.8.4-beta.1"}, nil
 		},
@@ -208,7 +214,7 @@ func TestScheduleRun_TagConstraint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(data), "caddy:2.8.4@sha256:new1") {
+	if !strings.Contains(string(data), "caddy:2.8.4@sha256:6039092f70864b935e614eaf0ff41bcb91357e8e746997f9af55f5b9f7f8f684") {
 		t.Errorf("compose file not pinned to 2.8.4:\n%s", data)
 	}
 }
@@ -225,8 +231,10 @@ func TestScheduleRun_ExcludeAndDelay(t *testing.T) {
 	}
 	var pulled []string
 	d := dockerFuncs{
-		getDigest: func(ref string) (string, error) { return "sha256:new1", nil },
-		pull:      func(ref string) error { pulled = append(pulled, ref); return nil },
+		getDigest: func(ref string) (string, error) {
+			return "sha256:6039092f70864b935e614eaf0ff41bcb91357e8e746997f9af55f5b9f7f8f684", nil
+		},
+		pull: func(ref string) error { pulled = append(pulled, ref); return nil },
 		listMatchingTags: func(baseImage string, include, exclude *regexp.Regexp, current string) ([]string, error) {
 			return []string{"2.9.0", "2.9.0-beta.2", "2.8.4", "2.7.6"}, nil
 		},
@@ -248,7 +256,7 @@ func TestScheduleRun_ExcludeAndDelay(t *testing.T) {
 		t.Errorf("pulled %v, want [caddy:2.8.4]", pulled)
 	}
 	data, _ := os.ReadFile(filepath.Join(dir, "docker-compose.yml"))
-	if !strings.Contains(string(data), "caddy:2.8.4@sha256:new1") {
+	if !strings.Contains(string(data), "caddy:2.8.4@sha256:6039092f70864b935e614eaf0ff41bcb91357e8e746997f9af55f5b9f7f8f684") {
 		t.Errorf("compose file not pinned to 2.8.4:\n%s", data)
 	}
 }
@@ -300,8 +308,10 @@ func TestScheduleRun_ComposeUpFailureRollsBack(t *testing.T) {
 	original, _ := os.ReadFile(composeFile)
 
 	d := dockerFuncs{
-		getDigest: func(ref string) (string, error) { return "sha256:new1", nil },
-		pull:      func(ref string) error { return nil },
+		getDigest: func(ref string) (string, error) {
+			return "sha256:6039092f70864b935e614eaf0ff41bcb91357e8e746997f9af55f5b9f7f8f684", nil
+		},
+		pull: func(ref string) error { return nil },
 	}
 	sys := fakeSys("linux", 1000)
 	composeUps := 0
@@ -312,7 +322,7 @@ func TestScheduleRun_ComposeUpFailureRollsBack(t *testing.T) {
 		}
 		// Rollback re-up must see the ORIGINAL file content back in place.
 		data, _ := os.ReadFile(file)
-		if !strings.Contains(string(data), "caddy:2.7.6@sha256:old1") {
+		if !strings.Contains(string(data), "caddy:2.7.6@sha256:872737ae8121bc1b984efcbd5f7931d3822326351a30518a018c4c502b95c533") {
 			t.Errorf("rollback re-up ran against non-restored file:\n%s", data)
 		}
 		return nil
@@ -342,8 +352,10 @@ func TestScheduleRun_DryRun(t *testing.T) {
 
 	pulls := 0
 	d := dockerFuncs{
-		getDigest: func(ref string) (string, error) { return "sha256:new1", nil },
-		pull:      func(ref string) error { pulls++; return nil },
+		getDigest: func(ref string) (string, error) {
+			return "sha256:6039092f70864b935e614eaf0ff41bcb91357e8e746997f9af55f5b9f7f8f684", nil
+		},
+		pull: func(ref string) error { pulls++; return nil },
 	}
 	sys := fakeSys("linux", 1000)
 	sys.composeUp = func(file, service string) error { t.Error("composeUp must not run in dry run"); return nil }
@@ -368,12 +380,16 @@ func TestScheduleRun_OneRollbackDoesNotBlockOthers(t *testing.T) {
 	composeFile := filepath.Join(dir, "docker-compose.yml")
 
 	d := dockerFuncs{
-		getDigest: func(ref string) (string, error) { return "sha256:new-" + strings.SplitN(ref, ":", 2)[0], nil },
-		pull:      func(ref string) error { return nil },
+		getDigest: func(ref string) (string, error) {
+			// A distinct, valid digest per service.
+			sum := sha256.Sum256([]byte(strings.SplitN(ref, ":", 2)[0]))
+			return "sha256:" + hex.EncodeToString(sum[:]), nil
+		},
+		pull: func(ref string) error { return nil },
 	}
 	sys := fakeSys("linux", 1000)
 	sys.composeUp = func(file, service string) error {
-		if service == "caddy" && strings.Contains(mustRead(t, file), "sha256:new-caddy") {
+		if service == "caddy" && strings.Contains(mustRead(t, file), "sha256:d6e0ff2b7a534a9750d13545971476557164f72cb92ad74be7f145491ec4acf4") {
 			return fmt.Errorf("caddy failed to start") // fail only the NEW caddy; rollback re-up succeeds
 		}
 		return nil
@@ -384,10 +400,10 @@ func TestScheduleRun_OneRollbackDoesNotBlockOthers(t *testing.T) {
 		t.Fatalf("want failure mentioning caddy, got %v", err)
 	}
 	data := mustRead(t, composeFile)
-	if !strings.Contains(data, "caddy:2.7.6@sha256:old1") {
+	if !strings.Contains(data, "caddy:2.7.6@sha256:872737ae8121bc1b984efcbd5f7931d3822326351a30518a018c4c502b95c533") {
 		t.Errorf("caddy not rolled back:\n%s", data)
 	}
-	if !strings.Contains(data, "sha256:new-cloudflared") {
+	if !strings.Contains(data, "sha256:fc8932c70118a71ec5bea4af7733dd1c2087442469a532d599a5fdaf076ab8a0") {
 		t.Errorf("cloudflared should still have upgraded despite caddy's rollback:\n%s", data)
 	}
 }
@@ -405,8 +421,10 @@ func TestScheduleRun_OnChangeFailureIsNonFatal(t *testing.T) {
 	chdirTemp(t, twoServices, "schedule: \"0 6 * * 1\"\nservices:\n  - caddy\non_change: git push\n")
 
 	d := dockerFuncs{
-		getDigest: func(ref string) (string, error) { return "sha256:new1", nil },
-		pull:      func(ref string) error { return nil },
+		getDigest: func(ref string) (string, error) {
+			return "sha256:6039092f70864b935e614eaf0ff41bcb91357e8e746997f9af55f5b9f7f8f684", nil
+		},
+		pull: func(ref string) error { return nil },
 	}
 	sys := fakeSys("linux", 1000)
 	sys.shell = func(dir, command string, extraEnv []string) error { return fmt.Errorf("push rejected") }
@@ -422,7 +440,9 @@ func TestScheduleRun_CollectsFailures(t *testing.T) {
 	chdirTemp(t, twoServices, "schedule: \"0 6 * * 1\"\n")
 
 	d := dockerFuncs{
-		getDigest: func(ref string) (string, error) { return "sha256:new", nil },
+		getDigest: func(ref string) (string, error) {
+			return "sha256:11507a0e2f5e69d5dfa40a62a1bd7b6ee57e6bcd85c67c9b8431b36fff21c437", nil
+		},
 		pull: func(ref string) error {
 			if strings.HasPrefix(ref, "caddy:") {
 				return fmt.Errorf("boom")

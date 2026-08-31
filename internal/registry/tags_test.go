@@ -101,7 +101,7 @@ func hubPagedTestServer(t *testing.T, pageTags [][]string) (url string, pagesFet
 		fetched++
 		results := make([]map[string]any, len(pageTags[page]))
 		for i, name := range pageTags[page] {
-			results[i] = map[string]any{"name": name, "digest": "sha256:x"}
+			results[i] = map[string]any{"name": name, "digest": "sha256:2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881"}
 		}
 		next := ""
 		if page+1 < len(pageTags) {

@@ -34,7 +34,7 @@ func readCompose(t *testing.T, path string) string {
 func TestPinInFile_AlreadyPinned(t *testing.T) {
 	f := writeTempCompose(t, `services:
   web:
-    image: nginx:1.25@sha256:existing
+    image: nginx:1.25@sha256:afafb16ac47b9b3da9825787ce354896fce376ae6cb1b5a157fa682a122011a1
 `)
 	called := false
 	d := dockerFuncs{
@@ -47,7 +47,7 @@ func TestPinInFile_AlreadyPinned(t *testing.T) {
 	if called {
 		t.Error("docker should not be called when image is already pinned")
 	}
-	if !strings.Contains(readCompose(t, f), "nginx:1.25@sha256:existing") {
+	if !strings.Contains(readCompose(t, f), "nginx:1.25@sha256:afafb16ac47b9b3da9825787ce354896fce376ae6cb1b5a157fa682a122011a1") {
 		t.Error("compose file should be unchanged")
 	}
 }
@@ -59,8 +59,10 @@ func TestPinInFile_LocalImage(t *testing.T) {
 `)
 	pulled := false
 	d := dockerFuncs{
-		getDigest: func(ref string) (string, error) { return "sha256:localhash", nil },
-		pull:      func(ref string) error { pulled = true; return nil },
+		getDigest: func(ref string) (string, error) {
+			return "sha256:e96dbed44ed3109d74359ee54137587a2d0a23154bd4c1c7a6497b0ecd415639", nil
+		},
+		pull: func(ref string) error { pulled = true; return nil },
 	}
 	if _, err := pinInFile(f, "web", d, false); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -68,7 +70,7 @@ func TestPinInFile_LocalImage(t *testing.T) {
 	if pulled {
 		t.Error("should not pull when image is available locally")
 	}
-	if !strings.Contains(readCompose(t, f), "nginx:1.25@sha256:localhash") {
+	if !strings.Contains(readCompose(t, f), "nginx:1.25@sha256:e96dbed44ed3109d74359ee54137587a2d0a23154bd4c1c7a6497b0ecd415639") {
 		t.Errorf("expected pinned image in compose, got:\n%s", readCompose(t, f))
 	}
 }
@@ -87,16 +89,18 @@ func TestPinInFile_PrefersRunningContainer(t *testing.T) {
 			if service != "web" || baseImage != "nginx" {
 				t.Errorf("unexpected lookup: service=%q baseImage=%q", service, baseImage)
 			}
-			return "sha256:whatisrunning", nil
+			return "sha256:96d852451a0966be19077d46ce8d1c0db49e9901affa94565fb3e5888d389697", nil
 		},
-		getDigest: func(ref string) (string, error) { return "sha256:newerlocal", nil },
-		pull:      func(ref string) error { return errors.New("should not be called") },
+		getDigest: func(ref string) (string, error) {
+			return "sha256:aeaf3be9c170ab8c4e58cf31e7e8565efa41a97793fd8f9edf5ee529d7597c83", nil
+		},
+		pull: func(ref string) error { return errors.New("should not be called") },
 	}
 	if _, err := pinInFile(f, "web", d, false); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	got := readCompose(t, f)
-	if !strings.Contains(got, "nginx:latest@sha256:whatisrunning") {
+	if !strings.Contains(got, "nginx:latest@sha256:96d852451a0966be19077d46ce8d1c0db49e9901affa94565fb3e5888d389697") {
 		t.Errorf("expected the running container's digest to win, got:\n%s", got)
 	}
 }
@@ -110,13 +114,15 @@ func TestPinInFile_FallsBackToLocalWhenNotRunning(t *testing.T) {
 `)
 	d := dockerFuncs{
 		runningDigest: func(dir, service, baseImage string) (string, error) { return "", nil },
-		getDigest:     func(ref string) (string, error) { return "sha256:localhash", nil },
-		pull:          func(ref string) error { return errors.New("should not be called") },
+		getDigest: func(ref string) (string, error) {
+			return "sha256:e96dbed44ed3109d74359ee54137587a2d0a23154bd4c1c7a6497b0ecd415639", nil
+		},
+		pull: func(ref string) error { return errors.New("should not be called") },
 	}
 	if _, err := pinInFile(f, "web", d, false); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(readCompose(t, f), "nginx:latest@sha256:localhash") {
+	if !strings.Contains(readCompose(t, f), "nginx:latest@sha256:e96dbed44ed3109d74359ee54137587a2d0a23154bd4c1c7a6497b0ecd415639") {
 		t.Errorf("expected fallback to the local image, got:\n%s", readCompose(t, f))
 	}
 }
@@ -132,8 +138,10 @@ func TestPinInFile_RunningLookupFailureIsFatal(t *testing.T) {
 		runningDigest: func(dir, service, baseImage string) (string, error) {
 			return "", errors.New("docker daemon unreachable")
 		},
-		getDigest: func(ref string) (string, error) { return "sha256:localhash", nil },
-		pull:      func(ref string) error { return errors.New("should not be called") },
+		getDigest: func(ref string) (string, error) {
+			return "sha256:e96dbed44ed3109d74359ee54137587a2d0a23154bd4c1c7a6497b0ecd415639", nil
+		},
+		pull: func(ref string) error { return errors.New("should not be called") },
 	}
 	if _, err := pinInFile(f, "web", d, false); err == nil {
 		t.Fatal("expected a docker failure to surface rather than silently pinning something else")
@@ -153,8 +161,10 @@ func TestPinInFile_KeepsMovingTag(t *testing.T) {
     image: nginx:latest
 `)
 	d := dockerFuncs{
-		getDigest: func(ref string) (string, error) { return "sha256:localhash", nil },
-		pull:      func(ref string) error { return errors.New("should not be called") },
+		getDigest: func(ref string) (string, error) {
+			return "sha256:e96dbed44ed3109d74359ee54137587a2d0a23154bd4c1c7a6497b0ecd415639", nil
+		},
+		pull: func(ref string) error { return errors.New("should not be called") },
 	}
 	out, err := pinInFile(f, "web", d, false)
 	if err != nil {
@@ -164,7 +174,7 @@ func TestPinInFile_KeepsMovingTag(t *testing.T) {
 		t.Errorf("tag should stay latest, got %q", out.Tag)
 	}
 	got := readCompose(t, f)
-	if !strings.Contains(got, "nginx:latest@sha256:localhash") {
+	if !strings.Contains(got, "nginx:latest@sha256:e96dbed44ed3109d74359ee54137587a2d0a23154bd4c1c7a6497b0ecd415639") {
 		t.Errorf("expected latest to be kept as the followed tag, got:\n%s", got)
 	}
 }
@@ -175,8 +185,10 @@ func TestPinInFile_DryRun(t *testing.T) {
     image: nginx:1.25
 `)
 	d := dockerFuncs{
-		getDigest: func(ref string) (string, error) { return "sha256:localhash", nil },
-		pull:      func(ref string) error { return errors.New("should not be called") },
+		getDigest: func(ref string) (string, error) {
+			return "sha256:e96dbed44ed3109d74359ee54137587a2d0a23154bd4c1c7a6497b0ecd415639", nil
+		},
+		pull: func(ref string) error { return errors.New("should not be called") },
 	}
 	if _, err := pinInFile(f, "web", d, true); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -198,14 +210,14 @@ func TestPinInFile_PullsWhenNotLocal(t *testing.T) {
 			if callCount == 1 {
 				return "", errors.New("not found locally")
 			}
-			return "sha256:pulledhash", nil
+			return "sha256:4dc03020840f61c091dbd9c853a96890a941f7b205ab28f4e30fd0834494dca0", nil
 		},
 		pull: func(ref string) error { return nil },
 	}
 	if _, err := pinInFile(f, "web", d, false); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(readCompose(t, f), "sha256:pulledhash") {
+	if !strings.Contains(readCompose(t, f), "sha256:4dc03020840f61c091dbd9c853a96890a941f7b205ab28f4e30fd0834494dca0") {
 		t.Errorf("expected pinned image after pull, got:\n%s", readCompose(t, f))
 	}
 }
@@ -234,8 +246,10 @@ func TestPinInFile_UnknownService(t *testing.T) {
     image: nginx:1.25
 `)
 	d := dockerFuncs{
-		getDigest: func(ref string) (string, error) { return "sha256:abc", nil },
-		pull:      func(ref string) error { return nil },
+		getDigest: func(ref string) (string, error) {
+			return "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", nil
+		},
+		pull: func(ref string) error { return nil },
 	}
 	if _, err := pinInFile(f, "nonexistent", d, false); err == nil {
 		t.Error("expected error for unknown service")
@@ -247,16 +261,18 @@ func TestPinInFile_UnknownService(t *testing.T) {
 func TestUpgradeInFile_AlreadyUpToDate(t *testing.T) {
 	f := writeTempCompose(t, `services:
   db:
-    image: postgres:16.3@sha256:currenthash
+    image: postgres:16.3@sha256:e1c671f5f6ed0588a361de450ab5ced6b3cd6bea538fa48d6b283f41b07d03ca
 `)
 	d := dockerFuncs{
-		getDigest: func(ref string) (string, error) { return "sha256:currenthash", nil },
-		pull:      func(ref string) error { return nil },
+		getDigest: func(ref string) (string, error) {
+			return "sha256:e1c671f5f6ed0588a361de450ab5ced6b3cd6bea538fa48d6b283f41b07d03ca", nil
+		},
+		pull: func(ref string) error { return nil },
 	}
 	if _, err := upgradeInFile(f, "db", "16.3", d, false); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(readCompose(t, f), "sha256:currenthash") {
+	if !strings.Contains(readCompose(t, f), "sha256:e1c671f5f6ed0588a361de450ab5ced6b3cd6bea538fa48d6b283f41b07d03ca") {
 		t.Errorf("compose should be unchanged when already up to date")
 	}
 }
@@ -264,20 +280,22 @@ func TestUpgradeInFile_AlreadyUpToDate(t *testing.T) {
 func TestUpgradeInFile_NewDigest(t *testing.T) {
 	f := writeTempCompose(t, `services:
   db:
-    image: postgres:16.3@sha256:oldhash
+    image: postgres:16.3@sha256:b82ce3889092915fcb00a46d8015882d931424bd70eaf8003868f9a5c305c8ff
 `)
 	d := dockerFuncs{
-		getDigest: func(ref string) (string, error) { return "sha256:newhash", nil },
-		pull:      func(ref string) error { return nil },
+		getDigest: func(ref string) (string, error) {
+			return "sha256:0a3a3c2576f6dcda223b04cd80017d78924ed32f86d189c61b1680f059e818b8", nil
+		},
+		pull: func(ref string) error { return nil },
 	}
 	if _, err := upgradeInFile(f, "db", "16.3", d, false); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	got := readCompose(t, f)
-	if !strings.Contains(got, "sha256:newhash") {
+	if !strings.Contains(got, "sha256:0a3a3c2576f6dcda223b04cd80017d78924ed32f86d189c61b1680f059e818b8") {
 		t.Errorf("expected new digest in compose, got:\n%s", got)
 	}
-	if strings.Contains(got, "sha256:oldhash") {
+	if strings.Contains(got, "sha256:b82ce3889092915fcb00a46d8015882d931424bd70eaf8003868f9a5c305c8ff") {
 		t.Errorf("old digest should be gone, got:\n%s", got)
 	}
 }
@@ -304,7 +322,7 @@ func TestDigestOf(t *testing.T) {
 		input string
 		want  string
 	}{
-		{"nginx:1.25@sha256:abc123", "sha256:abc123"},
+		{"nginx:1.25@sha256:6ca13d52ca70c883e0f0bb101e425a89e8624de51db2d2392593af6a84118090", "sha256:6ca13d52ca70c883e0f0bb101e425a89e8624de51db2d2392593af6a84118090"},
 		{"nginx:1.25", ""},
 		{"nginx", ""},
 	}
@@ -331,7 +349,7 @@ func TestPinAll(t *testing.T) {
 	d := dockerFuncs{
 		getDigest: func(ref string) (string, error) {
 			calls[ref]++
-			return fmt.Sprintf("sha256:digest-%s", ref), nil
+			return fmt.Sprintf("sha256:496b1462ae4cfaf3934f9331f2b36f382a984bcc61d5b3265c13c097aba268eb%s", ref), nil
 		},
 		pull: func(ref string) error { return nil },
 	}
@@ -457,19 +475,21 @@ func TestUpgradeAll_SummaryIsSorted(t *testing.T) {
 	// `latest` keeps MovingPullTag off the network; not alphabetical in file.
 	if err := os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte(`services:
   web:
-    image: nginx:latest@sha256:old1
+    image: nginx:latest@sha256:872737ae8121bc1b984efcbd5f7931d3822326351a30518a018c4c502b95c533
   alpha:
-    image: alpine:latest@sha256:old2
+    image: alpine:latest@sha256:893a3cfd3912a125b2419774d2752a3bb8cc175927cd5b421336e4f028607452
   mango:
-    image: redis:latest@sha256:old3
+    image: redis:latest@sha256:3638b1871d9c86acdec8bd57988c81dc8629c007c0e981b399e1c275fe85c55f
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	chdir(t, dir)
 
 	d := dockerFuncs{
-		getDigest: func(ref string) (string, error) { return "sha256:new-" + ref, nil },
-		pull:      func(ref string) error { return nil },
+		getDigest: func(ref string) (string, error) {
+			return "sha256:14d73d256d2db4dc98fa448b9bf1a55791e23cb0342d89f0f865dae49d15db44" + ref, nil
+		},
+		pull: func(ref string) error { return nil },
 	}
 	out := captureStdout(t, func() {
 		if err := upgradeAll(d, true, 4); err != nil {
@@ -616,8 +636,10 @@ func TestUnexpandedVariableIsRejectedBeforePulling(t *testing.T) {
 
 	pulled := false
 	d := dockerFuncs{
-		pull:      func(ref string) error { pulled = true; return nil },
-		getDigest: func(ref string) (string, error) { return "sha256:x", nil },
+		pull: func(ref string) error { pulled = true; return nil },
+		getDigest: func(ref string) (string, error) {
+			return "sha256:2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881", nil
+		},
 	}
 
 	_, err := pinInFile(f, "web", d, false)
@@ -638,7 +660,7 @@ func TestUnexpandedVariableIsRejectedBeforePulling(t *testing.T) {
 // The upgrade path resolves the reference before pulling it or asking a
 // registry which tags exist. Neither works on the literal "${TAG}".
 func TestResolvePullRefRejectsAnUnexpandedVariable(t *testing.T) {
-	f := writeTempCompose(t, "services:\n  web:\n    image: nginx:${TAG}@sha256:abc\n")
+	f := writeTempCompose(t, "services:\n  web:\n    image: nginx:${TAG}@sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\n")
 
 	_, _, err := resolvePullRef(f, "web", "", false, true)
 	if err == nil {
@@ -652,7 +674,7 @@ func TestResolvePullRefRejectsAnUnexpandedVariable(t *testing.T) {
 // The same path on a literal reference still resolves -- otherwise the guard
 // above would be indistinguishable from refusing everything.
 func TestResolvePullRefResolvesALiteralReference(t *testing.T) {
-	f := writeTempCompose(t, "services:\n  web:\n    image: nginx:1.25@sha256:abc\n")
+	f := writeTempCompose(t, "services:\n  web:\n    image: nginx:1.25@sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\n")
 
 	ref, _, err := resolvePullRef(f, "web", "1.26", false, true)
 	if err != nil {
@@ -668,14 +690,16 @@ func TestResolvePullRefResolvesALiteralReference(t *testing.T) {
 func TestPinInFileStillPinsALiteralReference(t *testing.T) {
 	f := writeTempCompose(t, "services:\n  web:\n    image: nginx:1.25\n")
 	d := dockerFuncs{
-		getDigest: func(string) (string, error) { return "sha256:abc", nil },
-		pull:      func(string) error { return nil },
+		getDigest: func(string) (string, error) {
+			return "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", nil
+		},
+		pull: func(string) error { return nil },
 	}
 
 	if _, err := pinInFile(f, "web", d, false); err != nil {
 		t.Fatalf("an ordinary service should pin: %v", err)
 	}
-	if got := readCompose(t, f); !strings.Contains(got, "nginx:1.25@sha256:abc") {
+	if got := readCompose(t, f); !strings.Contains(got, "nginx:1.25@sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad") {
 		t.Errorf("the service was not pinned, got:\n%s", got)
 	}
 }

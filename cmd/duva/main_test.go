@@ -34,14 +34,14 @@ func setupFixture(t *testing.T, composeContent string) string {
 
 const pinnedConstrainedService = `services:
   app:
-    image: example.com/app:1.2.0@sha256:aaa
+    image: example.com/app:1.2.0@sha256:9834876dcfb05cb167a5c24953eba58c4ac89b1adf57f28f2f9d09af107ee8f0
     labels:
       duva.include: '^\d+\.\d+\.\d+$'
 `
 
 const pinnedUnconstrainedService = `services:
   app:
-    image: example.com/app:latest@sha256:aaa
+    image: example.com/app:latest@sha256:9834876dcfb05cb167a5c24953eba58c4ac89b1adf57f28f2f9d09af107ee8f0
 `
 
 const unpinnedService = `services:
@@ -114,12 +114,12 @@ func TestMovingTag_FirstCheckRecordsBaselineSilently(t *testing.T) {
 	setupFixture(t, pinnedUnconstrainedService)
 	st := watch.NewState()
 
-	f := check1(t, digestReg("sha256:current"), st)
+	f := check1(t, digestReg("sha256:97b0560280ed60a5a1eaa1bc45492543c8a986ad5a25b468c427eb83c3e88191"), st)
 	if f.Available() {
 		t.Fatalf("first check must not report, got %+v", f)
 	}
-	if st.Baseline["app"] != "sha256:current" {
-		t.Fatalf("baseline = %q, want sha256:current", st.Baseline["app"])
+	if st.Baseline["app"] != "sha256:97b0560280ed60a5a1eaa1bc45492543c8a986ad5a25b468c427eb83c3e88191" {
+		t.Fatalf("baseline = %q, want sha256:97b0560280ed60a5a1eaa1bc45492543c8a986ad5a25b468c427eb83c3e88191", st.Baseline["app"])
 	}
 	if len(st.Pending) != 0 {
 		t.Fatalf("nothing should be pending, got %+v", st.Pending)
@@ -129,10 +129,10 @@ func TestMovingTag_FirstCheckRecordsBaselineSilently(t *testing.T) {
 func TestMovingTag_DigestMoveIsReported(t *testing.T) {
 	setupFixture(t, pinnedUnconstrainedService)
 	st := watch.NewState()
-	st.Baseline["app"] = "sha256:old"
+	st.Baseline["app"] = "sha256:cba06b5736faf67e54b07b561eae94395e774c517a7d910a54369e1263ccfbd4"
 
-	f := check1(t, digestReg("sha256:new"), st)
-	if !f.Available() || f.Kind != watch.KindDigest || f.Candidate != "sha256:new" {
+	f := check1(t, digestReg("sha256:11507a0e2f5e69d5dfa40a62a1bd7b6ee57e6bcd85c67c9b8431b36fff21c437"), st)
+	if !f.Available() || f.Kind != watch.KindDigest || f.Candidate != "sha256:11507a0e2f5e69d5dfa40a62a1bd7b6ee57e6bcd85c67c9b8431b36fff21c437" {
 		t.Fatalf("expected a digest move, got %+v", f)
 	}
 }
@@ -140,9 +140,9 @@ func TestMovingTag_DigestMoveIsReported(t *testing.T) {
 func TestMovingTag_SameDigestIsNotReported(t *testing.T) {
 	setupFixture(t, pinnedUnconstrainedService)
 	st := watch.NewState()
-	st.Baseline["app"] = "sha256:same"
+	st.Baseline["app"] = "sha256:0967115f2813a3541eaef77de9d9d5773f1c0c04314b0bbfe4ff3b3b1c55b5d5"
 
-	if f := check1(t, digestReg("sha256:same"), st); f.Available() {
+	if f := check1(t, digestReg("sha256:0967115f2813a3541eaef77de9d9d5773f1c0c04314b0bbfe4ff3b3b1c55b5d5"), st); f.Available() {
 		t.Fatalf("unchanged digest must not report, got %+v", f)
 	}
 }
@@ -268,7 +268,7 @@ func TestStateRoundTrip(t *testing.T) {
 	path := filepath.Join(dir, "state.json")
 
 	st := watch.NewState()
-	st.Baseline["a"] = "sha256:x"
+	st.Baseline["a"] = "sha256:2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881"
 	st.Notified["b"] = "1.2.3"
 	st.Pending["c"] = watch.Pending{Service: "c", Candidate: "2.0.0", Kind: watch.KindTag}
 	if err := st.Save(path); err != nil {
@@ -279,7 +279,7 @@ func TestStateRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Baseline["a"] != "sha256:x" || got.Notified["b"] != "1.2.3" {
+	if got.Baseline["a"] != "sha256:2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881" || got.Notified["b"] != "1.2.3" {
 		t.Errorf("round trip lost data: %+v", got)
 	}
 	if got.Pending["c"].Candidate != "2.0.0" {
@@ -374,9 +374,9 @@ func TestClassification_TagCandidatesCarryABump(t *testing.T) {
 func TestClassification_DigestCandidatesHaveNoBump(t *testing.T) {
 	setupFixture(t, pinnedUnconstrainedService)
 	st := watch.NewState()
-	st.Baseline["app"] = "sha256:old"
+	st.Baseline["app"] = "sha256:cba06b5736faf67e54b07b561eae94395e774c517a7d910a54369e1263ccfbd4"
 
-	f := check1(t, digestReg("sha256:new"), st)
+	f := check1(t, digestReg("sha256:11507a0e2f5e69d5dfa40a62a1bd7b6ee57e6bcd85c67c9b8431b36fff21c437"), st)
 	if f.Bump != "" {
 		t.Errorf("Bump = %q, want empty for a digest candidate", f.Bump)
 	}
@@ -388,17 +388,17 @@ func TestClassification_DigestCandidatesHaveNoBump(t *testing.T) {
 // one pass: the interesting bug is one service's rules bleeding into another.
 const mixedPolicyProject = `services:
   autopatch:
-    image: example.com/a:1.0.0@sha256:aaa
+    image: example.com/a:1.0.0@sha256:9834876dcfb05cb167a5c24953eba58c4ac89b1adf57f28f2f9d09af107ee8f0
     labels:
       duva.include: '^\d+\.\d+\.\d+$'
       duva.auto: patch
   strict:
-    image: example.com/b:1.0.0@sha256:bbb
+    image: example.com/b:1.0.0@sha256:3e744b9dc39389baf0c5a0660589b8402f3dbb49b89b3e75f2c9355852a3c677
     labels:
       duva.include: '^\d+\.\d+\.\d+$'
       duva.auto: none
   permissive:
-    image: example.com/c:1.0.0@sha256:ccc
+    image: example.com/c:1.0.0@sha256:64daa44ad493ff28a96effab6e77f1732a3d97d83241581b37dbd70a7a4900fe
     labels:
       duva.include: '^\d+\.\d+\.\d+$'
       duva.auto: major
@@ -479,11 +479,11 @@ func TestPolicy_PendingCarriesWhy(t *testing.T) {
 func TestPolicy_BadLabelDoesNotStopOtherServices(t *testing.T) {
 	setupFixture(t, `services:
   broken:
-    image: example.com/a:1.0.0@sha256:aaa
+    image: example.com/a:1.0.0@sha256:9834876dcfb05cb167a5c24953eba58c4ac89b1adf57f28f2f9d09af107ee8f0
     labels:
       duva.auto: nonsense
   fine:
-    image: example.com/b:1.0.0@sha256:bbb
+    image: example.com/b:1.0.0@sha256:3e744b9dc39389baf0c5a0660589b8402f3dbb49b89b3e75f2c9355852a3c677
     labels:
       duva.include: '^\d+\.\d+\.\d+$'
       duva.auto: none

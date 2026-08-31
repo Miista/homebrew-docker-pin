@@ -11,10 +11,15 @@
 package watch
 
 import (
+	// Registers SHA-256 with go-digest. Without it every digest validates as
+	// "unsupported algorithm", which would reject every pinned service.
+	_ "crypto/sha256"
 	"fmt"
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/opencontainers/go-digest"
 
 	"github.com/Miista/homebrew-docker-pin/internal/compose"
 	"github.com/Miista/homebrew-docker-pin/internal/pin"
@@ -239,6 +244,22 @@ func service(rootFile, name string, reg Registry, baseline Baseline) Finding {
 		f.Image = raw
 		f.Status, f.Reason = StatusSkipped, "not pinned"
 		return f
+	}
+
+	// Looking pinned is not the same as being pinned. "@sha256:" is a text
+	// match, so `image: x/y:1.0.0@sha256:abc` passes it -- and then the
+	// malformed digest is recorded as the baseline and the service reported
+	// up-to-date, when the daemon rejects that reference outright ("invalid
+	// reference format") and it cannot be pulled at all.
+	//
+	// Reported as an error rather than skipped: an unpinned service has opted
+	// out, which is a choice, but this one meant to opt in and got it wrong.
+	// Saying nothing would leave someone believing a service is watched when
+	// it is not.
+	if d := pin.DigestOf(raw); digest.Digest(d).Validate() != nil {
+		f.Image = raw
+		return errorf(f, fmt.Errorf(
+			"%s is not a valid digest, so this reference cannot be pulled", d))
 	}
 
 	// A digest is enough to look pinned, but `image: nginx:${TAG}@sha256:...`

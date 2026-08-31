@@ -49,7 +49,7 @@ func readCompose(t *testing.T, path string) string {
 func TestRun(t *testing.T) {
 	f := writeTempCompose(t, `services:
   web:
-    image: nginx:1.25@sha256:abc123
+    image: nginx:1.25@sha256:6ca13d52ca70c883e0f0bb101e425a89e8624de51db2d2392593af6a84118090
 `)
 	if _, err := run("web", false); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -79,13 +79,13 @@ func TestRun_NotPinned(t *testing.T) {
 func TestRun_DryRun(t *testing.T) {
 	f := writeTempCompose(t, `services:
   web:
-    image: nginx:1.25@sha256:abc123
+    image: nginx:1.25@sha256:6ca13d52ca70c883e0f0bb101e425a89e8624de51db2d2392593af6a84118090
 `)
 	if _, err := run("web", true); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	got := readCompose(t, f)
-	if !strings.Contains(got, "@sha256:abc123") {
+	if !strings.Contains(got, "@sha256:6ca13d52ca70c883e0f0bb101e425a89e8624de51db2d2392593af6a84118090") {
 		t.Errorf("dry run should not modify the compose file, got:\n%s", got)
 	}
 }
@@ -117,11 +117,11 @@ func TestRunAll_SummaryIsSorted(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte(`services:
   web:
-    image: nginx:1.25@sha256:aaa
+    image: nginx:1.25@sha256:9834876dcfb05cb167a5c24953eba58c4ac89b1adf57f28f2f9d09af107ee8f0
   alpha:
-    image: alpine:3.20@sha256:bbb
+    image: alpine:3.20@sha256:3e744b9dc39389baf0c5a0660589b8402f3dbb49b89b3e75f2c9355852a3c677
   mango:
-    image: redis:7@sha256:ccc
+    image: redis:7@sha256:64daa44ad493ff28a96effab6e77f1732a3d97d83241581b37dbd70a7a4900fe
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
