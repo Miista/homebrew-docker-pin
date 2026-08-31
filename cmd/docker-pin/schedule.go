@@ -458,8 +458,8 @@ func upgradeServiceTxn(cfg *schedule.Config, rootFile string, service schedule.S
 		case err != nil:
 			return "", err
 		case outcome.Changed:
-			oldTag, _ := tagAndDigest(outcome.OldRaw)
-			newTag, _ := tagAndDigest(outcome.NewRaw)
+			oldTag := pinpkg.TagOf(outcome.OldRaw)
+			newTag := pinpkg.TagOf(outcome.NewRaw)
 			return fmt.Sprintf("WOULD UPGRADE  %s -> %s", oldTag, newTag), nil
 		default:
 			return "up to date — pinned digest is still current", nil
@@ -480,8 +480,8 @@ func upgradeServiceTxn(cfg *schedule.Config, rootFile string, service schedule.S
 		return "up to date — pinned digest is still current", nil
 	}
 	oldRaw, newRaw := outcome.OldRaw, outcome.NewRaw
-	oldTag, _ := tagAndDigest(oldRaw)
-	newTag, _ := tagAndDigest(newRaw)
+	oldTag := pinpkg.TagOf(oldRaw)
+	newTag := pinpkg.TagOf(newRaw)
 
 	fmt.Printf("Running docker compose up -d %s ...\n", service.Name)
 	if err := sys.composeUp(rootFile, service.Name); err != nil {
@@ -501,8 +501,8 @@ func upgradeServiceTxn(cfg *schedule.Config, rootFile string, service schedule.S
 	note := ""
 	if cfg.OnChange != "" {
 		fmt.Printf("Running on_change for %s: %s\n", service.Name, cfg.OnChange)
-		_, oldDigest := tagAndDigest(oldRaw)
-		_, newDigest := tagAndDigest(newRaw)
+		oldDigest := pinpkg.DigestOf(oldRaw)
+		newDigest := pinpkg.DigestOf(newRaw)
 		env := []string{
 			"PIN_SERVICE=" + service.Name,
 			"PIN_OLD_IMAGE=" + oldRaw,
@@ -525,23 +525,6 @@ func upgradeServiceTxn(cfg *schedule.Config, rootFile string, service schedule.S
 		verdict += " (not pushed yet)"
 	}
 	return verdict, nil
-}
-
-// tagAndDigest splits a raw image reference ("base:tag@sha256:...") into its
-// tag and digest, either of which may be empty.
-func tagAndDigest(raw string) (tag, digest string) {
-	ref := raw
-	if i := strings.Index(ref, "@"); i != -1 {
-		digest = ref[i+1:]
-		ref = ref[:i]
-	}
-	// The tag is after the last ":" that follows the last "/" (so a registry
-	// host port never masquerades as a tag).
-	slash := strings.LastIndex(ref, "/")
-	if colon := strings.LastIndex(ref, ":"); colon > slash {
-		tag = ref[colon+1:]
-	}
-	return tag, digest
 }
 
 // constrainedTarget picks the upgrade target for a service with a tags regex,

@@ -315,27 +315,6 @@ func TestUpgradeInFile_PullFails(t *testing.T) {
 	}
 }
 
-// --- digestOf ---
-
-func TestDigestOf(t *testing.T) {
-	tests := []struct {
-		input string
-		want  string
-	}{
-		{"nginx:1.25@sha256:6ca13d52ca70c883e0f0bb101e425a89e8624de51db2d2392593af6a84118090", "sha256:6ca13d52ca70c883e0f0bb101e425a89e8624de51db2d2392593af6a84118090"},
-		{"nginx:1.25", ""},
-		{"nginx", ""},
-	}
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			got := digestOf(tt.input)
-			if got != tt.want {
-				t.Errorf("digestOf(%q) = %q, want %q", tt.input, got, tt.want)
-			}
-		})
-	}
-}
-
 // --- pinAll / upgradeAll via temp dir ---
 
 func TestPinAll(t *testing.T) {
