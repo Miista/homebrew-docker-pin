@@ -14,7 +14,7 @@ func discoverServer(t *testing.T, present map[string]bool) *httptest.Server {
 		// No auth challenge for simplicity — tagExists works without it too.
 		tag := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
 		if present[tag] {
-			w.Header().Set("Docker-Content-Digest", "sha256:whatever")
+			w.Header().Set("Docker-Content-Digest", "sha256:85738f8f9a7f1b04b5329c590ebcb9e425925c6d0984089c43a022de4f19c281")
 			w.WriteHeader(http.StatusOK)
 		} else {
 			w.WriteHeader(http.StatusNotFound)

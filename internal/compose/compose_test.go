@@ -27,9 +27,9 @@ func TestSplitImage(t *testing.T) {
 	}{
 		{"nginx", "nginx", "latest"},
 		{"nginx:1.25", "nginx", "1.25"},
-		{"nginx:1.25@sha256:abc", "nginx", "1.25"},
+		{"nginx:1.25@sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", "nginx", "1.25"},
 		{"ghcr.io/home-assistant/home-assistant:stable", "ghcr.io/home-assistant/home-assistant", "stable"},
-		{"ghcr.io/home-assistant/home-assistant:2024.6.1@sha256:deadbeef", "ghcr.io/home-assistant/home-assistant", "2024.6.1"},
+		{"ghcr.io/home-assistant/home-assistant:2024.6.1@sha256:2baf1f40105d9501fe319a8ec463fdf4325a2a5df445adf3f572f626253678c9", "ghcr.io/home-assistant/home-assistant", "2024.6.1"},
 		{"myregistry.example.com:5000/myimage:v1.2", "myregistry.example.com:5000/myimage", "v1.2"},
 		{"cloudflare/cloudflared:latest", "cloudflare/cloudflared", "latest"},
 	}
@@ -210,7 +210,7 @@ func TestRawImage(t *testing.T) {
 		want    string
 	}{
 		{"web", "nginx:1.25"},
-		{"db", "postgres:16.2@sha256:abc123"},
+		{"db", "postgres:16.2@sha256:6ca13d52ca70c883e0f0bb101e425a89e8624de51db2d2392593af6a84118090"},
 		{"cache", "redis"},
 	}
 	for _, tt := range tests {
@@ -441,7 +441,7 @@ const sampleCompose = `services:
   web:
     image: nginx:1.25
   db:
-    image: postgres:16.2@sha256:abc123
+    image: postgres:16.2@sha256:6ca13d52ca70c883e0f0bb101e425a89e8624de51db2d2392593af6a84118090
   cache:
     image: redis
 `
@@ -510,18 +510,18 @@ func TestPinImage(t *testing.T) {
     image: nginx:1.25
 `,
 			service:  "web",
-			pinned:   "nginx:1.25@sha256:deadbeef",
-			wantLine: "    image: nginx:1.25@sha256:deadbeef",
+			pinned:   "nginx:1.25@sha256:2baf1f40105d9501fe319a8ec463fdf4325a2a5df445adf3f572f626253678c9",
+			wantLine: "    image: nginx:1.25@sha256:2baf1f40105d9501fe319a8ec463fdf4325a2a5df445adf3f572f626253678c9",
 		},
 		{
 			name: "replaces existing digest",
 			compose: `services:
   web:
-    image: nginx:1.25@sha256:olddigest
+    image: nginx:1.25@sha256:8978c8879951eb9d4bd0a19a322f61159b1788791fe00239eb2af28d66fcd769
 `,
 			service:  "web",
-			pinned:   "nginx:1.25@sha256:newdigest",
-			wantLine: "    image: nginx:1.25@sha256:newdigest",
+			pinned:   "nginx:1.25@sha256:ce97e44208e0cb8c903bf0818c0c7d1ca3462393f94a4926ab880482ce7a4e30",
+			wantLine: "    image: nginx:1.25@sha256:ce97e44208e0cb8c903bf0818c0c7d1ca3462393f94a4926ab880482ce7a4e30",
 		},
 		{
 			name: "second service not affected",
@@ -532,8 +532,8 @@ func TestPinImage(t *testing.T) {
     image: postgres:16
 `,
 			service:  "db",
-			pinned:   "postgres:16@sha256:abc",
-			wantLine: "    image: postgres:16@sha256:abc",
+			pinned:   "postgres:16@sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+			wantLine: "    image: postgres:16@sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
 		},
 		{
 			name: "preserves surrounding content",
@@ -544,8 +544,8 @@ func TestPinImage(t *testing.T) {
       - "80:80"
 `,
 			service:  "web",
-			pinned:   "nginx:1.25@sha256:xyz",
-			wantLine: "    image: nginx:1.25@sha256:xyz",
+			pinned:   "nginx:1.25@sha256:3608bca1e44ea6c4d268eb6db02260269892c0b42b86bbf1e77a6fa16c3c9282",
+			wantLine: "    image: nginx:1.25@sha256:3608bca1e44ea6c4d268eb6db02260269892c0b42b86bbf1e77a6fa16c3c9282",
 		},
 		{
 			// The Pi's dnscrypt-proxy shape: an earlier service references the
@@ -564,8 +564,8 @@ func TestPinImage(t *testing.T) {
     image: dnscrypt:2.1.15
 `,
 			service:  "dns",
-			pinned:   "dnscrypt:2.1.15@sha256:abc",
-			wantLine: "    image: dnscrypt:2.1.15@sha256:abc",
+			pinned:   "dnscrypt:2.1.15@sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+			wantLine: "    image: dnscrypt:2.1.15@sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
 		},
 		{
 			name: "image-like key under labels is not rewritten",
@@ -576,8 +576,8 @@ func TestPinImage(t *testing.T) {
     image: nginx:1.25
 `,
 			service:  "web",
-			pinned:   "nginx:1.25@sha256:abc",
-			wantLine: "    image: nginx:1.25@sha256:abc",
+			pinned:   "nginx:1.25@sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+			wantLine: "    image: nginx:1.25@sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
 		},
 		{
 			name: "top-level key matching service name is ignored",
@@ -588,8 +588,8 @@ services:
     image: nginx:1.25
 `,
 			service:  "web",
-			pinned:   "nginx:1.25@sha256:abc",
-			wantLine: "    image: nginx:1.25@sha256:abc",
+			pinned:   "nginx:1.25@sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+			wantLine: "    image: nginx:1.25@sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
 		},
 		{
 			name: "inline comment on the image line is preserved",
@@ -598,8 +598,8 @@ services:
     image: nginx:1.25  # renovate: keep on 1.x
 `,
 			service:  "web",
-			pinned:   "nginx:1.26@sha256:abc",
-			wantLine: "    image: nginx:1.26@sha256:abc  # renovate: keep on 1.x",
+			pinned:   "nginx:1.26@sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+			wantLine: "    image: nginx:1.26@sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad  # renovate: keep on 1.x",
 		},
 		{
 			name: "comments and blank lines inside blocks are neutral",
@@ -611,8 +611,8 @@ services:
     image: nginx:1.25
 `,
 			service:  "web",
-			pinned:   "nginx:1.25@sha256:abc",
-			wantLine: "    image: nginx:1.25@sha256:abc",
+			pinned:   "nginx:1.25@sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+			wantLine: "    image: nginx:1.25@sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
 		},
 	}
 
@@ -640,7 +640,7 @@ services:
 
 func TestPinImage_UnknownService(t *testing.T) {
 	file := writeTempCompose(t, sampleCompose)
-	err := PinImage(file, "nonexistent", "image:tag@sha256:abc")
+	err := PinImage(file, "nonexistent", "image:tag@sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
 	if err == nil {
 		t.Error("expected error for unknown service")
 	}
@@ -778,7 +778,7 @@ services:
     image: z/w:2.0.0
 `
 	writeFile(t, f, before)
-	if err := PinImage(f, "app", "x/y:1.0.0@sha256:d"); err != nil {
+	if err := PinImage(f, "app", "x/y:1.0.0@sha256:18ac3e7343f016890c510e93f935261169d9e3f565436429830faf0934f4f8e4"); err != nil {
 		t.Fatal(err)
 	}
 	got := readFile(t, f)
@@ -788,7 +788,7 @@ services:
 			t.Errorf("rewrite lost %q:\n%s", want, got)
 		}
 	}
-	if !strings.Contains(got, "x/y:1.0.0@sha256:d") {
+	if !strings.Contains(got, "x/y:1.0.0@sha256:18ac3e7343f016890c510e93f935261169d9e3f565436429830faf0934f4f8e4") {
 		t.Errorf("pin not written:\n%s", got)
 	}
 }
@@ -797,11 +797,11 @@ services:
 func TestPinImage_TouchesOnlyTheNamedService(t *testing.T) {
 	f := filepath.Join(t.TempDir(), "docker-compose.yml")
 	writeFile(t, f, "services:\n  a:\n    image: same:1.0.0\n  b:\n    image: same:1.0.0\n")
-	if err := PinImage(f, "b", "same:1.0.0@sha256:d"); err != nil {
+	if err := PinImage(f, "b", "same:1.0.0@sha256:18ac3e7343f016890c510e93f935261169d9e3f565436429830faf0934f4f8e4"); err != nil {
 		t.Fatal(err)
 	}
 	got := readFile(t, f)
-	if strings.Count(got, "@sha256:d") != 1 {
+	if strings.Count(got, "@sha256:18ac3e7343f016890c510e93f935261169d9e3f565436429830faf0934f4f8e4") != 1 {
 		t.Errorf("expected exactly one line rewritten:\n%s", got)
 	}
 	// a is declared first and must be untouched.
@@ -850,7 +850,7 @@ func TestPinImage_FailureLeavesTheFileByteIdentical(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := PinImage(file, "not-a-service", "nginx:1.27@sha256:abc"); err == nil {
+	if err := PinImage(file, "not-a-service", "nginx:1.27@sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"); err == nil {
 		t.Fatal("expected an error for a service that is not there")
 	}
 
@@ -870,7 +870,7 @@ func TestHasUnexpandedVariable(t *testing.T) {
 	variable := []string{
 		"nginx:${TAG}",
 		"${REGISTRY}/app:1.0",
-		"nginx:${TAG}@sha256:abc",
+		"nginx:${TAG}@sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
 		"nginx:$(TAG)",
 		"${IMAGE}",
 	}
@@ -884,7 +884,7 @@ func TestHasUnexpandedVariable(t *testing.T) {
 		"nginx",
 		"nginx:1.25",
 		"localhost:5555/app:1.0.1",
-		"ghcr.io/miista/duva:1.0.0@sha256:abc",
+		"ghcr.io/miista/duva:1.0.0@sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
 		// A lone $ or brace is not interpolation. Compose only substitutes
 		// ${...} and $(...), so neither of these should be refused.
 		"weird$name:1.0",

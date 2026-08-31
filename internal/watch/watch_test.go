@@ -62,12 +62,12 @@ func TestProject_StatusPerServiceShape(t *testing.T) {
 		},
 		{
 			name:       "bad label is an error for that service",
-			body:       "services:\n  a:\n    image: x/y:1.0.0@sha256:d\n    labels:\n      duva.auto: wrong\n",
+			body:       "services:\n  a:\n    image: x/y:1.0.0@sha256:18ac3e7343f016890c510e93f935261169d9e3f565436429830faf0934f4f8e4\n    labels:\n      duva.auto: wrong\n",
 			wantStatus: StatusError,
 		},
 		{
 			name:       "bad include regex is an error",
-			body:       "services:\n  a:\n    image: x/y:1.0.0@sha256:d\n    labels:\n      duva.include: '^('\n",
+			body:       "services:\n  a:\n    image: x/y:1.0.0@sha256:18ac3e7343f016890c510e93f935261169d9e3f565436429830faf0934f4f8e4\n    labels:\n      duva.include: '^('\n",
 			wantStatus: StatusError,
 		},
 	} {
@@ -97,11 +97,11 @@ func mustProject(t *testing.T, file string, r Registry, b Baseline) []Finding {
 func TestProject_OneFailureDoesNotStopTheRest(t *testing.T) {
 	file := project(t, `services:
   broken:
-    image: x/y:1.0.0@sha256:d
+    image: x/y:1.0.0@sha256:18ac3e7343f016890c510e93f935261169d9e3f565436429830faf0934f4f8e4
     labels:
       duva.include: '^\d'
   fine:
-    image: x/z:latest@sha256:d
+    image: x/z:latest@sha256:18ac3e7343f016890c510e93f935261169d9e3f565436429830faf0934f4f8e4
 `)
 	calls := 0
 	r := Registry{
@@ -109,9 +109,11 @@ func TestProject_OneFailureDoesNotStopTheRest(t *testing.T) {
 			calls++
 			return nil, errors.New("registry unreachable")
 		},
-		RemoteDigest: func(string, string) (string, error) { return "sha256:new", nil },
+		RemoteDigest: func(string, string) (string, error) {
+			return "sha256:11507a0e2f5e69d5dfa40a62a1bd7b6ee57e6bcd85c67c9b8431b36fff21c437", nil
+		},
 	}
-	findings := mustProject(t, file, r, Baseline{"fine": "sha256:old"})
+	findings := mustProject(t, file, r, Baseline{"fine": "sha256:cba06b5736faf67e54b07b561eae94395e774c517a7d910a54369e1263ccfbd4"})
 
 	byName := map[string]Finding{}
 	for _, f := range findings {
@@ -133,7 +135,7 @@ func TestProject_OneFailureDoesNotStopTheRest(t *testing.T) {
 func TestProject_SoakWithholdsFreshCandidates(t *testing.T) {
 	file := project(t, `services:
   a:
-    image: x/y:1.0.0@sha256:d
+    image: x/y:1.0.0@sha256:18ac3e7343f016890c510e93f935261169d9e3f565436429830faf0934f4f8e4
     labels:
       duva.include: '^\d+\.\d+\.\d+$'
       duva.delay: 7d
@@ -154,7 +156,7 @@ func TestProject_SoakWithholdsFreshCandidates(t *testing.T) {
 func TestProject_IncludeConstrainsCandidates(t *testing.T) {
 	file := project(t, `services:
   a:
-    image: x/y:17.0@sha256:d
+    image: x/y:17.0@sha256:18ac3e7343f016890c510e93f935261169d9e3f565436429830faf0934f4f8e4
     labels:
       duva.include: '^17\.\d+$'
 `)
@@ -167,7 +169,7 @@ func TestProject_IncludeConstrainsCandidates(t *testing.T) {
 func TestProject_ExcludeDropsCandidates(t *testing.T) {
 	file := project(t, `services:
   a:
-    image: x/y:1.0.0@sha256:d
+    image: x/y:1.0.0@sha256:18ac3e7343f016890c510e93f935261169d9e3f565436429830faf0934f4f8e4
     labels:
       duva.include: '^\d+\.\d+\.\d+'
       duva.exclude: 'rc'
@@ -182,25 +184,25 @@ func TestProject_ExcludeDropsCandidates(t *testing.T) {
 // again. The baseline only advances when the update is applied, so the
 // finding survives restarts.
 func TestProject_MovingTagLifecycle(t *testing.T) {
-	file := project(t, "services:\n  a:\n    image: x/y:latest@sha256:pinned\n")
+	file := project(t, "services:\n  a:\n    image: x/y:latest@sha256:3fab5c181bd28a09b64397df76ae2bfaf1eac182979b5fdb7a342858004f36af\n")
 	base := Baseline{}
 
 	// First sight records where the tag points and says nothing.
-	if f := one(t, mustProject(t, file, reg(nil, "sha256:aaa", time.Now()), base)); f.Available() {
+	if f := one(t, mustProject(t, file, reg(nil, "sha256:9834876dcfb05cb167a5c24953eba58c4ac89b1adf57f28f2f9d09af107ee8f0", time.Now()), base)); f.Available() {
 		t.Fatalf("first check must be silent, got %+v", f)
 	}
-	if base["a"] != "sha256:aaa" {
+	if base["a"] != "sha256:9834876dcfb05cb167a5c24953eba58c4ac89b1adf57f28f2f9d09af107ee8f0" {
 		t.Fatalf("baseline = %q", base["a"])
 	}
 
 	// Unmoved: still quiet.
-	if f := one(t, mustProject(t, file, reg(nil, "sha256:aaa", time.Now()), base)); f.Available() {
+	if f := one(t, mustProject(t, file, reg(nil, "sha256:9834876dcfb05cb167a5c24953eba58c4ac89b1adf57f28f2f9d09af107ee8f0", time.Now()), base)); f.Available() {
 		t.Errorf("an unmoved tag must stay quiet, got %+v", f)
 	}
 
 	// Moved: reported, as a digest with no bump to classify.
-	f := one(t, mustProject(t, file, reg(nil, "sha256:bbb", time.Now()), base))
-	if !f.Available() || f.Kind != KindDigest || f.Candidate != "sha256:bbb" {
+	f := one(t, mustProject(t, file, reg(nil, "sha256:3e744b9dc39389baf0c5a0660589b8402f3dbb49b89b3e75f2c9355852a3c677", time.Now()), base))
+	if !f.Available() || f.Kind != KindDigest || f.Candidate != "sha256:3e744b9dc39389baf0c5a0660589b8402f3dbb49b89b3e75f2c9355852a3c677" {
 		t.Fatalf("a moved tag must be reported, got %+v", f)
 	}
 	if f.Bump != "" {
@@ -208,17 +210,17 @@ func TestProject_MovingTagLifecycle(t *testing.T) {
 	}
 	// The baseline must NOT advance on detection alone, or the row would
 	// vanish on the next run without anything having been applied.
-	if base["a"] != "sha256:aaa" {
+	if base["a"] != "sha256:9834876dcfb05cb167a5c24953eba58c4ac89b1adf57f28f2f9d09af107ee8f0" {
 		t.Errorf("baseline moved to %q on detection alone", base["a"])
 	}
 }
 
 func TestProject_MovingTagRegistryFailure(t *testing.T) {
-	file := project(t, "services:\n  a:\n    image: x/y:latest@sha256:pinned\n")
+	file := project(t, "services:\n  a:\n    image: x/y:latest@sha256:3fab5c181bd28a09b64397df76ae2bfaf1eac182979b5fdb7a342858004f36af\n")
 	r := Registry{RemoteDigest: func(string, string) (string, error) {
 		return "", errors.New("no such host")
 	}}
-	f := one(t, mustProject(t, file, r, Baseline{"a": "sha256:old"}))
+	f := one(t, mustProject(t, file, r, Baseline{"a": "sha256:cba06b5736faf67e54b07b561eae94395e774c517a7d910a54369e1263ccfbd4"}))
 	if f.Status != StatusError {
 		t.Fatalf("Status = %q, want error", f.Status)
 	}
@@ -239,11 +241,11 @@ func TestProject_ResolvesIncludedFiles(t *testing.T) {
 	if err := os.WriteFile(root, []byte("include:\n  - media/compose.yml\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(sub, []byte("services:\n  a:\n    image: x/y:latest@sha256:d\n"), 0o644); err != nil {
+	if err := os.WriteFile(sub, []byte("services:\n  a:\n    image: x/y:latest@sha256:18ac3e7343f016890c510e93f935261169d9e3f565436429830faf0934f4f8e4\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	f := one(t, mustProject(t, root, reg(nil, "sha256:d", time.Now()), Baseline{}))
+	f := one(t, mustProject(t, root, reg(nil, "sha256:18ac3e7343f016890c510e93f935261169d9e3f565436429830faf0934f4f8e4", time.Now()), Baseline{}))
 	if f.File != sub {
 		t.Errorf("File = %q, want the included file %q", f.File, sub)
 	}
@@ -258,9 +260,9 @@ func TestProject_UnreadableProject(t *testing.T) {
 // Findings carry what the compose file pins, so neither the UI nor the actor
 // has to re-read it.
 func TestProject_FindingCarriesCurrentPin(t *testing.T) {
-	file := project(t, "services:\n  a:\n    image: ghcr.io/x/y:1.2.3@sha256:abc\n")
-	f := one(t, mustProject(t, file, reg(nil, "sha256:abc", time.Now()), Baseline{"a": "sha256:abc"}))
-	if f.Image != "ghcr.io/x/y" || f.CurrentTag != "1.2.3" || f.CurrentDigest != "sha256:abc" {
+	file := project(t, "services:\n  a:\n    image: ghcr.io/x/y:1.2.3@sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\n")
+	f := one(t, mustProject(t, file, reg(nil, "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", time.Now()), Baseline{"a": "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"}))
+	if f.Image != "ghcr.io/x/y" || f.CurrentTag != "1.2.3" || f.CurrentDigest != "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" {
 		t.Errorf("finding does not describe the current pin: %+v", f)
 	}
 }
@@ -270,7 +272,7 @@ func TestProject_FindingCarriesCurrentPin(t *testing.T) {
 func TestProject_AppliesPolicyFromLabels(t *testing.T) {
 	file := project(t, `services:
   a:
-    image: x/y:1.0.0@sha256:d
+    image: x/y:1.0.0@sha256:18ac3e7343f016890c510e93f935261169d9e3f565436429830faf0934f4f8e4
     labels:
       duva.include: '^\d+\.\d+\.\d+$'
       duva.auto: patch
@@ -294,9 +296,9 @@ func TestProject_AppliesPolicyFromLabels(t *testing.T) {
 func TestProject_UnexpandedVariableIsSkipped(t *testing.T) {
 	file := project(t, `services:
   templated:
-    image: nginx:${TAG}@sha256:d
+    image: nginx:${TAG}@sha256:18ac3e7343f016890c510e93f935261169d9e3f565436429830faf0934f4f8e4
   fine:
-    image: x/z:1.0.0@sha256:d
+    image: x/z:1.0.0@sha256:18ac3e7343f016890c510e93f935261169d9e3f565436429830faf0934f4f8e4
 `)
 
 	asked := []string{}
@@ -305,7 +307,9 @@ func TestProject_UnexpandedVariableIsSkipped(t *testing.T) {
 			asked = append(asked, image)
 			return []string{"1.0.1"}, nil
 		},
-		RemoteDigest: func(string, string) (string, error) { return "sha256:new", nil },
+		RemoteDigest: func(string, string) (string, error) {
+			return "sha256:11507a0e2f5e69d5dfa40a62a1bd7b6ee57e6bcd85c67c9b8431b36fff21c437", nil
+		},
 	}
 
 	findings := mustProject(t, file, r, Baseline{})
@@ -342,5 +346,54 @@ func TestProject_UnexpandedVariableIsSkipped(t *testing.T) {
 	}
 	if fine == nil || fine.Status == StatusSkipped {
 		t.Error("one templated service must not stop the rest of the project")
+	}
+}
+
+// "@sha256:" is a text match, so `image: x/y:1.0.0@sha256:abc` looks pinned.
+// It is not: the daemon rejects that reference outright, so the service cannot
+// be pulled at all.
+//
+// Before this it was reported up-to-date and the malformed digest was recorded
+// as the baseline -- duva saying a service was watched and healthy when it was
+// neither, which is worse than the unpinned case that at least says so.
+func TestProject_MalformedDigestIsAnError(t *testing.T) {
+	file := project(t, "services:\n  bad:\n    image: x/y:1.0.0@sha256:abc\n")
+
+	asked := false
+	r := Registry{
+		RemoteDigest: func(string, string) (string, error) {
+			asked = true
+			return "sha256:new", nil
+		},
+	}
+	base := Baseline{}
+	f := one(t, mustProject(t, file, r, base))
+
+	if f.Status != StatusError {
+		t.Errorf("status = %v, want error", f.Status)
+	}
+	if !strings.Contains(f.Reason, "sha256:abc") {
+		t.Errorf("the reason should name the bad digest, got %q", f.Reason)
+	}
+	if asked {
+		t.Error("no registry should be asked about a reference that cannot be pulled")
+	}
+	if len(base) != 0 {
+		t.Errorf("a malformed digest must not be recorded as a baseline, got %v", base)
+	}
+}
+
+// The opposite: a well-formed digest is watched exactly as before. A validity
+// check that rejected everything would pass the test above.
+func TestProject_ValidDigestIsStillWatched(t *testing.T) {
+	const good = "sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b"
+	file := project(t, "services:\n  good:\n    image: x/y:latest@"+good+"\n")
+
+	f := one(t, mustProject(t, file, reg(nil, good, time.Now()), Baseline{"good": good}))
+	if f.Status == StatusError {
+		t.Fatalf("a valid digest should be watched, got error: %s", f.Reason)
+	}
+	if f.CurrentDigest != good {
+		t.Errorf("CurrentDigest = %q, want the pinned digest", f.CurrentDigest)
 	}
 }

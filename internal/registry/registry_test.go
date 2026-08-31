@@ -16,7 +16,7 @@ func TestIsVersionTag(t *testing.T) {
 		"v1.2.3", // v-prefixed releases are the norm on GHCR
 	}
 	invalid := []string{
-		"latest", "stable", "main", "edge", "", "sha256:abc", "version1.2",
+		"latest", "stable", "main", "edge", "", "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", "version1.2",
 	}
 	for _, tag := range valid {
 		if !isVersionTag(tag) {
@@ -71,7 +71,7 @@ func TestGHCRTagDigestFromBase(t *testing.T) {
 		case strings.Contains(r.URL.Path, "/token") || r.URL.RawQuery != "":
 			json.NewEncoder(w).Encode(map[string]string{"token": "testtoken"})
 		default:
-			w.Header().Set("Docker-Content-Digest", "sha256:latestbuild")
+			w.Header().Set("Docker-Content-Digest", "sha256:265ef19d494673653e56a90f9067be958ac75a000d2e474eebe95e0769501532")
 			w.WriteHeader(http.StatusOK)
 		}
 	}))
@@ -81,14 +81,14 @@ func TestGHCRTagDigestFromBase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got != "sha256:latestbuild" {
-		t.Errorf("got %q, want %q", got, "sha256:latestbuild")
+	if got != "sha256:265ef19d494673653e56a90f9067be958ac75a000d2e474eebe95e0769501532" {
+		t.Errorf("got %q, want %q", got, "sha256:265ef19d494673653e56a90f9067be958ac75a000d2e474eebe95e0769501532")
 	}
 }
 
 func TestOCITagDigestFromBase(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Docker-Content-Digest", "sha256:ocibuild")
+		w.Header().Set("Docker-Content-Digest", "sha256:d5eedf357872799474bd48cd277d5648201d0659ce59fb157bb2d9d035729da6")
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
@@ -97,14 +97,14 @@ func TestOCITagDigestFromBase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got != "sha256:ocibuild" {
-		t.Errorf("got %q, want %q", got, "sha256:ocibuild")
+	if got != "sha256:d5eedf357872799474bd48cd277d5648201d0659ce59fb157bb2d9d035729da6" {
+		t.Errorf("got %q, want %q", got, "sha256:d5eedf357872799474bd48cd277d5648201d0659ce59fb157bb2d9d035729da6")
 	}
 }
 
 func TestDockerHubTagDigestFromURL(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]string{"digest": "sha256:hubbuild"})
+		json.NewEncoder(w).Encode(map[string]string{"digest": "sha256:ccb08e1cf3be7a93a136e31c165130367c2be32d6a69f0b05b12a11f3054bda6"})
 	}))
 	defer srv.Close()
 
@@ -112,8 +112,8 @@ func TestDockerHubTagDigestFromURL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got != "sha256:hubbuild" {
-		t.Errorf("got %q, want %q", got, "sha256:hubbuild")
+	if got != "sha256:ccb08e1cf3be7a93a136e31c165130367c2be32d6a69f0b05b12a11f3054bda6" {
+		t.Errorf("got %q, want %q", got, "sha256:ccb08e1cf3be7a93a136e31c165130367c2be32d6a69f0b05b12a11f3054bda6")
 	}
 }
 

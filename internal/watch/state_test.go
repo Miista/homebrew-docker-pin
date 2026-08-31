@@ -18,7 +18,7 @@ func statePath(t *testing.T) string {
 func TestState_RoundTrip(t *testing.T) {
 	p := statePath(t)
 	st := NewState()
-	st.Baseline["a"] = "sha256:x"
+	st.Baseline["a"] = "sha256:2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881"
 	st.Notified["b"] = "1.2.3"
 	st.Pending["c"] = Pending{
 		Service: "c", Image: "x/y", CurrentTag: "1.0.0",
@@ -33,7 +33,7 @@ func TestState_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Baseline["a"] != "sha256:x" || got.Notified["b"] != "1.2.3" {
+	if got.Baseline["a"] != "sha256:2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881" || got.Notified["b"] != "1.2.3" {
 		t.Errorf("round trip lost data: %+v", got)
 	}
 	p2 := got.Pending["c"]
@@ -66,7 +66,7 @@ func TestLoadState_Corrupt(t *testing.T) {
 // sections. Callers should not have to nil-check every map.
 func TestLoadState_PartialFileGetsUsableMaps(t *testing.T) {
 	p := statePath(t)
-	if err := os.WriteFile(p, []byte(`{"baseline":{"a":"sha256:x"}}`), 0o644); err != nil {
+	if err := os.WriteFile(p, []byte(`{"baseline":{"a":"sha256:2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881"}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	st, err := LoadState(p)
@@ -75,7 +75,7 @@ func TestLoadState_PartialFileGetsUsableMaps(t *testing.T) {
 	}
 	st.Notified["b"] = "1.0.0"  // must not panic
 	st.Pending["c"] = Pending{} // must not panic
-	if st.Baseline["a"] != "sha256:x" {
+	if st.Baseline["a"] != "sha256:2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881" {
 		t.Error("existing section lost")
 	}
 }
@@ -86,7 +86,7 @@ func TestSave_IsAtomicAndLeavesNoTempFiles(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "duva.json")
 	st := NewState()
-	st.Baseline["a"] = "sha256:x"
+	st.Baseline["a"] = "sha256:2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881"
 	for i := 0; i < 3; i++ {
 		if err := st.Save(p); err != nil {
 			t.Fatal(err)

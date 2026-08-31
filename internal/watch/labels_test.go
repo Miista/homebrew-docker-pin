@@ -10,7 +10,7 @@ import (
 func composeWith(t *testing.T, labels string) string {
 	t.Helper()
 	f := filepath.Join(t.TempDir(), "docker-compose.yml")
-	body := "services:\n  app:\n    image: example.com/app:1.0.0@sha256:x\n"
+	body := "services:\n  app:\n    image: example.com/app:1.0.0@sha256:2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881\n"
 	if labels != "" {
 		body += "    labels:\n" + labels
 	}

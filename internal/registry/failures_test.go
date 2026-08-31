@@ -167,7 +167,7 @@ func TestOCITagCreated_IndexWithOnlyAttestations(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/vnd.oci.image.index.v1+json")
 		fmt.Fprint(w, `{"manifests":[
-		  {"digest":"sha256:aaaa","platform":{"architecture":"unknown","os":"unknown"},
+		  {"digest":"sha256:61be55a8e2f6b4e172338bddf184d6dbee29c98853e0a0485ecee7f27b9af0b4","platform":{"architecture":"unknown","os":"unknown"},
 		   "annotations":{"vnd.docker.reference.type":"attestation-manifest"}}
 		]}`)
 	}))

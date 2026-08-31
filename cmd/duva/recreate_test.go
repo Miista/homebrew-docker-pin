@@ -23,9 +23,9 @@ func TestSplitRef(t *testing.T) {
 
 		// A digest wins over any tag, and is returned whole: everything after
 		// the @ is the tag return value, algorithm included.
-		{"nginx@sha256:abc", "nginx", "sha256:abc"},
-		{"nginx:1.25@sha256:abc", "nginx:1.25", "sha256:abc"},
-		{"localhost:5555/app:1.0.1@sha256:abc", "localhost:5555/app:1.0.1", "sha256:abc"},
+		{"nginx@sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", "nginx", "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"},
+		{"nginx:1.25@sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", "nginx:1.25", "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"},
+		{"localhost:5555/app:1.0.1@sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", "localhost:5555/app:1.0.1", "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"},
 	}
 
 	for _, c := range cases {
