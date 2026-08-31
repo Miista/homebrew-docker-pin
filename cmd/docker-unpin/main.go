@@ -9,6 +9,7 @@ import (
 
 	"github.com/Miista/homebrew-docker-pin/internal/compose"
 	"github.com/Miista/homebrew-docker-pin/internal/help"
+	pinpkg "github.com/Miista/homebrew-docker-pin/internal/pin"
 )
 
 const (
@@ -196,7 +197,7 @@ func run(service string, dryRun bool) (unpinOutcome, error) {
 	}
 
 	unpinned := base + ":" + tag
-	outcome := unpinOutcome{OldRaw: rawImage, NewRaw: unpinned, Tag: tag, Digest: digestOf(rawImage)}
+	outcome := unpinOutcome{OldRaw: rawImage, NewRaw: unpinned, Tag: tag, Digest: pinpkg.DigestOf(rawImage)}
 	if dryRun {
 		return outcome, nil
 	}
@@ -205,12 +206,4 @@ func run(service string, dryRun bool) (unpinOutcome, error) {
 	}
 	fmt.Printf("Unpinned %s: now at %s\n", service, unpinned)
 	return outcome, nil
-}
-
-// digestOf extracts the "sha256:..." digest from an "image@sha256:..." ref.
-func digestOf(image string) string {
-	if i := strings.Index(image, "@"); i != -1 {
-		return image[i+1:]
-	}
-	return ""
 }

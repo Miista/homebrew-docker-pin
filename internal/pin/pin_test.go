@@ -220,3 +220,30 @@ func TestCompute_RegistryWithPort(t *testing.T) {
 		t.Errorf("NewRaw = %q", out.NewRaw)
 	}
 }
+
+// A registry port is a colon that is not a tag separator. There used to be
+// four hand-written copies of this split across the two commands and the
+// scheduler, and one of them -- docker pin's own tagOf -- had no port guard,
+// so it read the tag of "localhost:5555/app" as "5555/app" and printed that in
+// its summary table.
+func TestTagOfDoesNotMistakeARegistryPortForATag(t *testing.T) {
+	cases := []struct{ image, tag string }{
+		// The bug: no tag at all, and the port must not become one.
+		{"localhost:5555/app", ""},
+		{"registry.example.com:5000/app", ""},
+
+		// A port and a tag together: only the tag is the tag.
+		{"localhost:5555/app:1.0.1", "1.0.1"},
+		{"registry.example.com:5000/app:2.0", "2.0"},
+
+		// Ordinary references still work.
+		{"nginx:1.25", "1.25"},
+		{"nginx", ""},
+		{"ghcr.io/miista/duva:1.0.0", "1.0.0"},
+	}
+	for _, c := range cases {
+		if got := TagOf(c.image); got != c.tag {
+			t.Errorf("TagOf(%q) = %q, want %q", c.image, got, c.tag)
+		}
+	}
+}
