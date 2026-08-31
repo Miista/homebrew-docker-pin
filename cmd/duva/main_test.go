@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -503,5 +505,51 @@ func TestPolicy_BadLabelDoesNotStopOtherServices(t *testing.T) {
 	}
 	if !byName["fine"].NeedsApproval() {
 		t.Errorf("fine should still have been checked, got %+v", byName["fine"])
+	}
+}
+
+// duva announces a candidate once, and remembers it did so that the next run
+// stays quiet. Recording that before knowing the notification went out turns
+// "notify once" into "notify never": ntfy is unreachable, the candidate is
+// remembered as announced, and the one notification for that update is gone.
+func TestNotifyAvailable_FailureIsNotRecordedAsSent(t *testing.T) {
+	var hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		http.Error(w, "down", http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	cfg := envConfig{NtfyURL: srv.URL, NtfyTopic: "duva"}
+	f := watch.Finding{Service: "app", Status: watch.StatusAvailable, Candidate: "1.1.0"}
+
+	if notifyAvailable(cfg, zerolog.Nop(), f) {
+		t.Error("a refused notification must not report as delivered")
+	}
+	if hits != 1 {
+		t.Errorf("ntfy should have been asked once, got %d", hits)
+	}
+}
+
+// The opposite, so the guard cannot be "always report failure".
+func TestNotifyAvailable_SuccessIsRecordedAsSent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer srv.Close()
+
+	cfg := envConfig{NtfyURL: srv.URL, NtfyTopic: "duva"}
+	f := watch.Finding{Service: "app", Status: watch.StatusAvailable, Candidate: "1.1.0"}
+
+	if !notifyAvailable(cfg, zerolog.Nop(), f) {
+		t.Error("a delivered notification should report as sent")
+	}
+}
+
+// No ntfy configured is not a failure: there is nothing to retry, and treating
+// it as undelivered would re-announce forever for someone who never wanted
+// notifications at all.
+func TestNotifyAvailable_UnconfiguredCountsAsSent(t *testing.T) {
+	f := watch.Finding{Service: "app", Status: watch.StatusAvailable, Candidate: "1.1.0"}
+	if !notifyAvailable(envConfig{}, zerolog.Nop(), f) {
+		t.Error("an unconfigured notifier should not keep the candidate pending")
 	}
 }

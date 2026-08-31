@@ -256,8 +256,13 @@ func checkWith(cfg envConfig, log zerolog.Logger, reg watch.Registry, st *watch.
 		if !f.Available() || st.Notified[f.Service] == f.Candidate {
 			continue
 		}
-		notifyAvailable(cfg, log, f)
-		st.Notified[f.Service] = f.Candidate
+		// Recorded only once it has actually gone out. Marking it sent
+		// regardless turns "notify once" into "notify never" the moment ntfy
+		// is unreachable: the candidate is remembered as announced, the next
+		// run skips it, and the one notification for that update is lost.
+		if notifyAvailable(cfg, log, f) {
+			st.Notified[f.Service] = f.Candidate
+		}
 	}
 	// Forget notifications for services with nothing outstanding, so the
 	// same candidate reappearing later is announced again.
@@ -342,9 +347,15 @@ func skipReason(f watch.Finding) string {
 
 // notifyAvailable reports one newly-seen update via ntfy. Notification
 // failures only warn — a lost notification must not fail the check.
-func notifyAvailable(cfg envConfig, log zerolog.Logger, f watch.Finding) {
+// notifyAvailable announces a candidate, and reports whether the announcement
+// can be considered delivered.
+//
+// False only when ntfy was asked and refused. No ntfy configured returns true:
+// there is nothing to retry, and treating it as undelivered would make duva
+// re-announce forever for someone who never wanted notifications.
+func notifyAvailable(cfg envConfig, log zerolog.Logger, f watch.Finding) bool {
 	if cfg.NtfyURL == "" || cfg.NtfyTopic == "" {
-		return
+		return true
 	}
 	n := notify.Ntfy{URL: cfg.NtfyURL, Topic: cfg.NtfyTopic, Token: cfg.NtfyToken}
 	what := "needs approval"
@@ -359,8 +370,10 @@ func notifyAvailable(cfg envConfig, log zerolog.Logger, f watch.Finding) {
 			f.Service, f.Image, f.CurrentTag, f.Why)
 	}
 	if err := n.Send(title, body, notify.PriorityDefault); err != nil {
-		log.Warn().Msgf("could not send the notification, but the check itself was fine: %v", err)
+		log.Warn().Msgf("could not tell you about %s, will try again next run: %v", f.Service, err)
+		return false
 	}
+	return true
 }
 
 // store holds the state the scheduled checks write and the UI reads. The UI
@@ -690,7 +703,7 @@ func notifyApplied(cfg envConfig, log zerolog.Logger, f watch.Finding, res Resul
 		body += fmt.Sprintf("\nnote: %s failed: %v", res.FailedAt, res.Err)
 	}
 	if err := n.Send(title, body, notify.PriorityDefault); err != nil {
-		log.Warn().Msgf("could not send the notification, but the check itself was fine: %v", err)
+		log.Warn().Msgf("could not tell you that %s was updated: %v", f.Service, err)
 	}
 }
 
