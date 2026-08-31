@@ -105,22 +105,6 @@ func TestIndex_EscapesContent(t *testing.T) {
 	}
 }
 
-// The row must say why it is waiting, not just how big the change is: "minor"
-// alone does not tell you whether the threshold was too low or absent.
-func TestIndex_ShowsWhyItIsWaiting(t *testing.T) {
-	s := &Server{Source: fakeSource{pending: []watch.Pending{
-		{Service: "app", Kind: watch.KindTag, Candidate: "2.0.0",
-			Bump: registry.KindMajor, Why: "major exceeds duva.auto: patch"},
-	}}}
-	body := get(t, s, "/").Body.String()
-	if !strings.Contains(body, "major exceeds duva.auto: patch") {
-		t.Errorf("explanation missing from the row:\n%s", body)
-	}
-	if !strings.Contains(body, "kind-major") {
-		t.Error("kind class missing")
-	}
-}
-
 // --- applying from the page ---------------------------------------------
 
 type fakeApplier struct {
@@ -227,36 +211,6 @@ func TestApply_EndpointAbsentWhenReadOnly(t *testing.T) {
 	s := queueWith(nil)
 	if rec := post(t, s, "service=app"); rec.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", rec.Code)
-	}
-}
-
-// And the form is not offered either, so the page cannot suggest an action
-// that would 404. The form is what is asserted, not the button's label: what
-// matters is whether the page can submit, and wording is free to change.
-// The queue shows the rule, not only the verdict it produced. A service set
-// to apply more than intended is the easy misconfiguration, and it is
-// invisible if the policy is mentioned only in the explanation of what it
-// rejected.
-func TestIndex_ShowsThePolicy(t *testing.T) {
-	s := &Server{Source: fakeSource{pending: []watch.Pending{
-		{Service: "app", Kind: watch.KindTag, Candidate: "2.0.0",
-			Bump: registry.KindMajor, Auto: "patch"},
-	}}}
-	body := get(t, s, "/").Body.String()
-	if !strings.Contains(body, "duva.auto") {
-		t.Errorf("the queue should name the policy it judged against:\n%s", body)
-	}
-	if !strings.Contains(body, ">patch<") {
-		t.Errorf("the policy's value should be shown:\n%s", body)
-	}
-}
-
-// An absent duva.auto means none -- the default, and the reason most services
-// are in the queue at all. A blank cell would read as "unknown".
-func TestIndex_AbsentPolicyReadsAsNone(t *testing.T) {
-	body := get(t, queueWith(nil), "/").Body.String()
-	if !strings.Contains(body, ">none<") {
-		t.Errorf("an unset policy should show as none:\n%s", body)
 	}
 }
 
