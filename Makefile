@@ -36,8 +36,13 @@ docker-duva:
 
 test: test-unit test-integration
 
+# -count=1 because go caches a passing test's result and replays it when
+# nothing it can see has changed. That is right for pure code, but the cache
+# does not know about a daemon, an image or a container, and a run that is
+# partly cached and partly not is how a stale number gets compared against a
+# fresh one.
 test-unit:
-	go test -shuffle=on ./...
+	go test -count=1 -shuffle=on ./...
 
 # -p 1 keeps packages sequential: the suites share a registry port and a
 # testbed, and duva does not run several copies of itself in production
