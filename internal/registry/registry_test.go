@@ -2,6 +2,7 @@ package registry
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -126,5 +127,85 @@ func TestDockerHubTagDigestFromURL_NotFound(t *testing.T) {
 	_, err := dockerHubTagDigestFromURL(srv.URL + "/v2/repositories/library/redis/tags/nope")
 	if err == nil {
 		t.Fatal("expected error for missing tag, got nil")
+	}
+}
+
+// Docker Hub's tag summary omits the top-level digest for tags pushed before
+// it began recording one: willfarrell/autoheal:1.2.0, from 2021, carries
+// per-architecture digests under images[] and nothing above them, while the
+// same repository's tags pushed this year carry both.
+//
+// The digest is not missing, only unreported -- the registry serves it -- so a
+// service pinned to an old tag must not become permanently unwatchable.
+func TestRemoteDigestFallsBackWhenHubOmitsTheDigest(t *testing.T) {
+	const want = "sha256:31f580ef0279eaced5b38d631b08c474d70d8403c1c2fdd6ddcf2e879d5f3f7c"
+
+	// Hub's summary, shaped like the real 2021 response: images[] populated,
+	// no digest above them.
+	hub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"images":[{"architecture":"amd64","digest":"sha256:aaaa"}]}`)
+	}))
+	defer hub.Close()
+
+	asked := ""
+	reg := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked = r.URL.Path
+		w.Header().Set("Docker-Content-Digest", want)
+	}))
+	defer reg.Close()
+
+	hubSummaryBase, hubRegistryBase = hub.URL, reg.URL
+	defer func() {
+		hubSummaryBase, hubRegistryBase = "https://hub.docker.com", "https://registry-1.docker.io"
+	}()
+
+	got, err := RemoteDigest("willfarrell/autoheal", "1.2.0")
+	if err != nil {
+		t.Fatalf("a tag whose digest hub does not report should still resolve: %v", err)
+	}
+	if got != want {
+		t.Errorf("digest = %q, want the registry's manifest-list digest %q", got, want)
+	}
+	// Not images[]: those are per-architecture, and pinning one would pin a
+	// multi-arch image to a single architecture.
+	if got == "sha256:aaaa" {
+		t.Error("took a per-architecture digest from images[] instead of asking the registry")
+	}
+	if !strings.Contains(asked, "willfarrell/autoheal") {
+		t.Errorf("the registry was asked for %q, not the image's repository", asked)
+	}
+}
+
+// The opposite: when hub does report a digest, that is the answer and the
+// registry is not troubled for it. A fallback that ran every time would double
+// the requests and the bearer-token round trips for no gain.
+func TestRemoteDigestPrefersHubsOwnAnswer(t *testing.T) {
+	const want = "sha256:f1c3376c26f2609ab9f29f71f824103fe2fcd8ee0346485cb6122a4f93df6f94"
+
+	hub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, `{"digest":%q}`, want)
+	}))
+	defer hub.Close()
+
+	reached := false
+	reg := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+	}))
+	defer reg.Close()
+
+	hubSummaryBase, hubRegistryBase = hub.URL, reg.URL
+	defer func() {
+		hubSummaryBase, hubRegistryBase = "https://hub.docker.com", "https://registry-1.docker.io"
+	}()
+
+	got, err := RemoteDigest("postgres", "16")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != want {
+		t.Errorf("digest = %q, want %q", got, want)
+	}
+	if reached {
+		t.Error("the registry was asked even though hub had already answered")
 	}
 }
