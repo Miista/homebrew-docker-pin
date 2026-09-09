@@ -229,8 +229,8 @@ services:
   radarr:
     image: ghcr.io/linuxserver/radarr:latest@sha256:...
     labels:
-      duva.include: '^\d+\.\d+\.\d+$' # only consider tags matching this regex
-      duva.exclude: '(alpha|beta|rc)' # drop matching candidates
+      duva.include_tags: '^\d+\.\d+\.\d+$' # only consider tags matching this regex
+      duva.exclude_tags: '(alpha|beta|rc)' # drop matching candidates
       duva.delay: 7d                  # let a release age this long first
       duva.auto: patch                # apply patches unattended; queue the rest
 ```

@@ -67,7 +67,7 @@ func TestProject_StatusPerServiceShape(t *testing.T) {
 		},
 		{
 			name:       "bad include regex is an error",
-			body:       "services:\n  a:\n    image: x/y:1.0.0@sha256:18ac3e7343f016890c510e93f935261169d9e3f565436429830faf0934f4f8e4\n    labels:\n      duva.include: '^('\n",
+			body:       "services:\n  a:\n    image: x/y:1.0.0@sha256:18ac3e7343f016890c510e93f935261169d9e3f565436429830faf0934f4f8e4\n    labels:\n      duva.include_tags: '^('\n",
 			wantStatus: StatusError,
 		},
 	} {
@@ -99,7 +99,7 @@ func TestProject_OneFailureDoesNotStopTheRest(t *testing.T) {
   broken:
     image: x/y:1.0.0@sha256:18ac3e7343f016890c510e93f935261169d9e3f565436429830faf0934f4f8e4
     labels:
-      duva.include: '^\d'
+      duva.include_tags: '^\d'
   fine:
     image: x/z:latest@sha256:18ac3e7343f016890c510e93f935261169d9e3f565436429830faf0934f4f8e4
 `)
@@ -137,7 +137,7 @@ func TestProject_SoakWithholdsFreshCandidates(t *testing.T) {
   a:
     image: x/y:1.0.0@sha256:18ac3e7343f016890c510e93f935261169d9e3f565436429830faf0934f4f8e4
     labels:
-      duva.include: '^\d+\.\d+\.\d+$'
+      duva.include_tags: '^\d+\.\d+\.\d+$'
       duva.delay: 7d
 `)
 	fresh := reg([]string{"1.0.0", "1.1.0"}, "", time.Now().Add(-time.Hour))
@@ -158,7 +158,7 @@ func TestProject_IncludeConstrainsCandidates(t *testing.T) {
   a:
     image: x/y:17.0@sha256:18ac3e7343f016890c510e93f935261169d9e3f565436429830faf0934f4f8e4
     labels:
-      duva.include: '^17\.\d+$'
+      duva.include_tags: '^17\.\d+$'
 `)
 	f := one(t, mustProject(t, file, reg([]string{"17.0", "18.0", "18.1"}, "", time.Now()), Baseline{}))
 	if f.Available() {
@@ -171,8 +171,8 @@ func TestProject_ExcludeDropsCandidates(t *testing.T) {
   a:
     image: x/y:1.0.0@sha256:18ac3e7343f016890c510e93f935261169d9e3f565436429830faf0934f4f8e4
     labels:
-      duva.include: '^\d+\.\d+\.\d+'
-      duva.exclude: 'rc'
+      duva.include_tags: '^\d+\.\d+\.\d+'
+      duva.exclude_tags: 'rc'
 `)
 	f := one(t, mustProject(t, file, reg([]string{"1.0.0", "1.1.0-rc1"}, "", time.Now()), Baseline{}))
 	if f.Available() {
@@ -187,7 +187,9 @@ func TestProject_MovingTagLifecycle(t *testing.T) {
 	file := project(t, "services:\n  a:\n    image: x/y:latest@sha256:3fab5c181bd28a09b64397df76ae2bfaf1eac182979b5fdb7a342858004f36af\n")
 	base := Baseline{}
 
-	// First sight records where the tag points and says nothing.
+	// First sight records where the tag points and says nothing: the file
+	// was never checked against this registry before, so there is nothing
+	// yet to call a change.
 	if f := one(t, mustProject(t, file, reg(nil, "sha256:9834876dcfb05cb167a5c24953eba58c4ac89b1adf57f28f2f9d09af107ee8f0", time.Now()), base)); f.Available() {
 		t.Fatalf("first check must be silent, got %+v", f)
 	}
@@ -195,23 +197,49 @@ func TestProject_MovingTagLifecycle(t *testing.T) {
 		t.Fatalf("baseline = %q", base["a"])
 	}
 
-	// Unmoved: still quiet.
-	if f := one(t, mustProject(t, file, reg(nil, "sha256:9834876dcfb05cb167a5c24953eba58c4ac89b1adf57f28f2f9d09af107ee8f0", time.Now()), base)); f.Available() {
-		t.Errorf("an unmoved tag must stay quiet, got %+v", f)
+	// Unmoved from the file's own pin, the tag having never moved: still
+	// available, since the file (3fab5c18...) and the registry
+	// (9834876d...) disagree from the very first check onward -- reporting
+	// it again is correct here, not a repeat to suppress. Whether an
+	// operator has already been told is duva.State's Notified map's job, one
+	// layer up, not baseline's.
+	f := one(t, mustProject(t, file, reg(nil, "sha256:9834876dcfb05cb167a5c24953eba58c4ac89b1adf57f28f2f9d09af107ee8f0", time.Now()), base))
+	if !f.Available() {
+		t.Errorf("the file's own pin disagreeing with the registry must be reported, got %+v", f)
 	}
 
-	// Moved: reported, as a digest with no bump to classify.
-	f := one(t, mustProject(t, file, reg(nil, "sha256:3e744b9dc39389baf0c5a0660589b8402f3dbb49b89b3e75f2c9355852a3c677", time.Now()), base))
+	// Moved further: still reported, as a digest with no bump to classify.
+	f = one(t, mustProject(t, file, reg(nil, "sha256:3e744b9dc39389baf0c5a0660589b8402f3dbb49b89b3e75f2c9355852a3c677", time.Now()), base))
 	if !f.Available() || f.Kind != KindDigest || f.Candidate != "sha256:3e744b9dc39389baf0c5a0660589b8402f3dbb49b89b3e75f2c9355852a3c677" {
 		t.Fatalf("a moved tag must be reported, got %+v", f)
 	}
 	if f.Bump != "" {
 		t.Errorf("Bump = %q, want empty: a moving tag has no version pair", f.Bump)
 	}
-	// The baseline must NOT advance on detection alone, or the row would
-	// vanish on the next run without anything having been applied.
-	if base["a"] != "sha256:9834876dcfb05cb167a5c24953eba58c4ac89b1adf57f28f2f9d09af107ee8f0" {
-		t.Errorf("baseline moved to %q on detection alone", base["a"])
+	// The compose file holds the truth, and baseline is only ever what was
+	// last seen from the registry -- it tracks detection, not application,
+	// so it advances here too.
+	if base["a"] != "sha256:3e744b9dc39389baf0c5a0660589b8402f3dbb49b89b3e75f2c9355852a3c677" {
+		t.Errorf("baseline should track what was last seen, got %q", base["a"])
+	}
+}
+
+// A pin that matches the registry is up to date regardless of what baseline
+// last recorded -- covering a file edited by hand back to (or past) a digest
+// duva has already seen, which must not go quiet just because baseline still
+// remembers seeing it once.
+func TestProject_FileMatchingRegistryIsUpToDateEvenIfBaselineDisagrees(t *testing.T) {
+	const pinned = "sha256:3fab5c181bd28a09b64397df76ae2bfaf1eac182979b5fdb7a342858004f36af"
+	const seenLater = "sha256:9834876dcfb05cb167a5c24953eba58c4ac89b1adf57f28f2f9d09af107ee8f0"
+	file := project(t, "services:\n  a:\n    image: x/y:latest@sha256:"+strings.TrimPrefix(pinned, "sha256:")+"\n")
+
+	base := Baseline{"a": seenLater}
+	f := one(t, mustProject(t, file, reg(nil, pinned, time.Now()), base))
+	if f.Available() {
+		t.Errorf("the file matching the registry must be up to date, got %+v", f)
+	}
+	if base["a"] != pinned {
+		t.Errorf("baseline should catch up to what the file actually shows, got %q", base["a"])
 	}
 }
 
@@ -274,7 +302,7 @@ func TestProject_AppliesPolicyFromLabels(t *testing.T) {
   a:
     image: x/y:1.0.0@sha256:18ac3e7343f016890c510e93f935261169d9e3f565436429830faf0934f4f8e4
     labels:
-      duva.include: '^\d+\.\d+\.\d+$'
+      duva.include_tags: '^\d+\.\d+\.\d+$'
       duva.auto: patch
 `)
 	f := one(t, mustProject(t, file, reg([]string{"1.0.0", "1.0.1"}, "", time.Now()), Baseline{}))

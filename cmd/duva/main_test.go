@@ -38,7 +38,7 @@ const pinnedConstrainedService = `services:
   app:
     image: example.com/app:1.2.0@sha256:9834876dcfb05cb167a5c24953eba58c4ac89b1adf57f28f2f9d09af107ee8f0
     labels:
-      duva.include: '^\d+\.\d+\.\d+$'
+      duva.include_tags: '^\d+\.\d+\.\d+$'
 `
 
 const pinnedUnconstrainedService = `services:
@@ -139,13 +139,15 @@ func TestMovingTag_DigestMoveIsReported(t *testing.T) {
 	}
 }
 
+// The registry answering with the exact digest the file is already pinned to
+// is up to date, whatever baseline was left holding from an earlier check.
 func TestMovingTag_SameDigestIsNotReported(t *testing.T) {
 	setupFixture(t, pinnedUnconstrainedService)
 	st := watch.NewState()
-	st.Baseline["app"] = "sha256:0967115f2813a3541eaef77de9d9d5773f1c0c04314b0bbfe4ff3b3b1c55b5d5"
+	st.Baseline["app"] = "sha256:9834876dcfb05cb167a5c24953eba58c4ac89b1adf57f28f2f9d09af107ee8f0"
 
-	if f := check1(t, digestReg("sha256:0967115f2813a3541eaef77de9d9d5773f1c0c04314b0bbfe4ff3b3b1c55b5d5"), st); f.Available() {
-		t.Fatalf("unchanged digest must not report, got %+v", f)
+	if f := check1(t, digestReg("sha256:9834876dcfb05cb167a5c24953eba58c4ac89b1adf57f28f2f9d09af107ee8f0"), st); f.Available() {
+		t.Fatalf("a digest matching the file's own pin must not report, got %+v", f)
 	}
 }
 
@@ -392,17 +394,17 @@ const mixedPolicyProject = `services:
   autopatch:
     image: example.com/a:1.0.0@sha256:9834876dcfb05cb167a5c24953eba58c4ac89b1adf57f28f2f9d09af107ee8f0
     labels:
-      duva.include: '^\d+\.\d+\.\d+$'
+      duva.include_tags: '^\d+\.\d+\.\d+$'
       duva.auto: patch
   strict:
     image: example.com/b:1.0.0@sha256:3e744b9dc39389baf0c5a0660589b8402f3dbb49b89b3e75f2c9355852a3c677
     labels:
-      duva.include: '^\d+\.\d+\.\d+$'
+      duva.include_tags: '^\d+\.\d+\.\d+$'
       duva.auto: none
   permissive:
     image: example.com/c:1.0.0@sha256:64daa44ad493ff28a96effab6e77f1732a3d97d83241581b37dbd70a7a4900fe
     labels:
-      duva.include: '^\d+\.\d+\.\d+$'
+      duva.include_tags: '^\d+\.\d+\.\d+$'
       duva.auto: major
 `
 
@@ -487,7 +489,7 @@ func TestPolicy_BadLabelDoesNotStopOtherServices(t *testing.T) {
   fine:
     image: example.com/b:1.0.0@sha256:3e744b9dc39389baf0c5a0660589b8402f3dbb49b89b3e75f2c9355852a3c677
     labels:
-      duva.include: '^\d+\.\d+\.\d+$'
+      duva.include_tags: '^\d+\.\d+\.\d+$'
       duva.auto: none
 `)
 	st := watch.NewState()

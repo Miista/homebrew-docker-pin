@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" type="image/png" href="/favicon.png">
 <title>duva{{if .Host}} — {{.Host}}{{end}}</title>
 <style>
   :root {
@@ -31,12 +32,15 @@
     -webkit-text-size-adjust: 100%;
   }
   main { max-width: 66rem; margin: 0 auto;
-         --cols: 11rem 9.5rem 5rem minmax(0, 1fr) 5.5rem; }
+         --cols: 11rem minmax(0, 1fr) 5rem 8rem 5.5rem; }
   code, .mono { font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 
   /* ---------- header ---------- */
   .top { display: flex; align-items: baseline; gap: .55rem; flex-wrap: wrap;
          padding-bottom: .7rem; border-bottom: 1px solid var(--line); }
+  /* align-self overrides .top's baseline alignment, which suits the text
+     beside it but has no equivalent meaning for an image. */
+  .logo { align-self: center; }
   .mark { font-size: 1.1rem; font-weight: 700; letter-spacing: .12em;
           text-transform: uppercase; color: var(--fg); }
   .host { font-size: 1.1rem; font-weight: 400; color: var(--muted);
@@ -80,7 +84,11 @@
          margin-top: -.15rem; overflow: hidden; text-overflow: ellipsis;
          white-space: nowrap; }
   .rows li:hover .img, .rows li:focus-within .img { opacity: 1; }
-  .jump { white-space: nowrap; }
+  /* min-width: 0 lets the grid track's own fixed width (9.5rem) win over
+     this content's intrinsic size -- without it, a full-length digest
+     candidate does not reliably fit and overflows visually into the Kind
+     column next to it instead of clipping. */
+  .jump { white-space: nowrap; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .jump .from { color: var(--faint); font-size: .8rem; }
   .jump .to { color: var(--fg); font-weight: 400; }
   .arrow { color: var(--faint); padding: 0 .4rem; }
@@ -131,12 +139,25 @@
   .soak .when { font-size: .8rem; color: var(--muted); min-width: 0;
                 overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+  /* ---------- in-progress update ---------- */
+  .progress { font-size: .78rem; color: var(--muted); text-align: right;
+              white-space: nowrap; }
+  .progress .step { color: var(--fg); }
+  .progress .step::before { content: "\2026  "; color: var(--faint); }
+  .progress.failed .step { color: var(--major); }
+
   /* ---------- footer ---------- */
   footer { margin-top: 1.25rem; padding-top: .7rem; border-top: 1px solid var(--line);
            display: flex; gap: .5rem; flex-wrap: wrap;
            color: var(--faint); font-size: .78rem; }
   footer .checked { margin-left: auto; }
   footer span[title] { border-bottom: 1px dotted var(--line); cursor: help; }
+  footer form { margin: 0; }
+  .refresh { font: inherit; cursor: pointer; background: none; border: 0;
+             color: var(--faint); text-decoration: underline; text-decoration-style: dotted;
+             padding: 0; }
+  .refresh:hover { color: var(--fg); }
+  .refresh:disabled { cursor: default; text-decoration: none; opacity: .6; }
 
   /* ---------- narrow phones: two tight lines, no sideways scroll ---------- */
   @media (max-width: 30rem) {
@@ -162,6 +183,7 @@
 <body>
 <main>
   <div class="top">
+    <img class="logo" src="/logo.png" alt="" width="24" height="24">
     <span class="mark">duva</span>
     {{if .Host}}<span class="host">{{.Host}}</span>{{end}}
     {{if .Pending}}<span class="count">{{len .Pending}} to decide</span>{{end}}
@@ -231,7 +253,160 @@
   <footer>
     <span>duva {{.Version}}</span>
     <span class="checked">checked <span title="{{.LastCheckExact}}">{{.LastCheck}}</span></span>
+    {{if .CanRefresh}}
+    <form method="post" action="/refresh">
+      <button class="refresh" type="submit">refresh now</button>
+    </form>
+    {{end}}
   </footer>
 </main>
+<script>
+// Progressive enhancement over the plain <form method=post action=/apply>:
+// without this, a click still works exactly as before -- submit, wait for
+// the whole transaction, land back on a redirected page. With it, the click
+// is answered immediately and the transaction's own steps (pulling, writing
+// the pin, recreating, committing, pushing) appear one by one instead of
+// behind a single blocked page load.
+(function () {
+  "use strict";
+
+  function el(tag, className, text) {
+    var e = document.createElement(tag);
+    if (className) e.className = className;
+    if (text !== undefined) e.textContent = text;
+    return e;
+  }
+
+  // poll asks /progress on an interval until the update is done, updating
+  // the panel with each new step as it arrives. Steps only ever grow, so
+  // re-rendering from scratch each tick is simplest and cheap enough at this
+  // size.
+  function poll(service, panel) {
+    var seen = 0;
+    // A missed poll is not a failure on its own -- a blip retries fine on
+    // the next tick. But nothing before this counted them, so a poller that
+    // failed early (or a progress record that never resolves) sat showing
+    // "checking..." forever with the timer still silently ticking: the
+    // limit below is what actually stops it and says so, instead of only
+    // ever describing that behaviour in a comment.
+    var misses = 0;
+    var maxMisses = 5;
+    var timer = setInterval(function () {
+      fetch("/progress?service=" + encodeURIComponent(service))
+        .then(function (r) {
+          if (!r.ok) throw new Error("progress: " + r.status);
+          return r.json();
+        })
+        .then(function (p) {
+          misses = 0;
+          if (p.steps.length !== seen) {
+            seen = p.steps.length;
+            // The most recent step is what is actually happening right now;
+            // earlier ones are done and are not worth the row's width to
+            // repeat, so only the latest is shown.
+            panel.textContent = "";
+            panel.appendChild(el("span", "step", p.steps[p.steps.length - 1]));
+          } else if (p.steps.length === 0) {
+            panel.textContent = "";
+            panel.appendChild(el("span", "step", "starting…"));
+          }
+          if (p.done) {
+            clearInterval(timer);
+            if (p.failed) panel.classList.add("failed");
+            // A full reload rather than swapping the banner in place: the
+            // queue itself (Pending/Soaking) has changed underneath this
+            // click, and re-rendering that from scratch here would just be
+            // duplicating what the server already does on GET /.
+            var url = new URL(location.href);
+            url.search = "?service=" + encodeURIComponent(service) +
+              "&level=" + (p.failed ? "error" : "ok") +
+              "&message=" + encodeURIComponent(p.message);
+            location.href = url.toString();
+          }
+        })
+        .catch(function () {
+          misses++;
+          if (misses >= maxMisses) {
+            clearInterval(timer);
+            panel.classList.add("failed");
+            panel.textContent = "";
+            panel.appendChild(el("span", "step",
+              "lost track of this update -- reload to check its actual status"));
+            return;
+          }
+          seen === 0 && panel.childElementCount === 0 &&
+            panel.appendChild(el("span", "step", "checking…"));
+        });
+    }, 800);
+  }
+
+  document.querySelectorAll("form").forEach(function (form) {
+    var action = form.getAttribute("action");
+
+    if (action === "/apply") {
+      form.addEventListener("submit", function (evt) {
+        evt.preventDefault();
+        var service = form.querySelector('input[name="service"]').value;
+        var panel = el("span", "progress");
+        form.replaceWith(panel);
+        poll(service, panel);
+
+        fetch("/apply", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: "service=" + encodeURIComponent(service),
+        }).catch(function () {
+          // The request to *start* failed to even reach the server (offline,
+          // container restarting mid-click) -- the poller above has nothing
+          // to poll for, so fall back to the plain form's own behaviour.
+          panel.replaceWith(form);
+        });
+      });
+      return;
+    }
+
+    if (action === "/refresh") {
+      form.addEventListener("submit", function (evt) {
+        evt.preventDefault();
+        var button = form.querySelector("button");
+        button.disabled = true;
+        button.textContent = "refreshing…";
+
+        var timer = setInterval(function () {
+          fetch("/refresh-progress")
+            .then(function (r) {
+              if (!r.ok) throw new Error("refresh-progress: " + r.status);
+              return r.json();
+            })
+            .then(function (p) {
+              if (p.running) return;
+              clearInterval(timer);
+              // A full reload, same as apply once done: the footer's "checked
+              // ... ago" and the queue itself both need the server's fresh
+              // render, not a client-side guess at what changed.
+              var url = new URL(location.href);
+              url.search = p.error
+                ? "?level=error&message=" + encodeURIComponent(p.error)
+                : "";
+              location.href = url.toString();
+            })
+            .catch(function () {
+              // A missed poll is not a failure -- the next tick tries again.
+            });
+        }, 800);
+
+        fetch("/refresh", { method: "POST" }).catch(function () {
+          // The request to *start* failed to even reach the server -- the
+          // poller above has nothing to poll for, so fall back to the plain
+          // form's own behaviour.
+          clearInterval(timer);
+          button.disabled = false;
+          button.textContent = "refresh now";
+        });
+      });
+    }
+  });
+})();
+</script>
 </body>
 </html>

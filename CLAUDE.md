@@ -121,7 +121,7 @@ swapping its image needs no path interpreted at all. Anonymous volumes are
 carried across explicitly — they exist only in the container's `Mounts`, and a
 replacement built from `Config` alone would come up healthy and empty.
 
-Per-service policy lives as labels: `duva.include` / `duva.exclude` constrain
+Per-service policy lives as labels: `duva.include_tags` / `duva.exclude_tags` constrain
 which tags qualify, `duva.delay` soaks a release before adopting it, and
 `duva.auto` (none/patch/minor/major, default none) says what duva may apply
 unattended. An unknown label is an error, not something ignored.

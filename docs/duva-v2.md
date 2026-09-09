@@ -38,10 +38,10 @@ On a `DUVA_SCHEDULE` cron, per watched service:
 Unchanged from today (`checkService` in `cmd/duva/main.go`), including the two
 paths it already distinguishes:
 
-- **Constrained** (`duva.include` regex): list registry tags, filter by
+- **Constrained** (`duva.include_tags` regex): list registry tags, filter by
   include/exclude, sort by `registry.CompareVersions`, honour `duva.delay` as a
   release-age soak. The newest qualifying tag is the candidate.
-- **Moving** (no `duva.include`, e.g. `latest`): fetch the remote manifest
+- **Moving** (no `duva.include_tags`, e.g. `latest`): fetch the remote manifest
   digest and compare against the recorded baseline. The candidate is a digest,
   not a tag.
 

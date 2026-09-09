@@ -174,7 +174,7 @@ func (f *Fixture) WithUpdate(s Service, kind Bump) Service {
 		next = VersionString(ma+1+f.rnd.Intn(3), 0, 0)
 	}
 	s.AvailableTags = append([]string{s.Tag}, next)
-	s.Labels = merge(s.Labels, map[string]string{"duva.include": `^\d+\.\d+\.\d+$`})
+	s.Labels = merge(s.Labels, map[string]string{"duva.include_tags": `^\d+\.\d+\.\d+$`})
 	return s
 }
 

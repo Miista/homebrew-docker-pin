@@ -21,7 +21,7 @@ func composeWith(t *testing.T, labels string) string {
 }
 
 func TestLabels_ReadsRules(t *testing.T) {
-	f := composeWith(t, "      duva.include: '^\\d+$'\n      duva.exclude: 'rc'\n      duva.delay: 7d\n      duva.auto: minor\n")
+	f := composeWith(t, "      duva.include_tags: '^\\d+$'\n      duva.exclude_tags: 'rc'\n      duva.delay: 7d\n      duva.auto: minor\n")
 	r, err := Labels(f, "app")
 	if err != nil {
 		t.Fatal(err)
@@ -75,10 +75,10 @@ func TestLabels_RejectsBadAuto(t *testing.T) {
 // are meaningless with no candidate set to choose from.
 func TestLabels_DelayAndExcludeNeedInclude(t *testing.T) {
 	if _, err := Labels(composeWith(t, "      duva.delay: 7d\n"), "app"); err == nil {
-		t.Error("duva.delay without duva.include should be rejected")
+		t.Error("duva.delay without duva.include_tags should be rejected")
 	}
-	if _, err := Labels(composeWith(t, "      duva.exclude: rc\n"), "app"); err == nil {
-		t.Error("duva.exclude without duva.include should be rejected")
+	if _, err := Labels(composeWith(t, "      duva.exclude_tags: rc\n"), "app"); err == nil {
+		t.Error("duva.exclude_tags without duva.include_tags should be rejected")
 	}
 }
 
