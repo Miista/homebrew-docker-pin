@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -156,7 +157,7 @@ func TestApp_NoUpdateIsNeverQueued(t *testing.T) {
 	f := fixture.New(t)
 	for _, auto := range []string{"none", "patch", "minor", "major"} {
 		svc := f.WithAuto(f.PinnedService(), auto)
-		svc.Labels["duva.include"] = `^\d+\.\d+\.\d+$`
+		svc.Labels["duva.include_tags"] = `^\d+\.\d+\.\d+$`
 		findings, st := app(t, f.Project(svc), f.Registry(svc))
 
 		if got := findingFor(t, findings, svc.Name); got.Available() {
@@ -339,20 +340,20 @@ func TestApp_BreakingThePin_StopsItBeingWatched(t *testing.T) {
 	}
 }
 
-// Remove duva.include: the service stops being a constrained one and becomes
+// Remove duva.include_tags: the service stops being a constrained one and becomes
 // a moving-tag follower, which is a different question entirely. Its version
 // tag never moves, so nothing is ever found.
 func TestApp_RemovingTheIncludeLabel_ChangesWhatIsAsked(t *testing.T) {
 	f := fixture.New(t)
 	svc := f.WithAuto(f.WithUpdate(f.PinnedService(), fixture.BumpPatch), "patch")
 
-	delete(svc.Labels, "duva.include") // the one break
+	delete(svc.Labels, "duva.include_tags") // the one break
 	svc.AvailableDigest = svc.Digest   // a moving-tag lookup now answers
 
 	findings, _ := app(t, f.Project(svc), f.Registry(svc))
 	got := findingFor(t, findings, svc.Name)
 	if got.Kind == watch.KindTag {
-		t.Errorf("without duva.include this is no longer a tag question: %+v", got)
+		t.Errorf("without duva.include_tags this is no longer a tag question: %+v", got)
 	}
 }
 
@@ -381,8 +382,8 @@ func TestApp_MisspellingALabelName_IsAnError(t *testing.T) {
 	f := fixture.New(t)
 	svc := f.WithAuto(f.WithUpdate(f.PinnedService(), fixture.BumpPatch), "patch")
 
-	svc.Labels["duva.includ"] = svc.Labels["duva.include"] // the one break
-	delete(svc.Labels, "duva.include")
+	svc.Labels["duva.includ"] = svc.Labels["duva.include_tags"] // the one break
+	delete(svc.Labels, "duva.include_tags")
 
 	findings, _ := app(t, f.Project(svc), f.Registry(svc))
 	if got := findingFor(t, findings, svc.Name); got.Status != watch.StatusError {
@@ -396,7 +397,7 @@ func TestApp_BreakingTheIncludeRegex_IsAnError(t *testing.T) {
 	f := fixture.New(t)
 	svc := f.WithAuto(f.WithUpdate(f.PinnedService(), fixture.BumpPatch), "patch")
 
-	svc.Labels["duva.include"] = "^(" // the one break
+	svc.Labels["duva.include_tags"] = "^(" // the one break
 
 	findings, _ := app(t, f.Project(svc), f.Registry(svc))
 	if got := findingFor(t, findings, svc.Name); got.Status != watch.StatusError {
@@ -551,10 +552,14 @@ func TestApp_FailedApplyIsReportedAsAnError(t *testing.T) {
 	}
 }
 
-// A moving tag's baseline advances only when the update is applied. Advancing
-// it on detection would mean a move that could not be applied is forgotten,
-// and the service silently stops being offered the update it needs.
-func TestApp_BaselineAdvancesOnlyWhenApplied(t *testing.T) {
+// A moving tag whose apply fails must still be offered again on the next
+// check -- the compose file's own pin is what "up to date" means, and it was
+// never rewritten (the transaction failed before writePin), so the file
+// still disagrees with the registry and is reported regardless of what
+// baseline holds. baseline itself just tracks what was last seen from the
+// registry, on every check, whether or not an apply that run attempted
+// succeeded.
+func TestApp_FailedApplyIsStillOfferedNextCheck(t *testing.T) {
 	f := fixture.New(t)
 	svc := f.WithAuto(f.MovingTagService(false), "patch")
 	a := newApp(t, f.Project(svc))
@@ -570,7 +575,6 @@ func TestApp_BaselineAdvancesOnlyWhenApplied(t *testing.T) {
 	}, st, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	baseline := st.Baseline[svc.Name]
 
 	// The tag moves, and the apply fails.
 	moved := svc
@@ -585,9 +589,21 @@ func TestApp_BaselineAdvancesOnlyWhenApplied(t *testing.T) {
 	}, r.docker, r.git); err != nil {
 		t.Fatal(err)
 	}
+	if st.Baseline[svc.Name] != moved.AvailableDigest {
+		t.Errorf("baseline should track what was last seen, got %q", st.Baseline[svc.Name])
+	}
 
-	if st.Baseline[svc.Name] != baseline {
-		t.Error("a failed apply must not advance the baseline, or the move is forgotten")
+	// A later check against the same unmoved (failed) target must still
+	// report it: the file never changed, so it still disagrees with the
+	// registry.
+	findings, err := checkWith(envConfig{}, testLog(), watch.Registry{
+		RemoteDigest: f.Registry(moved).RemoteDigest,
+	}, st, time.Now(), nil, Docker{}, Git{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := findingFor(t, findings, svc.Name); !got.Available() {
+		t.Errorf("a moved tag whose apply failed must still be offered, got %+v", got)
 	}
 }
 
@@ -619,9 +635,33 @@ func storeWith(t *testing.T, f *fixture.Fixture, r *recorder) (*store, fixture.S
 	}
 	st.Notified[svc.Name] = st.Pending[svc.Name].Candidate
 
-	return &store{state: st, act: func(fd watch.Finding) Result {
-		return apply(fd, r.docker, r.git, applyOptions{Host: "testhost"})
+	return &store{state: st, act: func(fd watch.Finding, extra func(string, ...any)) Result {
+		return apply(fd, r.docker, r.git, applyOptions{Host: "testhost", Log: extra})
 	}}, svc
+}
+
+// applySync starts an update and waits for it to finish, returning the same
+// (message, error) shape the old synchronous Apply did -- so tests written
+// against that shape keep asserting the same thing. Safe to poll tightly:
+// everything under it is fakes, so "still running" never takes long enough
+// for the sleep to matter.
+func applySync(t *testing.T, s *store, service string) (string, error) {
+	t.Helper()
+	if err := s.Start(service); err != nil {
+		return "", err
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if p, ok := s.Progress(service); ok && p.Done {
+			if p.Failed {
+				return "", fmt.Errorf("%s", p.Message)
+			}
+			return p.Message, nil
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("%s: Start did not finish within the test deadline", service)
+	return "", nil
 }
 
 // Approving applies the update and the row stops waiting -- it reached the
@@ -631,7 +671,7 @@ func TestStoreApply_AppliesAndClearsTheRow(t *testing.T) {
 	r := newRecorder()
 	s, svc := storeWith(t, f, r)
 
-	msg, err := s.Apply(svc.Name)
+	msg, err := applySync(t, s, svc.Name)
 	if err != nil {
 		t.Fatalf("unexpected failure: %v", err)
 	}
@@ -657,7 +697,7 @@ func TestStoreApply_FailureKeepsTheRow(t *testing.T) {
 	r.docker.ComposeUp = func(string, string) error { return errBoundary }
 	s, svc := storeWith(t, f, r)
 
-	if _, err := s.Apply(svc.Name); err == nil {
+	if _, err := applySync(t, s, svc.Name); err == nil {
 		t.Fatal("expected a failure")
 	}
 	if _, still := s.state.Pending[svc.Name]; !still {
@@ -669,7 +709,7 @@ func TestStoreApply_UnknownService(t *testing.T) {
 	f := fixture.New(t)
 	s, _ := storeWith(t, f, newRecorder())
 
-	if _, err := s.Apply("nosuchservice"); err == nil {
+	if _, err := applySync(t, s, "nosuchservice"); err == nil {
 		t.Error("approving something that is not queued must be an error")
 	}
 }
@@ -692,11 +732,11 @@ func TestStoreApply_MovingTagAdvancesTheBaseline(t *testing.T) {
 	}
 
 	r := newRecorder()
-	s := &store{state: st, act: func(fd watch.Finding) Result {
+	s := &store{state: st, act: func(fd watch.Finding, extra func(string, ...any)) Result {
 		return apply(fd, r.docker, r.git, applyOptions{Host: "h"})
 	}}
 
-	if _, err := s.Apply(svc.Name); err != nil {
+	if _, err := applySync(t, s, svc.Name); err != nil {
 		t.Fatal(err)
 	}
 	if st.Baseline[svc.Name] != svc.AvailableDigest {
@@ -810,11 +850,11 @@ func TestStoreApply_TakesASoakingUpdateEarly(t *testing.T) {
 		CurrentTag: svc.Tag, Candidate: candidate,
 		Remaining: "4 days", Outcome: "moves to approval",
 	}
-	s := &store{state: st, act: func(fd watch.Finding) Result {
+	s := &store{state: st, act: func(fd watch.Finding, extra func(string, ...any)) Result {
 		return apply(fd, r.docker, r.git, applyOptions{Host: "testhost"})
 	}}
 
-	msg, err := s.Apply(svc.Name)
+	msg, err := applySync(t, s, svc.Name)
 	if err != nil {
 		t.Fatalf("a soaking update should be applyable: %v", err)
 	}

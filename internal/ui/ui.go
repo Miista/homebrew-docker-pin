@@ -5,11 +5,15 @@
 // inventory, no history. Updates applied automatically never appear here —
 // the git log is their record.
 //
-// The page is one embedded template with no JavaScript and no build step.
+// The page is one embedded template. A small amount of inline JavaScript
+// polls /progress while an update is running, so the transaction's own steps
+// (pulling, writing the pin, recreating, committing, pushing) show up as they
+// happen rather than behind a single long-blocked page load.
 package ui
 
 import (
 	_ "embed"
+	"encoding/json"
 	"fmt"
 	"html/template"
 	"net/http"
@@ -22,6 +26,12 @@ import (
 
 //go:embed page.html
 var pageHTML string
+
+//go:embed assets/logo.png
+var logoPNG []byte
+
+//go:embed assets/favicon.png
+var faviconPNG []byte
 
 var page = template.Must(template.New("page").Parse(pageHTML))
 
@@ -44,10 +54,59 @@ type Source interface {
 // Applier applies one queued update. Approving from the page runs the same
 // path as an automatic update -- one way of applying, not two -- so a click
 // cannot do something an unattended run would not.
+//
+// Applying is a transaction of several steps (pulling, writing the pin,
+// recreating the container, committing, pushing) that can take long enough
+// for a synchronous HTTP request to feel like the click did nothing. Start
+// and Progress split it in two: Start launches the transaction and returns
+// immediately, and the page polls Progress for what has happened so far --
+// so a slow pull is visible as it happens, not as a blank tab.
 type Applier interface {
-	// Apply performs the update for a service and reports what happened in
-	// one clause, or an error if it did not reach the container.
-	Apply(service string) (string, error)
+	// Start begins updating a service in the background. An error here means
+	// the update never began (nothing queued under that name, or one is
+	// already running); anything the transaction itself fails on is reported
+	// through Progress instead.
+	Start(service string) error
+	// Progress reports what has happened so far for a service's most recent
+	// Start, and whether it has finished. ok is false when nothing has ever
+	// been started for that service -- distinct from "finished with no
+	// steps yet", which the page would otherwise be unable to tell apart
+	// from "never asked".
+	Progress(service string) (p Progress, ok bool)
+}
+
+// Progress is one update's state as the page's poller sees it.
+type Progress struct {
+	// Steps are the transaction's own log lines, oldest first, exactly as
+	// applyOptions.Log recorded them.
+	Steps []string `json:"steps"`
+	// Done is true once the transaction has finished, successfully or not.
+	Done bool `json:"done"`
+	// Message is the final result, once Done -- the same clause /apply used
+	// to carry in its redirect.
+	Message string `json:"message"`
+	// Failed marks Message as an error rather than a success, once Done.
+	Failed bool `json:"failed"`
+}
+
+// Refresher runs a check on demand, for a "refresh now" button next to the
+// footer's "checked ... ago" -- otherwise the only way to make duva look
+// again before its own schedule is to restart the container.
+//
+// Split into Refresh/Progress the same way Applier is: a check is registry
+// HTTP calls, which can stall on a slow or unreachable registry same as
+// anything else that leaves the machine, so the button is answered
+// immediately rather than blocking the request on however long that takes.
+type Refresher interface {
+	// Refresh starts a check in the background. An error here means one was
+	// already running; a failure in the check itself is reported through
+	// RefreshProgress instead.
+	Refresh() error
+	// RefreshProgress reports whether the most recently started check is
+	// still running, and once done, whether it failed. Named distinctly from
+	// Applier.Progress -- a type implementing both (duva's own store) cannot
+	// have two methods sharing one name with different signatures.
+	RefreshProgress() (running, done bool, err string)
 }
 
 // Server serves the queue.
@@ -60,6 +119,11 @@ type Server struct {
 	// endpoint that triggers updates should not exist on a duva that is only
 	// meant to report.
 	Applier Applier
+	// Refresher enables the footer's refresh button. Nil leaves it absent,
+	// for the same reason Applier being nil removes /apply: an endpoint that
+	// can trigger a registry check should not exist on a duva not meant to
+	// act on its own findings.
+	Refresher Refresher
 }
 
 // Handler returns the routes: the page, and a health endpoint for whatever is
@@ -69,16 +133,68 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, "ok")
 	})
+	mux.HandleFunc("/logo.png", servePNG(logoPNG))
+	mux.HandleFunc("/favicon.png", servePNG(faviconPNG))
 	if s.Applier != nil {
 		mux.HandleFunc("/apply", s.apply)
+		mux.HandleFunc("/progress", s.progress)
+	}
+	if s.Refresher != nil {
+		mux.HandleFunc("/refresh", s.refresh)
+		mux.HandleFunc("/refresh-progress", s.refreshProgress)
 	}
 	mux.HandleFunc("/", s.index)
 	return mux
 }
 
-// apply runs one queued update and re-renders the queue. It is a POST because
-// it changes things: a link a browser might prefetch must never restart a
-// container.
+// servePNG returns a handler for one embedded image. Content-Type is set
+// explicitly rather than left to Go's sniffing: embedded bytes never touch a
+// filesystem, so nothing infers it from an extension the way http.FileServer
+// would.
+func servePNG(b []byte) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		w.Write(b)
+	}
+}
+
+// refresh starts a check in the background and redirects straight back to
+// the queue. Like apply, it does not wait: a registry can be as slow to
+// answer as anything else that leaves the machine, and the page's poller
+// picks up the result from refresh-progress.
+func (s *Server) refresh(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "use POST", http.StatusMethodNotAllowed)
+		return
+	}
+	q := url.Values{}
+	if err := s.Refresher.Refresh(); err != nil {
+		q.Set("level", "error")
+		q.Set("message", err.Error())
+	}
+	http.Redirect(w, r, "/?"+q.Encode(), http.StatusSeeOther)
+}
+
+// refreshProgress reports the in-flight check as JSON, for the page's
+// poller.
+func (s *Server) refreshProgress(w http.ResponseWriter, r *http.Request) {
+	running, done, errMsg := s.Refresher.RefreshProgress()
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	json.NewEncoder(w).Encode(struct {
+		Running bool   `json:"running"`
+		Done    bool   `json:"done"`
+		Error   string `json:"error,omitempty"`
+	}{running, done, errMsg})
+}
+
+// apply starts one queued update in the background and redirects straight
+// back to the queue. It is a POST because it changes things: a link a
+// browser might prefetch must never restart a container.
+//
+// It does not wait for the update to finish -- that can take long enough
+// that the click would otherwise sit behind a blank tab. The page's poller
+// picks up where this left off, using the service named in the redirect.
 func (s *Server) apply(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
@@ -91,19 +207,30 @@ func (s *Server) apply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	note, err := s.Applier.Apply(service)
-	msg, level := note, "ok"
-	if err != nil {
-		msg, level = err.Error(), "error"
+	q := url.Values{"service": {service}}
+	if err := s.Applier.Start(service); err != nil {
+		q.Set("level", "error")
+		q.Set("message", err.Error())
 	}
 
 	// Redirect rather than rendering in place, so a refresh does not repeat
 	// the update.
-	http.Redirect(w, r, "/?"+url.Values{
-		"service": {service},
-		"level":   {level},
-		"message": {msg},
-	}.Encode(), http.StatusSeeOther)
+	http.Redirect(w, r, "/?"+q.Encode(), http.StatusSeeOther)
+}
+
+// progress reports one service's update-in-progress as JSON, for the page's
+// poller. A service with nothing ever started under it is a 404: the poller
+// only ever asks about a service it just clicked Update for, so this
+// shouldn't happen outside of someone hand-editing the query string.
+func (s *Server) progress(w http.ResponseWriter, r *http.Request) {
+	service := r.URL.Query().Get("service")
+	p, ok := s.Applier.Progress(service)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	json.NewEncoder(w).Encode(p)
 }
 
 type row struct {
@@ -164,6 +291,7 @@ func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 		LastCheck      string
 		LastCheckExact string
 		CanApply       bool
+		CanRefresh     bool
 		Service        string
 		Level          string
 		Message        string
@@ -175,6 +303,7 @@ func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 		LastCheck:      s.Source.LastCheck(),
 		LastCheckExact: s.Source.LastCheckExact(),
 		CanApply:       s.Applier != nil,
+		CanRefresh:     s.Refresher != nil,
 		Service:        r.URL.Query().Get("service"),
 		Level:          r.URL.Query().Get("level"),
 		Message:        r.URL.Query().Get("message"),

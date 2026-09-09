@@ -57,7 +57,7 @@ const (
 type Kind string
 
 const (
-	// KindTag: a constrained service (duva.include) with a newer matching tag.
+	// KindTag: a constrained service (duva.include_tags) with a newer matching tag.
 	KindTag Kind = "tag"
 	// KindDigest: a moving tag (latest, dev) whose digest has moved.
 	KindDigest Kind = "digest"
@@ -141,13 +141,17 @@ type Rules struct {
 
 // knownLabels is every duva.* label a service may carry. Anything else under
 // the duva. prefix is a typo, and saying so beats ignoring it: a misspelled
-// duva.includ silently means "follow the moving tag instead", which looks
-// like duva working rather than duva misconfigured.
+// duva.include_tags silently means "follow the moving tag instead", which
+// looks like duva working rather than duva misconfigured.
+//
+// Named to match diun's own duva.include_tags/duva.exclude_tags, which most
+// services already carry for that tool -- so pointing duva at the same
+// stream is one label to add per service, not a different name to learn.
 var knownLabels = map[string]bool{
-	"duva.include": true,
-	"duva.exclude": true,
-	"duva.delay":   true,
-	"duva.auto":    true,
+	"duva.include_tags": true,
+	"duva.exclude_tags": true,
+	"duva.delay":        true,
+	"duva.auto":         true,
 }
 
 // Labels reads and validates a service's duva.* rules.
@@ -168,8 +172,8 @@ func Labels(composeFile, service string) (Rules, error) {
 	}
 
 	r := Rules{
-		Include: l["duva.include"],
-		Exclude: l["duva.exclude"],
+		Include: l["duva.include_tags"],
+		Exclude: l["duva.exclude_tags"],
 		Delay:   l["duva.delay"],
 		Auto:    auto,
 	}
@@ -177,18 +181,28 @@ func Labels(composeFile, service string) (Rules, error) {
 	// A delay bounds which candidate tags qualify, so it is meaningless
 	// without a set of candidates to choose from.
 	if r.Delay != "" && r.Include == "" {
-		return Rules{}, fmt.Errorf("duva.delay requires duva.include")
+		return Rules{}, fmt.Errorf("duva.delay requires duva.include_tags")
 	}
 	// Same for exclude: nothing to exclude from.
 	if r.Exclude != "" && r.Include == "" {
-		return Rules{}, fmt.Errorf("duva.exclude requires duva.include")
+		return Rules{}, fmt.Errorf("duva.exclude_tags requires duva.include_tags")
 	}
 	return r, nil
 }
 
-// Baseline records the last digest seen for each moving-tag service, so a
-// digest move is reported once rather than every run. Constrained services
-// need no baseline: the compose file's own tag is the reference.
+// Baseline records the last digest seen from the registry for each
+// moving-tag service, purely to suppress a false "update available" on the
+// first check of a newly watched service. It does not decide up-to-date on
+// its own, and reporting the same digest twice is not this package's problem
+// to solve: whether an operator has already been told about a given
+// candidate is duva.State's Notified map, one layer up.
+//
+// The compose file's own pin is always the truth for "up to date" -- an
+// operator (or `docker pin`) can rewrite it at any time outside of duva, and
+// baseline advancing on every check, not just on an apply duva itself made,
+// is what lets that be noticed rather than masked by a stale memory of a
+// digest already seen once. Constrained services need no baseline at all:
+// the compose file's own tag is the reference.
 type Baseline map[string]string
 
 // Project scans every service reachable from rootFile and reports a finding
@@ -296,7 +310,7 @@ func service(rootFile, name string, reg Registry, baseline Baseline) Finding {
 	return f
 }
 
-// constrained handles a service with a duva.include regex: the newest matching
+// constrained handles a service with a duva.include_tags regex: the newest matching
 // tag newer than the one pinned, subject to the delay soak.
 func constrained(f Finding, rules Rules, reg Registry) Finding {
 	c, err := pin.SelectCandidate(f.File, f.Service, pin.Rules{
@@ -340,6 +354,18 @@ func movingTag(f Finding, reg Registry, baseline Baseline) Finding {
 		return errorf(f, fmt.Errorf("fetching remote digest for %s:%s: %w", f.Image, f.CurrentTag, err))
 	}
 
+	// The file's own pin, not just the baseline, is what "up to date" means:
+	// the registry serving exactly what is already written is up to date
+	// regardless of what baseline last recorded -- covering a pin edited by
+	// hand back to a digest duva has already seen (and so would otherwise
+	// still be sitting in baseline, masking the fact that the file no longer
+	// agrees with it).
+	if digest == f.CurrentDigest {
+		baseline[f.Service] = digest
+		f.Status, f.Reason = StatusUpToDate, "tag still points at the pinned digest"
+		return f
+	}
+
 	// First sight of this service: record where the tag is now and say
 	// nothing, or every newly watched service would report an "update" on
 	// day one regardless of whether anything moved.
@@ -348,11 +374,14 @@ func movingTag(f Finding, reg Registry, baseline Baseline) Finding {
 		f.Status, f.Reason = StatusUpToDate, "baseline recorded"
 		return f
 	}
-	if digest == baseline[f.Service] {
-		f.Status, f.Reason = StatusUpToDate, "tag still points at the pinned digest"
-		return f
-	}
+	// Past this point the file and the registry disagree, so there is
+	// something to report -- once. baseline's only job is that "once": a
+	// repeat check that finds the exact same available digest must not
+	// re-queue it (the operator already has it in front of them), but the
+	// file always wins the actual up-to-date question above, so baseline can
+	// never mask a pin that no longer matches what it remembers.
 	f.Status, f.Kind, f.Candidate = StatusAvailable, KindDigest, digest
+	baseline[f.Service] = digest
 	return f
 }
 

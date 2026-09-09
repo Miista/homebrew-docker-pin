@@ -108,14 +108,36 @@ func TestIndex_EscapesContent(t *testing.T) {
 // --- applying from the page ---------------------------------------------
 
 type fakeApplier struct {
-	applied []string
-	note    string
-	err     error
+	applied  []string
+	note     string
+	err      error
+	startErr error
+	// progress, once set, is returned verbatim -- for tests that care about
+	// an update still in flight. Tests that only care about the eventual
+	// result leave it unset and get one synthesized from note/err instead.
+	progress    Progress
+	hasProgress bool
+	hasStart    bool
 }
 
-func (f *fakeApplier) Apply(service string) (string, error) {
+func (f *fakeApplier) Start(service string) error {
 	f.applied = append(f.applied, service)
-	return f.note, f.err
+	f.hasStart = true
+	return f.startErr
+}
+
+func (f *fakeApplier) Progress(service string) (Progress, bool) {
+	if !f.hasStart {
+		return Progress{}, false
+	}
+	if f.hasProgress {
+		return f.progress, true
+	}
+	p := Progress{Done: true, Message: f.note, Failed: f.err != nil}
+	if f.err != nil {
+		p.Message = f.err.Error()
+	}
+	return p, true
 }
 
 func post(t *testing.T, s *Server, form string) *httptest.ResponseRecorder {
@@ -136,7 +158,7 @@ func queueWith(applier Applier) *Server {
 	}
 }
 
-func TestApply_RunsTheUpdate(t *testing.T) {
+func TestApply_StartsTheUpdate(t *testing.T) {
 	fa := &fakeApplier{note: "updated to 2.0.0"}
 	rec := post(t, queueWith(fa), "service=app")
 
@@ -144,25 +166,70 @@ func TestApply_RunsTheUpdate(t *testing.T) {
 		t.Fatalf("applied = %v, want [app]", fa.applied)
 	}
 	// A redirect rather than a rendered page, so refreshing does not repeat
-	// the update.
+	// the update. Unlike the old synchronous handler, the result is not in
+	// the redirect: Start only reports whether the update *began*, and the
+	// page's poller learns the outcome from /progress.
 	if rec.Code != http.StatusSeeOther {
 		t.Errorf("status = %d, want 303", rec.Code)
 	}
-	if loc := rec.Header().Get("Location"); !strings.Contains(loc, "updated+to+2.0.0") {
-		t.Errorf("the result should be carried back to the page: %q", loc)
+	if loc := rec.Header().Get("Location"); !strings.Contains(loc, "service=app") {
+		t.Errorf("the redirect should name the service, for the poller: %q", loc)
 	}
 }
 
-func TestApply_ReportsFailure(t *testing.T) {
-	fa := &fakeApplier{err: errors.New("recreate failed")}
+// A Start-time error -- nothing queued under that name, or one already
+// running -- is a synchronous failure to *begin*, distinct from the
+// transaction itself failing partway through, which only /progress reports.
+func TestApply_ReportsAStartFailure(t *testing.T) {
+	fa := &fakeApplier{startErr: errors.New("app has no update waiting")}
 	rec := post(t, queueWith(fa), "service=app")
 
 	loc := rec.Header().Get("Location")
 	if !strings.Contains(loc, "level=error") {
-		t.Errorf("a failure should be marked as one: %q", loc)
+		t.Errorf("a failure to start should be marked as one: %q", loc)
 	}
-	if !strings.Contains(loc, "recreate+failed") {
+	if !strings.Contains(loc, "no+update+waiting") {
 		t.Errorf("the cause should be carried back: %q", loc)
+	}
+}
+
+// --- polling for progress ------------------------------------------------
+
+func TestProgress_ReportsStepsAsTheyArrive(t *testing.T) {
+	fa := &fakeApplier{hasStart: true, hasProgress: true, progress: Progress{Steps: []string{"pulling app for app"}}}
+	s := queueWith(fa)
+
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/progress?service=app", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "pulling app for app") {
+		t.Errorf("body missing the in-progress step: %s", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), `"done":true`) {
+		t.Error("an update mid-transaction should not report done")
+	}
+}
+
+func TestProgress_UnknownServiceIs404(t *testing.T) {
+	s := queueWith(&fakeApplier{})
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/progress?service=nope", nil))
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", rec.Code)
+	}
+}
+
+func TestProgress_EndpointAbsentWhenReadOnly(t *testing.T) {
+	s := queueWith(nil)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/progress?service=app", nil))
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", rec.Code)
 	}
 }
 
@@ -290,5 +357,178 @@ func TestIndex_SoakingShowsWithAnEmptyQueue(t *testing.T) {
 	// the other.
 	if !strings.Contains(body, "1.3.0") {
 		t.Errorf("the soaking list should still be shown:\n%s", body)
+	}
+}
+
+// --- refreshing on demand -------------------------------------------------
+
+type fakeRefresher struct {
+	calls       int
+	err         error
+	running     bool
+	done        bool
+	progressErr string
+}
+
+func (f *fakeRefresher) Refresh() error {
+	f.calls++
+	return f.err
+}
+
+func (f *fakeRefresher) RefreshProgress() (running, done bool, err string) {
+	return f.running, f.done, f.progressErr
+}
+
+func postRefresh(t *testing.T, s *Server) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/refresh", nil))
+	return rec
+}
+
+func TestRefresh_RunsACheck(t *testing.T) {
+	fr := &fakeRefresher{}
+	s := &Server{Source: fakeSource{}, Refresher: fr}
+	rec := postRefresh(t, s)
+
+	if fr.calls != 1 {
+		t.Fatalf("Refresh called %d times, want 1", fr.calls)
+	}
+	// A redirect rather than a rendered page, so refreshing the browser does
+	// not repeat the check.
+	if rec.Code != http.StatusSeeOther {
+		t.Errorf("status = %d, want 303", rec.Code)
+	}
+}
+
+// Refresh only errors synchronously when a check is already running -- a
+// failure in the check itself surfaces through RefreshProgress instead,
+// since Refresh does not wait for it.
+func TestRefresh_ReportsAStartFailure(t *testing.T) {
+	fr := &fakeRefresher{err: errors.New("a check is already running")}
+	s := &Server{Source: fakeSource{}, Refresher: fr}
+	rec := postRefresh(t, s)
+
+	loc := rec.Header().Get("Location")
+	if !strings.Contains(loc, "level=error") {
+		t.Errorf("a failure to start should be marked as one: %q", loc)
+	}
+	if !strings.Contains(loc, "already+running") {
+		t.Errorf("the cause should be carried back: %q", loc)
+	}
+}
+
+func TestRefreshProgress_ReportsRunning(t *testing.T) {
+	fr := &fakeRefresher{running: true}
+	s := &Server{Source: fakeSource{}, Refresher: fr}
+
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/refresh-progress", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), `"running":true`) {
+		t.Errorf("body should report running: %s", rec.Body.String())
+	}
+}
+
+func TestRefreshProgress_ReportsFailure(t *testing.T) {
+	fr := &fakeRefresher{done: true, progressErr: "registry unreachable"}
+	s := &Server{Source: fakeSource{}, Refresher: fr}
+
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/refresh-progress", nil))
+
+	body := rec.Body.String()
+	if !strings.Contains(body, `"done":true`) || !strings.Contains(body, "registry unreachable") {
+		t.Errorf("body should report the failure: %s", body)
+	}
+}
+
+func TestRefreshProgress_EndpointAbsentWithoutRefresher(t *testing.T) {
+	s := &Server{Source: fakeSource{}}
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/refresh-progress", nil))
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", rec.Code)
+	}
+}
+
+// A link a browser might prefetch must never trigger a check.
+func TestRefresh_RefusesGET(t *testing.T) {
+	fr := &fakeRefresher{}
+	s := &Server{Source: fakeSource{}, Refresher: fr}
+	rec := get(t, s, "/refresh")
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("status = %d, want 405", rec.Code)
+	}
+	if fr.calls != 0 {
+		t.Error("a GET must not trigger a check")
+	}
+}
+
+// With no Refresher the endpoint is absent, not merely refusing: the same
+// contract Applier has when duva is meant only to report.
+func TestRefresh_EndpointAbsentWithoutRefresher(t *testing.T) {
+	s := &Server{Source: fakeSource{}}
+	rec := postRefresh(t, s)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", rec.Code)
+	}
+}
+
+func TestIndex_NoRefreshButtonWithoutRefresher(t *testing.T) {
+	body := get(t, &Server{Source: fakeSource{}}, "/").Body.String()
+	if strings.Contains(body, `action="/refresh"`) {
+		t.Errorf("no Refresher means no button:\n%s", body)
+	}
+}
+
+func TestIndex_RefreshButtonWhenRefresherPresent(t *testing.T) {
+	body := get(t, &Server{Source: fakeSource{}, Refresher: &fakeRefresher{}}, "/").Body.String()
+	if !strings.Contains(body, `action="/refresh"`) {
+		t.Error("the button should post to /refresh, where the handler is")
+	}
+}
+
+// --- embedded images -------------------------------------------------------
+
+func TestLogo_ServesThePNG(t *testing.T) {
+	rec := get(t, &Server{Source: fakeSource{}}, "/logo.png")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "image/png" {
+		t.Errorf("Content-Type = %q, want image/png", ct)
+	}
+	if rec.Body.Len() == 0 {
+		t.Error("logo.png served an empty body")
+	}
+}
+
+func TestFavicon_ServesThePNG(t *testing.T) {
+	rec := get(t, &Server{Source: fakeSource{}}, "/favicon.png")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "image/png" {
+		t.Errorf("Content-Type = %q, want image/png", ct)
+	}
+	if rec.Body.Len() == 0 {
+		t.Error("favicon.png served an empty body")
+	}
+}
+
+func TestIndex_ReferencesTheLogoAndFavicon(t *testing.T) {
+	body := get(t, &Server{Source: fakeSource{}}, "/").Body.String()
+	if !strings.Contains(body, `src="/logo.png"`) {
+		t.Error("the header should show the logo")
+	}
+	if !strings.Contains(body, `href="/favicon.png"`) {
+		t.Error("the page should link the favicon")
 	}
 }

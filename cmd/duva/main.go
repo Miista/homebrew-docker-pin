@@ -16,8 +16,8 @@
 //	  radarr:
 //	    image: ghcr.io/example/radarr:latest@sha256:...
 //	    labels:
-//	      duva.include: '^\d+\.\d+\.\d+$'
-//	      duva.exclude: '(alpha|beta|rc)'
+//	      duva.include_tags: '^\d+\.\d+\.\d+$'
+//	      duva.exclude_tags: '(alpha|beta|rc)'
 //	      duva.delay: 7d
 //
 // Everything else (schedule, notification target, UI port) comes from env
@@ -31,7 +31,9 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -70,6 +72,19 @@ const uiAddr = ":8080"
 // silently pins the old inode when the host file is replaced by rename (as
 // editors and docker-pin do).
 //
+// /compose is also where duva's git commands run: commit and push need a
+// working repository, so whatever is mounted at /compose is assumed to be
+// the git repository root as well as the compose project.
+//
+// That assumption breaks for a compose project that is a subdirectory of a
+// larger repository (its own .git lives above the compose file, not beside
+// it) -- mounting the compose directory alone then leaves duva with no
+// repository, and mounting the compose file's own bind mount at /compose
+// would put the compose file outside any mounted .git. DUVA_COMPOSE_SUBDIR
+// covers this: mount the repository root at /compose, and set it to the
+// path -- relative to /compose -- where the compose project actually lives.
+// Unset, /compose is assumed to be the project root, as before.
+//
 // Package variables (not constants) so tests can point them at fixtures.
 // Nothing else changes them: duva runs in a container, where these paths are
 // the contract.
@@ -77,6 +92,30 @@ var (
 	composeDir = "/compose"
 	stateFile  = "/data/duva.json"
 )
+
+// projectDir is where the compose project actually lives: composeDir itself,
+// or the subdirectory DUVA_COMPOSE_SUBDIR names within it. composeDir remains
+// the git repository root regardless -- projectDir only affects where the
+// compose file is looked for.
+func projectDir() (string, error) {
+	sub := os.Getenv("DUVA_COMPOSE_SUBDIR")
+	if sub == "" {
+		return composeDir, nil
+	}
+	if filepath.IsAbs(sub) {
+		return "", fmt.Errorf("DUVA_COMPOSE_SUBDIR must be relative to %s, got %q", composeDir, sub)
+	}
+	joined := filepath.Join(composeDir, sub)
+	// Join cleans ".." segments away rather than erroring, so a value that
+	// tries to escape composeDir (e.g. "../etc") would otherwise resolve
+	// silently to somewhere outside the mounted repository instead of
+	// failing here.
+	rel, err := filepath.Rel(composeDir, joined)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("DUVA_COMPOSE_SUBDIR %q escapes %s", sub, composeDir)
+	}
+	return joined, nil
+}
 
 var realRegistry = watch.Registry{
 	ListMatchingTags: registry.ListMatchingTags,
@@ -161,7 +200,12 @@ func boolEnv(key string, fallback bool) bool {
 // already decided per service by duva.auto -- which defaults to none, so a
 // service is only ever updated because someone said so. A global switch on
 // top would be a second brake on the same pedal.
-func actor(cfg envConfig, log zerolog.Logger) func(watch.Finding) Result {
+//
+// The returned function takes an extra, optional sink alongside the finding:
+// every scheduled run logs to zerolog only, but the page's Start also wants
+// each step as it happens, to answer a poller -- so a call from there passes
+// one and a call from the scheduler passes nil.
+func actor(cfg envConfig, log zerolog.Logger) func(watch.Finding, func(string, ...any)) Result {
 	// Read once at startup: a template that does not parse should stop duva
 	// here rather than at the moment it would have committed, with the
 	// container already updated.
@@ -171,17 +215,27 @@ func actor(cfg envConfig, log zerolog.Logger) func(watch.Finding) Result {
 		tmpl = defaultCommitTemplate
 	}
 
-	opts := applyOptions{
+	base := applyOptions{
 		Host:           hostLabel(cfg),
 		Push:           cfg.Push,
 		CommitTemplate: tmpl,
-		Log: func(format string, args ...any) {
-			log.Info().Msgf(format, args...)
-		},
 	}
-	return func(f watch.Finding) Result {
+	return func(f watch.Finding, extra func(string, ...any)) Result {
+		opts := base
+		opts.Log = func(format string, args ...any) {
+			log.Info().Msgf(format, args...)
+			if extra != nil {
+				extra(format, args...)
+			}
+		}
 		return apply(f, realDocker, realGit, opts)
 	}
+}
+
+// withoutExtra adapts an actor for checkWith, which never needs a per-call
+// sink: every finding it applies came from a scheduled check, not a click.
+func withoutExtra(act func(watch.Finding, func(string, ...any)) Result) func(watch.Finding) Result {
+	return func(f watch.Finding) Result { return act(f, nil) }
 }
 
 // hostLabel identifies this box in notifications and in the UI header, so
@@ -212,7 +266,11 @@ func check(cfg envConfig, log zerolog.Logger, reg watch.Registry, st *watch.Stat
 // without a docker daemon. act is nil when duva only reports.
 func checkWith(cfg envConfig, log zerolog.Logger, reg watch.Registry, st *watch.State,
 	now time.Time, act func(watch.Finding) Result, d Docker, g Git) ([]watch.Finding, error) {
-	rootFile, err := compose.FindFile(composeDir)
+	dir, err := projectDir()
+	if err != nil {
+		return nil, err
+	}
+	rootFile, err := compose.FindFile(dir)
 	if err != nil {
 		return nil, err
 	}
@@ -283,7 +341,7 @@ func runOnce(reg watch.Registry, log zerolog.Logger) error {
 		return fmt.Errorf("loading state: %w", err)
 	}
 
-	findings, err := checkWith(cfg, log, reg, st, time.Now(), actor(cfg, log), realDocker, realGit)
+	findings, err := checkWith(cfg, log, reg, st, time.Now(), withoutExtra(actor(cfg, log)), realDocker, realGit)
 	if err != nil {
 		return err
 	}
@@ -383,12 +441,50 @@ type store struct {
 	state     *watch.State
 	lastCheck time.Time
 	// act applies an update, or is nil when duva only reports.
-	act func(watch.Finding) Result
+	act func(watch.Finding, func(string, ...any)) Result
 	// log is where an update triggered from the page is recorded. Someone
 	// pressing a button is an event worth a line: without one, the only
 	// account of what happened is a redirect the operator may not have read,
 	// and the logs show nothing between one scheduled check and the next.
 	log zerolog.Logger
+
+	// cfg and reg are what Refresh needs to run checkOnce on demand, the same
+	// way the scheduler does. Carried here rather than threaded through the
+	// UI layer, which has no business knowing what a check requires.
+	cfg envConfig
+	reg watch.Registry
+
+	// jobs guards running: an update started from the page runs on its own
+	// goroutine, separately from state.mu, so the poller asking about it
+	// never waits behind the transaction it is asking about.
+	jobs    sync.Mutex
+	running map[string]*job
+
+	// refreshing guards refresh: unlike jobs, there is only ever one -- a
+	// check is one operation for the whole project, not one per service.
+	refreshing sync.Mutex
+	refresh    refreshJob
+}
+
+// refreshJob is a check-on-demand's progress, the same idea as job but
+// without a step list: a check has no discrete stages worth narrating the
+// way pull/write/recreate/commit/push are for an apply, so running/done and
+// an eventual error is all there is to report.
+type refreshJob struct {
+	running bool
+	done    bool
+	err     string
+}
+
+// job is one update's progress, as Start's goroutine writes it and Progress
+// reads it back. Guarded by store.jobs, like the map that holds it -- a
+// service is only ever updated one at a time, so a lock per job would be one
+// more thing to get right for no real concurrency gained.
+type job struct {
+	steps   []string
+	done    bool
+	message string
+	failed  bool
 }
 
 // logf records what duva did when asked from the page.
@@ -444,33 +540,104 @@ func (s *store) queuedFinding(service string) (watch.Finding, bool, error) {
 		"%s has no update waiting: nothing for approval, nothing soaking", service)
 }
 
-// Apply performs a queued update, so the page and a scheduled run reach the
-// container by the same path -- a click cannot do something an unattended run
-// would not.
+// Start begins a queued update in the background, so the page and a
+// scheduled run reach the container by the same path -- a click cannot do
+// something an unattended run would not -- without the click itself waiting
+// on the whole transaction.
 //
 // The queue row carries everything needed, so approving does not depend on a
 // check having run since the page was loaded.
-func (s *store) Apply(service string) (string, error) {
+func (s *store) Start(service string) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	f, soaking, err := s.queuedFinding(service)
 	if err != nil {
+		s.mu.Unlock()
 		s.logf("%s: asked to update, but nothing is waiting for it", service)
-		return "", err
+		return err
 	}
+	s.mu.Unlock()
+
+	if !s.beginJob(service) {
+		return fmt.Errorf("%s is already being updated", service)
+	}
+
 	container := service
 	if realDocker.ContainerName != nil {
 		container = realDocker.ContainerName(service)
 	}
 	s.logf("updating %s to %s, asked for from the queue", container, f.Candidate)
 
-	res := s.act(f)
+	go s.runApply(service, container, f, soaking)
+	return nil
+}
+
+// beginJob claims a service for a new job, refusing if one is already
+// running under it: two clicks on the same row must not race two
+// transactions against the same container and compose file.
+func (s *store) beginJob(service string) bool {
+	s.jobs.Lock()
+	defer s.jobs.Unlock()
+	if s.running == nil {
+		s.running = map[string]*job{}
+	}
+	if j, ok := s.running[service]; ok && !j.done {
+		return false
+	}
+	s.running[service] = &job{}
+	return true
+}
+
+// Progress reports a service's most recently started job, for the page's
+// poller.
+func (s *store) Progress(service string) (ui.Progress, bool) {
+	s.jobs.Lock()
+	defer s.jobs.Unlock()
+	j, ok := s.running[service]
+	if !ok {
+		return ui.Progress{}, false
+	}
+	return ui.Progress{
+		Steps:   append([]string(nil), j.steps...),
+		Done:    j.done,
+		Message: j.message,
+		Failed:  j.failed,
+	}, true
+}
+
+// recordStep appends one line to a job's progress, for Start's Log sink.
+func (s *store) recordStep(service, line string) {
+	s.jobs.Lock()
+	defer s.jobs.Unlock()
+	if j, ok := s.running[service]; ok {
+		j.steps = append(j.steps, line)
+	}
+}
+
+// finishJob marks a job done with its final message, for Progress to report
+// once the transaction has finished.
+func (s *store) finishJob(service, message string, failed bool) {
+	s.jobs.Lock()
+	defer s.jobs.Unlock()
+	if j, ok := s.running[service]; ok {
+		j.done, j.message, j.failed = true, message, failed
+	}
+}
+
+// runApply runs the transaction Start queued, recording its steps and
+// updating state exactly as the old synchronous Apply did -- just on its own
+// goroutine, so a poller asking about it never blocks behind it.
+func (s *store) runApply(service, container string, f watch.Finding, soaking bool) {
+	res := s.act(f, func(format string, args ...any) {
+		s.recordStep(service, fmt.Sprintf(format, args...))
+	})
 	if res.Failed() {
+		msg := fmt.Sprintf("%s failed: %v", res.FailedAt, res.Err)
 		s.logf("%s failed for %s: %v", res.FailedAt, container, res.Err)
-		return "", fmt.Errorf("%s failed: %v", res.FailedAt, res.Err)
+		s.finishJob(service, msg, true)
+		return
 	}
 
+	s.mu.Lock()
 	// It reached the container, so it is no longer waiting -- for a decision
 	// or for time, whichever it was.
 	delete(s.state.Pending, service)
@@ -479,8 +646,12 @@ func (s *store) Apply(service string) (string, error) {
 	if f.Kind == watch.KindDigest {
 		s.state.Baseline[service] = f.Candidate
 	}
-	if err := s.state.Save(stateFile); err != nil {
-		return "", fmt.Errorf("applied, but saving state failed: %w", err)
+	saveErr := s.state.Save(stateFile)
+	s.mu.Unlock()
+	if saveErr != nil {
+		msg := fmt.Sprintf("applied, but saving state failed: %v", saveErr)
+		s.finishJob(service, msg, true)
+		return
 	}
 
 	// The page shows this beside the service name it was clicked for, so it
@@ -498,7 +669,7 @@ func (s *store) Apply(service string) (string, error) {
 		msg += fmt.Sprintf(" — but %s failed: %v", res.FailedAt, res.Err)
 	}
 	s.logf("%s is %s", container, msg)
-	return msg, nil
+	s.finishJob(service, msg, res.FailedAt != "")
 }
 
 func (s *store) LastCheck() string {
@@ -561,7 +732,7 @@ func serve(reg watch.Registry, log zerolog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("loading state: %w", err)
 	}
-	s := &store{state: st, act: actor(cfg, log), log: log}
+	s := &store{state: st, act: actor(cfg, log), log: log, cfg: cfg, reg: reg}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -570,10 +741,11 @@ func serve(reg watch.Registry, log zerolog.Logger) error {
 		srv := &http.Server{
 			Addr: uiAddr,
 			Handler: (&ui.Server{
-				Source:  s,
-				Host:    hostLabel(cfg),
-				Version: version,
-				Applier: s,
+				Source:    s,
+				Host:      hostLabel(cfg),
+				Version:   version,
+				Applier:   s,
+				Refresher: s,
 			}).Handler(),
 			ReadHeaderTimeout: 10 * time.Second,
 		}
@@ -625,10 +797,28 @@ func serve(reg watch.Registry, log zerolog.Logger) error {
 // every scheduled one. They were separate blocks that drifted: the startup
 // one recorded its findings but never printed them, so duva looked like it
 // had found nothing.
-func checkOnce(cfg envConfig, reg watch.Registry, s *store, log zerolog.Logger) {
+//
+// Returns the failure rather than only logging it, so a caller that can show
+// it to someone -- Refresh, on behalf of a page asking for a check right now
+// -- is able to.
+//
+// s.mu is held for the whole call, not just the state mutation at the end --
+// including every registry round trip checkWith makes, one per watched
+// service, which is where a check's real time goes (seconds, for a handful
+// of services). That is coarser than it needs to be: an apply's own state
+// write (see runApply) also needs s.mu briefly, so a refresh in flight
+// serializes behind or in front of an apply rather than running alongside
+// it. Neither corrupts anything -- it is lock contention, not a race -- but
+// a refresh started while an apply is finishing (or the reverse) will sit
+// waiting for the whole other operation before it can even begin its own
+// work, which reads as "stuck" longer than the actual check takes. Left as
+// is deliberately: narrowing the lock to just the mutation, the way runApply
+// already does, is the fix if this becomes a real annoyance rather than a
+// theoretical one.
+func checkOnce(cfg envConfig, reg watch.Registry, s *store, log zerolog.Logger) error {
 	now := time.Now()
 	s.mu.Lock()
-	findings, err := checkWith(cfg, log, reg, s.state, now, s.act, realDocker, realGit)
+	findings, err := checkWith(cfg, log, reg, s.state, now, withoutExtra(s.act), realDocker, realGit)
 	if err == nil {
 		s.lastCheck = now
 	}
@@ -636,12 +826,49 @@ func checkOnce(cfg envConfig, reg watch.Registry, s *store, log zerolog.Logger) 
 
 	if err != nil {
 		log.Error().Msgf("the check failed, nothing was changed: %v", err)
-		return
+		return err
 	}
 	report(log, findings)
 	if err := s.saveState(); err != nil {
 		log.Error().Msgf("could not save what was found, so it may be reported again: %v", err)
+		return err
 	}
+	return nil
+}
+
+// Refresh starts a check on demand in the background, for the page's
+// "refresh now" button: waiting for a daily schedule is otherwise the only
+// way to ask duva to look again. Mirrors Start/Progress for apply -- a click
+// is answered immediately rather than blocking on however long the registry
+// takes to answer.
+func (s *store) Refresh() error {
+	s.refreshing.Lock()
+	if s.refresh.running {
+		s.refreshing.Unlock()
+		return fmt.Errorf("a check is already running")
+	}
+	s.refresh = refreshJob{running: true}
+	s.refreshing.Unlock()
+
+	go func() {
+		err := checkOnce(s.cfg, s.reg, s, s.log)
+		s.refreshing.Lock()
+		s.refresh.running = false
+		s.refresh.done = true
+		if err != nil {
+			s.refresh.err = err.Error()
+		}
+		s.refreshing.Unlock()
+	}()
+	return nil
+}
+
+// RefreshProgress reports whether the most recently started check is still
+// running, for the page's poller.
+func (s *store) RefreshProgress() (running bool, done bool, errMsg string) {
+	s.refreshing.Lock()
+	defer s.refreshing.Unlock()
+	return s.refresh.running, s.refresh.done, s.refresh.err
 }
 
 func (s *store) saveState() error {

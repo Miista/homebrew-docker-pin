@@ -21,15 +21,15 @@ func TestLabels_MappingForm(t *testing.T) {
   app:
     image: x/y:1.0.0
     labels:
-      duva.include: '^\d+$'
+      duva.include_tags: '^\d+$'
       com.example.other: value
 `)
 	got, err := Labels(f, "app")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got["duva.include"] != `^\d+$` {
-		t.Errorf("duva.include = %q", got["duva.include"])
+	if got["duva.include_tags"] != `^\d+$` {
+		t.Errorf("duva.include_tags = %q", got["duva.include_tags"])
 	}
 	if got["com.example.other"] != "value" {
 		t.Errorf("other label = %q", got["com.example.other"])
@@ -41,15 +41,15 @@ func TestLabels_ListForm(t *testing.T) {
   app:
     image: x/y:1.0.0
     labels:
-      - duva.include=^\d+$
+      - duva.include_tags=^\d+$
       - com.example.other=value
 `)
 	got, err := Labels(f, "app")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got["duva.include"] != `^\d+$` {
-		t.Errorf("duva.include = %q", got["duva.include"])
+	if got["duva.include_tags"] != `^\d+$` {
+		t.Errorf("duva.include_tags = %q", got["duva.include_tags"])
 	}
 	if got["com.example.other"] != "value" {
 		t.Errorf("other label = %q", got["com.example.other"])

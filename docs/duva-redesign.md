@@ -30,8 +30,8 @@ services:
   paperless-db:
     image: postgres:17.10-alpine@sha256:...
     labels:
-      duva.include: '^17\.\d+-alpine$'
-      duva.exclude: '(alpha|beta|rc)'
+      duva.include_tags: '^17\.\d+-alpine$'
+      duva.exclude_tags: '(alpha|beta|rc)'
       duva.delay: 7d
 ```
 
