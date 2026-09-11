@@ -143,6 +143,46 @@ transactions: it holds the compose file, git, and the docker socket, and it
 owns the whole five-step sequence — pull, write the pin, recreate, commit,
 push — including what a failure at each step means.
 
+## The HTTP surfaces
+
+Each decider runs a small HTTP server. The UI is the only thing that reaches
+across hosts; everything else is same-network.
+
+**Decider**
+
+| | caller | auth |
+|---|---|---|
+| `POST /v1/notify` | diun | none |
+| `GET /v1/snapshot` | UI | token |
+| `POST /v1/apply/{service}` | UI | token |
+| `GET /healthz` | container runtime | none |
+
+`/v1/notify` is unauthenticated because there is one decider per host and diun
+reaches it over that host's compose network. Nothing else has a path to it —
+the same reason the agent shipped this morning publishes no port.
+
+`internal/agent/server.go` is already most of this: snapshot, apply, healthz,
+bearer token on everything but health. What changes is that `/v1/refresh` goes
+away — the decider checks nothing, diun does — and `/v1/notify` arrives.
+
+**Actor**
+
+The decider talks to the actor over the same compose network, authenticated.
+
+`POST /v1/apply` returns a **URL to stream progress from**. The decider hands
+that URL back to the UI and stays out of the data path: no proxying, no
+buffering, no progress state kept anywhere.
+
+That also means the actor owns the shape of its own progress. A different
+actor — one that opens a pull request, or defers to Ansible, which is what v3
+imagined the seam buying — returns whatever URL suits it, and the UI just
+follows it.
+
+The stream endpoint is unauthenticated and returns nothing when no update is in
+progress. There is no session to guess at and nothing to leak: either work is
+happening, and its log is the same thing the UI would be shown anyway, or the
+response is empty.
+
 ## Carried over from v3, unchanged
 
 - **Transport is a webhook POST.** Not a queue, not a socket.
@@ -200,7 +240,8 @@ Mostly extraction, which is the argument for the shape being right:
 | UI | `internal/ui` |
 | UI transport | `internal/agent`, `internal/hub` — deciders replace agents |
 
-Genuinely new: a webhook receiver, the service-mapping rule, and the lock.
+Genuinely new: a webhook receiver, the service-mapping rule, the lock, and
+the actor's own HTTP surface with its progress stream.
 
 ## The webhook payload
 
