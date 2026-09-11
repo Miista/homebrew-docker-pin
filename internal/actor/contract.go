@@ -22,6 +22,20 @@
 // a second endpoint: there is one thing happening, and one place to read about
 // it. The decider watches for the terminal line and relays everything else
 // verbatim.
+//
+// # Versioning
+//
+// Because this is the only thing the two sides share, it is also the only
+// thing with a compatibility obligation — which is what lets the decider and
+// the actor be released independently rather than in lockstep.
+//
+// The `/v1` in the endpoint paths is therefore load-bearing rather than
+// decorative. Adding a field here is backwards compatible: an older actor
+// ignores what it does not recognise, and an older decider ignores what it is
+// sent. Renaming or removing one is not, and means a `/v2` served alongside
+// `/v1` until both sides have moved.
+//
+// So: add freely, never rename in place.
 package actor
 
 import (

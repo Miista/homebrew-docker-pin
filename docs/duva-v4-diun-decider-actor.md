@@ -222,6 +222,24 @@ nobody defined is *not* terminal: treating an unrecognised one as the end
 would let a typo in an actor read as success, where leaving it as progress
 means the timeout catches it.
 
+### The components version independently
+
+The contract is the only thing the two sides share, so it is the only thing
+with a compatibility obligation — which means the decider and the actor are
+released on their own schedules rather than in lockstep.
+
+The `/v1` in the paths is load-bearing for that, not decoration. Adding a
+field is backwards compatible in both directions, since each side ignores what
+it does not recognise; renaming or removing one is not, and means a `/v2`
+served alongside `/v1` until both have moved. **Add freely, never rename in
+place.**
+
+Nothing yet tells a decider which contract version an actor speaks — today it
+would POST and find out. A health endpoint advertising the versions supported
+would let it fail at startup instead, on the same reasoning as refusing to
+start on an unwritable `/data`. Not worth building with one actor, but worth
+leaving room for.
+
 `POST /v1/apply` starts the transaction and returns a URL to stream progress
 from. **The decider proxies that stream** — a clean passthrough, copying bytes
 without interpreting them.
