@@ -120,9 +120,9 @@ would only add an inbound path by which something could claim to be an agent.
 
 ### The v4 split (`internal/decide`, `internal/actor`, `internal/diun`, `cmd/decider`)
 
-An unfinished second design, on `feature/duva-v4-decider`, that separates what
-duva does into single-purpose parts. The decider is built; the actor is not.
-duva itself is untouched and still ships. See `docs/duva-v4-diun-decider-actor.md`.
+A second design, on `feature/duva-v4-decider`, that separates what duva does
+into single-purpose parts. Built and working end to end, not deployed; duva
+itself is untouched and still ships. See `docs/duva-v4-diun-decider-actor.md`.
 
 - **detector** — diun, which already runs on both hosts and already carries
   per-service `diun.include_tags` constraints. Not ours.
@@ -137,8 +137,13 @@ duva itself is untouched and still ships. See `docs/duva-v4-diun-decider-actor.m
   Completion means the actor did its job, not that the host runs a new image.
 - **`internal/diun`** — translates diun's webhook, so nothing else knows which
   detector is in use.
-- **`cmd/decider`** — the binary. Reads `/compose` read-only, holds no docker
-  socket, talks to no registry.
+- **`cmd/decider`** — the gate's binary. Reads `/compose` read-only, holds no
+  docker socket, talks to no registry, and is distroless as a result.
+- **`cmd/actor`** — the reference actor: the five-step transaction lifted from
+  duva. Holds `/compose` read-write and the docker socket, because applying
+  needs them, and carries git for the commit.
+- **`internal/dockerapi`** — the docker client, moved out of `cmd/duva` so both
+  binaries share one rather than growing a second that could drift from it.
 
 ### duva (`cmd/duva`)
 A container, not a CLI plugin. It watches the compose project mounted at

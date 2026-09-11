@@ -1,8 +1,15 @@
 # duva v4: diun, decider, actor
 
-**Status: the decider is built** (`internal/decide`, `internal/actor`,
-`internal/diun`, `cmd/decider`), on `feature/duva-v4-decider`. The actor is
-not. Existing duva is untouched and still running.
+**Status: built and working end to end**, on `feature/duva-v4-decider` —
+`internal/decide`, `internal/actor`, `internal/diun`, `internal/dockerapi`,
+`cmd/decider`, `cmd/actor`. Not deployed. Existing duva is untouched and
+still running.
+
+Verified in real containers as a real compose stack: a diun-shaped webhook
+classified minor, queued, approved, pulled, repinned, container replaced,
+committed as `app: v1.11 -> v1.12`, queue empty afterwards. The failure path
+was verified first by accident — the actor could not find its compose
+project, and the transaction put the file back exactly as it promises to.
 
 What follows was the design note, and is now partly a description.
 
