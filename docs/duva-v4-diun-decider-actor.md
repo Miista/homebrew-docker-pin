@@ -51,6 +51,37 @@ The decider therefore needs **no registry access at all** — no tag listing, no
 per-registry auth, no rate limits. That is most of what makes duva's detection
 half complicated.
 
+## Who needs what
+
+| | docker socket | registry client | compose (read) | compose (write) | git |
+|---|---|---|---|---|---|
+| diun | read-only | **yes** | — | — | — |
+| decider | — | — | yes | — | — |
+| actor | read-write | — | yes | yes | yes |
+| UI | — | — | — | — | — |
+
+Two things worth drawing out.
+
+**The actor needs no registry client either.** It pulls through the daemon —
+`Docker.Pull` and `Docker.GetDigest` in today's `apply.go` go over the mounted
+socket, and the daemon does the registry talking with whatever credentials it
+already holds. The actor never constructs a registry request, never handles a
+`WWW-Authenticate` challenge, never lists tags.
+
+So `internal/registry` belongs entirely to diun's side of the split and does
+not come along at all: tag listing, bearer auth discovery, the Docker Hub tag
+API for `TagCreated`. That is a whole package deleted from this design rather
+than ported.
+
+The exception is `Classify` and `CompareVersions`, which live in
+`internal/registry` but are pure functions over version strings and are exactly
+what the decider needs. They should move somewhere neutral during the
+extraction rather than dragging the decider into importing a package it uses
+five percent of.
+
+**Nothing holds more than it must.** duva today gives every part the socket,
+because any part might need to act. Here only the actor does.
+
 ## What the decider does
 
 In: diun's webhook. The payload carries `image` (full reference, so the tag is
@@ -148,7 +179,7 @@ Mostly extraction, which is the argument for the shape being right:
 |---|---|
 | detector | diun, unchanged |
 | current tag lookup | `internal/compose` (`RawImage`, `ParseImage`) |
-| classification | `internal/registry` (`Classify`, `CompareVersions`) |
+| classification | `internal/registry` (`Classify`, `CompareVersions`) — to move somewhere neutral |
 | threshold | `internal/watch` (`Decide`, `ParseAuto`) |
 | queue + supersession | `internal/watch` (`State.Reconcile`) |
 | actor | `cmd/duva/apply.go`, `transaction.go`, `recreate.go` |
