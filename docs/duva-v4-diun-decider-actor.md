@@ -53,21 +53,22 @@ half complicated.
 
 ## Who needs what
 
-| | docker socket | registry client | compose (read) | compose (write) | git |
-|---|---|---|---|---|---|
-| decider | — | — | yes | — | — |
-| actor | read-write | — | yes | yes | yes |
-| UI | — | — | — | — | — |
+| | docker socket | compose (read) | compose (write) | git |
+|---|---|---|---|---|
+| decider | — | yes | — | — |
+| actor | read-write | yes | yes | yes |
+| UI | — | — | — | — |
 
 (diun is a dependency, not a component. What it needs is its own business.)
 
 Two things worth drawing out.
 
-**The actor needs no registry client either.** It pulls through the daemon —
+**Neither tool talks to a registry.** The actor pulls through the daemon —
 `Docker.Pull` and `Docker.GetDigest` in today's `apply.go` go over the mounted
 socket, and the daemon does the registry talking with whatever credentials it
-already holds. The actor never constructs a registry request, never handles a
-`WWW-Authenticate` challenge, never lists tags.
+already holds. Neither ever constructs a registry request, handles a
+`WWW-Authenticate` challenge, or lists tags. There is no column for it because
+there is nothing to put in one.
 
 So `internal/registry` belongs entirely to diun's side of the split and does
 not come along at all: tag listing, bearer auth discovery, the Docker Hub tag
