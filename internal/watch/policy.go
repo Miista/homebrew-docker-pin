@@ -2,7 +2,7 @@ package watch
 
 import (
 	"fmt"
-	"github.com/Miista/homebrew-docker-pin/internal/registry"
+	"github.com/Miista/homebrew-docker-pin/internal/version"
 	"strings"
 )
 
@@ -60,13 +60,13 @@ func (a Auto) rank() int {
 // bumpRank is the size of an actual change on the same ladder. Unknown ranks
 // with major: if duva cannot tell how big a change is, it is not a change it
 // should make on its own.
-func bumpRank(k registry.Kind) int {
+func bumpRank(k version.Kind) int {
 	switch k {
-	case registry.KindPatch:
+	case version.KindPatch:
 		return 1
-	case registry.KindMinor:
+	case version.KindMinor:
 		return 2
-	case registry.KindMajor, registry.KindUnknown:
+	case version.KindMajor, version.KindUnknown:
 		return 3
 	default:
 		return 0
@@ -104,7 +104,7 @@ func Decide(f Finding, auto Auto) (Decision, string) {
 	if bumpRank(f.Bump) <= auto.rank() {
 		return DecideAuto, fmt.Sprintf("%s, within duva.auto: %s", f.Bump, auto)
 	}
-	if f.Bump == registry.KindUnknown {
+	if f.Bump == version.KindUnknown {
 		return DecideApprove, fmt.Sprintf("version change could not be classified; needs duva.auto: %s", AutoMajor)
 	}
 	return DecideApprove, fmt.Sprintf("%s exceeds duva.auto: %s", f.Bump, auto)

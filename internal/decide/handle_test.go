@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Miista/homebrew-docker-pin/internal/registry"
+	"github.com/Miista/homebrew-docker-pin/internal/version"
 )
 
 // project writes a compose file and returns a Lookup over it. Real files
@@ -151,7 +151,7 @@ func TestHandleQueuesWhenPolicySaysAsk(t *testing.T) {
 	if !ok {
 		t.Fatal("nothing was queued")
 	}
-	if e.To != "1.1.0" || e.Kind != registry.KindMinor {
+	if e.To != "1.1.0" || e.Kind != version.KindMinor {
 		t.Errorf("entry = %+v", e)
 	}
 }

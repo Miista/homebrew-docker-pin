@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Miista/homebrew-docker-pin/internal/registry"
+	"github.com/Miista/homebrew-docker-pin/internal/version"
 )
 
 // Detection is a function: a compose project and a set of registry answers in,
@@ -309,7 +309,7 @@ func TestProject_AppliesPolicyFromLabels(t *testing.T) {
 	if !f.AutoApplies() {
 		t.Errorf("a patch within duva.auto: patch should apply, got %+v (%s)", f.Decision, f.Why)
 	}
-	if f.Bump != registry.KindPatch {
+	if f.Bump != version.KindPatch {
 		t.Errorf("Bump = %q", f.Bump)
 	}
 }

@@ -14,7 +14,8 @@ import (
 	"github.com/rs/zerolog"
 	"time"
 
-	"github.com/Miista/homebrew-docker-pin/internal/registry"
+	// Aliased: this package has its own `version`, the build string.
+	semver "github.com/Miista/homebrew-docker-pin/internal/version"
 	"github.com/Miista/homebrew-docker-pin/internal/watch"
 )
 
@@ -356,11 +357,11 @@ func TestClassification_TagCandidatesCarryABump(t *testing.T) {
 	setupFixture(t, pinnedConstrainedService) // pinned at 1.2.0
 	for _, tc := range []struct {
 		newest string
-		want   registry.Kind
+		want   semver.Kind
 	}{
-		{"1.2.1", registry.KindPatch},
-		{"1.3.0", registry.KindMinor},
-		{"2.0.0", registry.KindMajor},
+		{"1.2.1", semver.KindPatch},
+		{"1.3.0", semver.KindMinor},
+		{"2.0.0", semver.KindMajor},
 	} {
 		st := watch.NewState()
 		f := check1(t, tagReg([]string{"1.2.0", tc.newest}), st)

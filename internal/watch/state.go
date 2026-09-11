@@ -8,7 +8,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/Miista/homebrew-docker-pin/internal/registry"
+	"github.com/Miista/homebrew-docker-pin/internal/version"
 )
 
 // State is what duva remembers between runs. It lives as one JSON file on the
@@ -50,7 +50,7 @@ type Soaking struct {
 	CurrentTag string `json:"current_tag"`
 	Candidate  string `json:"candidate"`
 	// Bump is how big the change would be.
-	Bump registry.Kind `json:"bump,omitempty"`
+	Bump version.Kind `json:"bump,omitempty"`
 	// Remaining is how much longer the soak has to run, and Outcome what
 	// happens then -- which depends on the policy: a soaking major on a
 	// service set to patch is not going to be applied when the wait ends, it
@@ -81,7 +81,7 @@ type Pending struct {
 	Candidate string `json:"candidate"`
 	// Bump is how big the version change is, for a tag candidate. Empty for a
 	// digest candidate, which has no version pair to compare.
-	Bump registry.Kind `json:"bump,omitempty"`
+	Bump version.Kind `json:"bump,omitempty"`
 	// Why says why this needs a human rather than being applied: the
 	// classification against the service's duva.auto threshold.
 	Why string `json:"why"`
@@ -215,7 +215,7 @@ func (s *State) ReconcileSoaking(seen []Finding) {
 			delete(s.Soaking, f.Service)
 			continue
 		}
-		bump := registry.Classify(f.CurrentTag, f.Soaking.Tag)
+		bump := version.Classify(f.CurrentTag, f.Soaking.Tag)
 		s.Soaking[f.Service] = Soaking{
 			Service:    f.Service,
 			File:       f.File,
@@ -231,7 +231,7 @@ func (s *State) ReconcileSoaking(seen []Finding) {
 
 // soakOutcome is what happens when the wait ends: duva applies it, or it
 // joins the queue for a human. The soak decides WHEN, the policy decides WHAT.
-func soakOutcome(bump registry.Kind, auto Auto) string {
+func soakOutcome(bump version.Kind, auto Auto) string {
 	if auto != AutoNone && bumpRank(bump) <= auto.rank() {
 		return "will be applied automatically"
 	}

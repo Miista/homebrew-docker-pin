@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Miista/homebrew-docker-pin/internal/registry"
+	"github.com/Miista/homebrew-docker-pin/internal/version"
 )
 
 // svc is a pinned service, which is the interesting starting point: pin
@@ -159,7 +159,7 @@ func TestPatchWithinAutoPatchApplies(t *testing.T) {
 	if v.Outcome != Apply {
 		t.Errorf("outcome = %q, want apply (%s)", v.Outcome, v.Why)
 	}
-	if v.Kind != registry.KindPatch {
+	if v.Kind != version.KindPatch {
 		t.Errorf("kind = %q, want patch", v.Kind)
 	}
 	if v.From != "1.0.0" || v.To != "1.0.1" {
@@ -173,7 +173,7 @@ func TestMinorExceedsAutoPatchAndQueues(t *testing.T) {
 	if v.Outcome != Queue {
 		t.Errorf("outcome = %q, want queue", v.Outcome)
 	}
-	if v.Kind != registry.KindMinor {
+	if v.Kind != version.KindMinor {
 		t.Errorf("kind = %q, want minor", v.Kind)
 	}
 	if !strings.Contains(v.Why, "exceeds") {
@@ -195,7 +195,7 @@ func TestMajorExceedsAutoMinorAndQueues(t *testing.T) {
 	if v.Outcome != Queue {
 		t.Errorf("outcome = %q, want queue", v.Outcome)
 	}
-	if v.Kind != registry.KindMajor {
+	if v.Kind != version.KindMajor {
 		t.Errorf("kind = %q, want major", v.Kind)
 	}
 }
@@ -234,7 +234,7 @@ func TestUnclassifiableQueuesBelowAutoMajor(t *testing.T) {
 	if v.Outcome != Queue {
 		t.Errorf("outcome = %q, want queue", v.Outcome)
 	}
-	if v.Kind != registry.KindUnknown {
+	if v.Kind != version.KindUnknown {
 		t.Errorf("kind = %q, want unknown", v.Kind)
 	}
 	if !strings.Contains(v.Why, "could not be classified") {

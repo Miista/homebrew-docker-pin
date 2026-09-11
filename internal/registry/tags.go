@@ -7,9 +7,10 @@ import (
 	"net/http"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Miista/homebrew-docker-pin/internal/version"
 )
 
 // ListTags returns every tag the registry publishes for an image, dispatching
@@ -103,7 +104,7 @@ func listDockerHubTagsMatching(url string, include, exclude *regexp.Regexp, curr
 			if include != nil &&
 				include.MatchString(t.Name) &&
 				(exclude == nil || !exclude.MatchString(t.Name)) &&
-				CompareVersions(t.Name, current) > 0 {
+				version.CompareVersions(t.Name, current) > 0 {
 				pageHasMatch = true
 			}
 		}
@@ -115,87 +116,6 @@ func listDockerHubTagsMatching(url string, include, exclude *regexp.Regexp, curr
 	return tags, nil
 }
 
-// versionCoreRe splits a tag into its numeric dotted core and the rest,
-// tolerating a leading "v".
-var versionCoreRe = regexp.MustCompile(`^v?(\d+(?:\.\d+)*)(.*)$`)
-
-// CompareVersions orders two version-ish tags: the dotted numeric cores are
-// compared numerically segment by segment (missing segments count as 0), and
-// on equal cores a tag with a suffix ranks BELOW the bare tag, so a build or
-// prerelease like 2026.6.1-g8487590 sorts before 2026.6.1. Differing suffixes
-// compare lexically. Tags without a numeric core compare lexically as a whole.
-// Returns -1, 0 or 1.
-func CompareVersions(a, b string) int {
-	ma, mb := versionCoreRe.FindStringSubmatch(a), versionCoreRe.FindStringSubmatch(b)
-	if ma == nil || mb == nil {
-		return strings.Compare(a, b)
-	}
-	sa, sb := strings.Split(ma[1], "."), strings.Split(mb[1], ".")
-	for i := 0; i < len(sa) || i < len(sb); i++ {
-		var na, nb int
-		if i < len(sa) {
-			na, _ = strconv.Atoi(sa[i])
-		}
-		if i < len(sb) {
-			nb, _ = strconv.Atoi(sb[i])
-		}
-		if na != nb {
-			if na < nb {
-				return -1
-			}
-			return 1
-		}
-	}
-	switch {
-	case ma[2] == mb[2]:
-		return 0
-	case ma[2] == "":
-		return 1 // bare release beats any suffixed build of the same core
-	case mb[2] == "":
-		return -1
-	default:
-		return compareSuffixes(ma[2], mb[2])
-	}
-}
-
-var suffixRunRe = regexp.MustCompile(`\d+|\D+`)
-
-// compareSuffixes orders version suffixes like rpm/dpkg do: split into
-// alternating numeric and non-numeric runs, comparing numeric runs
-// numerically — so -ls100 > -ls99 and -r10 > -r2, where a plain lexical
-// compare would invert them.
-func compareSuffixes(a, b string) int {
-	ra, rb := suffixRunRe.FindAllString(a, -1), suffixRunRe.FindAllString(b, -1)
-	for i := 0; i < len(ra) && i < len(rb); i++ {
-		na, ea := strconv.Atoi(ra[i])
-		nb, eb := strconv.Atoi(rb[i])
-		switch {
-		case ea == nil && eb == nil:
-			if na != nb {
-				if na < nb {
-					return -1
-				}
-				return 1
-			}
-		default:
-			if c := strings.Compare(ra[i], rb[i]); c != 0 {
-				return c
-			}
-		}
-	}
-	// Equal prefix runs: the longer suffix ranks higher (more specific build).
-	switch {
-	case len(ra) == len(rb):
-		return 0
-	case len(ra) < len(rb):
-		return -1
-	default:
-		return 1
-	}
-}
-
-// NewestMatching returns the highest tag (per CompareVersions) that matches
-// include and is strictly newer than current, or "" when no tag qualifies.
 func NewestMatching(tags []string, include *regexp.Regexp, current string) string {
 	if c := MatchingCandidates(tags, include, nil, current); len(c) > 0 {
 		return c[0]
@@ -214,12 +134,12 @@ func MatchingCandidates(tags []string, include, exclude *regexp.Regexp, current 
 		if exclude != nil && exclude.MatchString(t) {
 			continue
 		}
-		if CompareVersions(t, current) <= 0 {
+		if version.CompareVersions(t, current) <= 0 {
 			continue
 		}
 		out = append(out, t)
 	}
-	sort.Slice(out, func(i, j int) bool { return CompareVersions(out[i], out[j]) > 0 })
+	sort.Slice(out, func(i, j int) bool { return version.CompareVersions(out[i], out[j]) > 0 })
 	return out
 }
 

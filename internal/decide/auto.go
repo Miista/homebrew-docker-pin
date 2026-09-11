@@ -3,7 +3,7 @@ package decide
 import (
 	"fmt"
 
-	"github.com/Miista/homebrew-docker-pin/internal/registry"
+	"github.com/Miista/homebrew-docker-pin/internal/version"
 )
 
 // Auto is how large a change a service will take without being asked.
@@ -66,13 +66,13 @@ func (a Auto) rank() int {
 // not one to make unattended. That is deliberately the conservative reading —
 // an unclassifiable change is more likely to be a flavour switch or a
 // prerelease than a quiet patch.
-func rank(k registry.Kind) int {
+func rank(k version.Kind) int {
 	switch k {
-	case registry.KindPatch:
+	case version.KindPatch:
 		return 1
-	case registry.KindMinor:
+	case version.KindMinor:
 		return 2
-	case registry.KindMajor, registry.KindUnknown:
+	case version.KindMajor, version.KindUnknown:
 		return 3
 	default:
 		return 0

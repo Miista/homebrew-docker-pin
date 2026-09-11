@@ -23,7 +23,7 @@ import (
 
 	"github.com/Miista/homebrew-docker-pin/internal/compose"
 	"github.com/Miista/homebrew-docker-pin/internal/pin"
-	"github.com/Miista/homebrew-docker-pin/internal/registry"
+	"github.com/Miista/homebrew-docker-pin/internal/version"
 )
 
 // Registry is the registry access detection needs, seamed for tests.
@@ -90,9 +90,9 @@ type Finding struct {
 	Candidate string
 	// Bump is how big the change is, for a tag candidate. A digest candidate
 	// has no version pair to compare, so it is left empty -- that is a
-	// different thing from registry.KindUnknown, which means there IS a pair
+	// different thing from version.KindUnknown, which means there IS a pair
 	// and it could not be read.
-	Bump registry.Kind
+	Bump version.Kind
 	// Decision is whether policy allows duva to apply this itself, and Why
 	// says so in one clause fit for a notification or a table cell.
 	Decision Decision
@@ -348,7 +348,7 @@ func constrained(f Finding, rules Rules, reg Registry) Finding {
 		return f
 	}
 	f.Status, f.Kind, f.Candidate = StatusAvailable, KindTag, c.Tag
-	f.Bump = registry.Classify(f.CurrentTag, c.Tag)
+	f.Bump = version.Classify(f.CurrentTag, c.Tag)
 	return f
 }
 

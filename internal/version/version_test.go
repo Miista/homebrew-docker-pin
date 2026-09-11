@@ -1,4 +1,4 @@
-package registry
+package version
 
 import "testing"
 
@@ -77,5 +77,46 @@ func TestClassify_KnownMisreads(t *testing.T) {
 func TestClassify_IgnoresDirection(t *testing.T) {
 	if got := Classify("2.0.0", "1.0.0"); got != KindMajor {
 		t.Errorf("downgrade = %q, want major", got)
+	}
+}
+
+func TestCompareVersions(t *testing.T) {
+	tests := []struct {
+		a, b string
+		want int
+	}{
+		{"1.2.3", "1.2.3", 0},
+		{"1.2.3", "1.2.4", -1},
+		{"1.10.0", "1.9.9", 1},
+		{"2026.6.1", "2026.6", 1},
+		{"v1.2.3", "1.2.3", 0},
+		{"2026.6.1-g8487590", "2026.6.1", -1}, // suffixed build ranks below bare release
+		{"2026.6.1", "2026.6.1-g8487590", 1},
+		{"17.5-alpine", "17.4-alpine", 1},
+		{"18.0-alpine", "17.9-alpine", 1},
+		{"alpine", "alpine", 0}, // no numeric core: lexical
+	}
+	for _, tt := range tests {
+		if got := CompareVersions(tt.a, tt.b); got != tt.want {
+			t.Errorf("CompareVersions(%q, %q) = %d, want %d", tt.a, tt.b, got, tt.want)
+		}
+	}
+}
+func TestCompareVersions_NumericSuffixRuns(t *testing.T) {
+	tests := []struct {
+		a, b string
+		want int
+	}{
+		{"1.32.8-ls100", "1.32.8-ls99", 1}, // lexical compare would say -1
+		{"3.18.4-r10", "3.18.4-r2", 1},
+		{"16-3.10", "16-3.9", 1},
+		{"1.0.0-rc10", "1.0.0-rc9", 1},
+		{"1.0.0-rc2", "1.0.0-rc10", -1},
+		{"1.0.0-alpha", "1.0.0-beta", -1},
+	}
+	for _, tt := range tests {
+		if got := CompareVersions(tt.a, tt.b); got != tt.want {
+			t.Errorf("CompareVersions(%q, %q) = %d, want %d", tt.a, tt.b, got, tt.want)
+		}
 	}
 }

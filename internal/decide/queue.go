@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Miista/homebrew-docker-pin/internal/registry"
+	"github.com/Miista/homebrew-docker-pin/internal/version"
 )
 
 // Entry is one decision waiting to happen.
@@ -28,7 +28,7 @@ type Entry struct {
 	Digest string `json:"digest,omitempty"`
 	// Kind is how big the change is. Empty for a digest move, which has no
 	// version pair.
-	Kind registry.Kind `json:"kind,omitempty"`
+	Kind version.Kind `json:"kind,omitempty"`
 	// Why is the reason it is waiting, fit to render in a row.
 	Why string `json:"why"`
 	// Auto is the policy that produced this, so a queue shows the rule and

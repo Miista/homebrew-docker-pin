@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Miista/homebrew-docker-pin/internal/registry"
+	"github.com/Miista/homebrew-docker-pin/internal/version"
 	"github.com/Miista/homebrew-docker-pin/internal/watch"
 )
 
@@ -31,7 +31,7 @@ func get(t *testing.T, s *Server, path string) *httptest.ResponseRecorder {
 func TestIndex_RendersPendingRows(t *testing.T) {
 	s := &Server{Source: fakeSource{pending: []watch.Pending{
 		{Service: "app", Image: "example.com/app", CurrentTag: "1.2.0",
-			Kind: watch.KindTag, Candidate: "1.3.0", Bump: registry.KindMinor,
+			Kind: watch.KindTag, Candidate: "1.3.0", Bump: version.KindMinor,
 			Why:       "minor exceeds duva.auto: patch",
 			FirstSeen: "2026-01-01T00:00:00Z", Auto: "patch"},
 	}}, Host: "testhost", Version: "test"}
@@ -152,7 +152,7 @@ func post(t *testing.T, s *Server, form string) *httptest.ResponseRecorder {
 func queueWith(applier Applier) *Server {
 	return &Server{
 		Source: fakeSource{pending: []watch.Pending{
-			{Service: "app", Kind: watch.KindTag, Candidate: "2.0.0", Bump: registry.KindMajor},
+			{Service: "app", Kind: watch.KindTag, Candidate: "2.0.0", Bump: version.KindMajor},
 		}},
 		Applier: applier,
 	}
@@ -303,7 +303,7 @@ func TestIndex_ShowsWhatIsSoaking(t *testing.T) {
 	s := &Server{
 		Source: fakeSource{soaking: []watch.Soaking{{
 			Service: "app", Image: "example.com/app", CurrentTag: "1.2.0",
-			Candidate: "1.3.0", Bump: registry.KindMinor,
+			Candidate: "1.3.0", Bump: version.KindMinor,
 			Remaining: "4 days", Outcome: "will be applied automatically",
 		}}},
 		Applier: &fakeApplier{},
@@ -328,7 +328,7 @@ func TestIndex_ShowsWhatIsSoaking(t *testing.T) {
 func TestIndex_SoakingOutcomeIsNotAssumed(t *testing.T) {
 	s := &Server{Source: fakeSource{soaking: []watch.Soaking{{
 		Service: "app", CurrentTag: "1.2.0", Candidate: "2.0.0",
-		Bump: registry.KindMajor, Remaining: "6 days", Outcome: "moves to approval",
+		Bump: version.KindMajor, Remaining: "6 days", Outcome: "moves to approval",
 	}}}}
 	body := get(t, s, "/").Body.String()
 
@@ -540,9 +540,9 @@ func TestIndex_ReferencesTheLogoAndFavicon(t *testing.T) {
 func TestIndex_HubRowsCarryHostAndRouteByKey(t *testing.T) {
 	s := &Server{Source: fakeSource{pending: []watch.Pending{
 		{Service: "caddy", Host: "optiplex", Image: "caddy", CurrentTag: "2.11.4-alpine",
-			Kind: watch.KindTag, Candidate: "2.12.0-alpine", Bump: registry.KindMinor},
+			Kind: watch.KindTag, Candidate: "2.12.0-alpine", Bump: version.KindMinor},
 		{Service: "caddy", Host: "pi", Image: "caddy", CurrentTag: "2.11.4-alpine",
-			Kind: watch.KindTag, Candidate: "2.12.0-alpine", Bump: registry.KindMinor},
+			Kind: watch.KindTag, Candidate: "2.12.0-alpine", Bump: version.KindMinor},
 	}}, Host: "hub", Version: "test", Applier: &fakeApplier{}}
 
 	body := get(t, s, "/").Body.String()
@@ -566,7 +566,7 @@ func TestIndex_HubRowsCarryHostAndRouteByKey(t *testing.T) {
 func TestIndex_LocalRowsPostBareServiceName(t *testing.T) {
 	s := &Server{Source: fakeSource{pending: []watch.Pending{
 		{Service: "caddy", Image: "caddy", CurrentTag: "2.11.4-alpine",
-			Kind: watch.KindTag, Candidate: "2.12.0-alpine", Bump: registry.KindMinor},
+			Kind: watch.KindTag, Candidate: "2.12.0-alpine", Bump: version.KindMinor},
 	}}, Host: "optiplex", Version: "test", Applier: &fakeApplier{}}
 
 	body := get(t, s, "/").Body.String()

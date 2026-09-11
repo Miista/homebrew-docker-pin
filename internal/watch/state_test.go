@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Miista/homebrew-docker-pin/internal/registry"
+	"github.com/Miista/homebrew-docker-pin/internal/version"
 )
 
 func statePath(t *testing.T) string {
@@ -22,7 +22,7 @@ func TestState_RoundTrip(t *testing.T) {
 	st.Notified["b"] = "1.2.3"
 	st.Pending["c"] = Pending{
 		Service: "c", Image: "x/y", CurrentTag: "1.0.0",
-		Kind: KindTag, Candidate: "2.0.0", Bump: registry.KindMajor,
+		Kind: KindTag, Candidate: "2.0.0", Bump: version.KindMajor,
 		Why: "major exceeds duva.auto: patch", FirstSeen: "2026-01-01T00:00:00Z",
 	}
 	if err := st.Save(p); err != nil {
@@ -37,7 +37,7 @@ func TestState_RoundTrip(t *testing.T) {
 		t.Errorf("round trip lost data: %+v", got)
 	}
 	p2 := got.Pending["c"]
-	if p2.Candidate != "2.0.0" || p2.Bump != registry.KindMajor || p2.Why == "" || p2.FirstSeen == "" {
+	if p2.Candidate != "2.0.0" || p2.Bump != version.KindMajor || p2.Why == "" || p2.FirstSeen == "" {
 		t.Errorf("pending row lost fields: %+v", p2)
 	}
 }
@@ -381,25 +381,25 @@ func TestSoakOutcome(t *testing.T) {
 	const queue = "moves to approval"
 
 	cases := []struct {
-		bump registry.Kind
+		bump version.Kind
 		auto Auto
 		want string
 	}{
 		// Within the policy: duva applies it when the soak ends.
-		{registry.KindPatch, AutoPatch, auto},
-		{registry.KindPatch, AutoMinor, auto},
-		{registry.KindMinor, AutoMinor, auto},
-		{registry.KindMajor, AutoMajor, auto},
+		{version.KindPatch, AutoPatch, auto},
+		{version.KindPatch, AutoMinor, auto},
+		{version.KindMinor, AutoMinor, auto},
+		{version.KindMajor, AutoMajor, auto},
 
 		// Beyond it: the soak ends and a person still has to decide.
-		{registry.KindMinor, AutoPatch, queue},
-		{registry.KindMajor, AutoMinor, queue},
+		{version.KindMinor, AutoPatch, queue},
+		{version.KindMajor, AutoMinor, queue},
 
 		// No policy at all. Every bump waits for a human, including a patch --
 		// this was the untested case, and it is the default a service has
 		// until someone sets duva.auto.
-		{registry.KindPatch, AutoNone, queue},
-		{registry.KindMajor, AutoNone, queue},
+		{version.KindPatch, AutoNone, queue},
+		{version.KindMajor, AutoNone, queue},
 	}
 	for _, c := range cases {
 		if got := soakOutcome(c.bump, c.auto); got != c.want {

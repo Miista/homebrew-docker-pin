@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Miista/homebrew-docker-pin/internal/registry"
+	"github.com/Miista/homebrew-docker-pin/internal/version"
 )
 
 func at(s string) time.Time {
@@ -18,7 +18,7 @@ func at(s string) time.Time {
 var now = at("2026-09-11T12:00:00Z")
 
 func entry(service, from, to string) Entry {
-	return Entry{Service: service, From: from, To: to, Kind: registry.KindMinor}
+	return Entry{Service: service, From: from, To: to, Kind: version.KindMinor}
 }
 
 func TestPutAndGet(t *testing.T) {
@@ -220,7 +220,7 @@ func TestDueIsSorted(t *testing.T) {
 // change sets it, a digest move leaves it alone.
 func TestEntryFromSetsTheTagOnAVersionChange(t *testing.T) {
 	s := svc("1.0.0", "sha256:old", AutoNone)
-	v := Verdict{Outcome: Queue, Kind: registry.KindMinor, From: "1.0.0", To: "1.1.0"}
+	v := Verdict{Outcome: Queue, Kind: version.KindMinor, From: "1.0.0", To: "1.1.0"}
 	e := EntryFrom(v, s, "")
 	if e.Tag != "1.1.0" {
 		t.Errorf("tag = %q, want the new version", e.Tag)
@@ -243,7 +243,7 @@ func TestEntryFromKeepsTheTagOnADigestMove(t *testing.T) {
 // the verdict it produced.
 func TestEntryFromCarriesThePolicy(t *testing.T) {
 	s := svc("1.0.0", "sha256:old", AutoPatch)
-	e := EntryFrom(Verdict{Kind: registry.KindMinor, To: "1.1.0"}, s, "")
+	e := EntryFrom(Verdict{Kind: version.KindMinor, To: "1.1.0"}, s, "")
 	if e.Auto != AutoPatch {
 		t.Errorf("auto = %q, want patch", e.Auto)
 	}

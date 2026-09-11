@@ -19,7 +19,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/Miista/homebrew-docker-pin/internal/registry"
+	"github.com/Miista/homebrew-docker-pin/internal/version"
 )
 
 // Notice is what a detector reported: this container's image has something
@@ -71,9 +71,9 @@ type Verdict struct {
 	Outcome Outcome
 	// Kind is how big the change is, for a tag change. Empty for a digest
 	// move, which has no version pair to compare — which is a different thing
-	// from registry.KindUnknown, meaning there IS a pair and it could not be
+	// from version.KindUnknown, meaning there IS a pair and it could not be
 	// read.
-	Kind registry.Kind
+	Kind version.Kind
 	// From and To are what it would change, for the queue to render and the
 	// actor to apply. For a tag change these are tags; for a digest move they
 	// are digests.
@@ -179,13 +179,13 @@ func digestMove(n Notice, svc Service) Verdict {
 
 // tagChange decides a change from one version tag to another.
 func tagChange(n Notice, svc Service, newTag string) Verdict {
-	kind := registry.Classify(svc.Tag, newTag)
+	kind := version.Classify(svc.Tag, newTag)
 	v := Verdict{Kind: kind, From: svc.Tag, To: newTag}
 
 	// Not every tag change is an upgrade. A detector reporting an older tag,
 	// or one on a different flavour line, is not something to apply -- and
 	// Classify says so by refusing to compare them.
-	if kind != registry.KindUnknown && registry.CompareVersions(newTag, svc.Tag) <= 0 {
+	if kind != version.KindUnknown && version.CompareVersions(newTag, svc.Tag) <= 0 {
 		v.Outcome = Ignore
 		v.Why = fmt.Sprintf("%s is not newer than %s", newTag, svc.Tag)
 		return v
@@ -200,7 +200,7 @@ func tagChange(n Notice, svc Service, newTag string) Verdict {
 		v.Why = fmt.Sprintf("%s, within duva.auto: %s", kind, svc.Auto)
 		return v
 	}
-	if kind == registry.KindUnknown {
+	if kind == version.KindUnknown {
 		v.Outcome = Queue
 		v.Why = fmt.Sprintf("version change could not be classified; needs duva.auto: %s", AutoMajor)
 		return v

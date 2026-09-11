@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Miista/homebrew-docker-pin/internal/registry"
+	"github.com/Miista/homebrew-docker-pin/internal/version"
 )
 
 func TestParseAuto(t *testing.T) {
@@ -46,33 +46,33 @@ func TestParseAuto(t *testing.T) {
 // The whole ladder, every bump against every threshold.
 func TestDecide_TagCandidates(t *testing.T) {
 	for _, tc := range []struct {
-		bump registry.Kind
+		bump version.Kind
 		auto Auto
 		want Decision
 	}{
 		// none: nothing is ever applied unattended.
-		{registry.KindPatch, AutoNone, DecideApprove},
-		{registry.KindMinor, AutoNone, DecideApprove},
-		{registry.KindMajor, AutoNone, DecideApprove},
-		{registry.KindUnknown, AutoNone, DecideApprove},
+		{version.KindPatch, AutoNone, DecideApprove},
+		{version.KindMinor, AutoNone, DecideApprove},
+		{version.KindMajor, AutoNone, DecideApprove},
+		{version.KindUnknown, AutoNone, DecideApprove},
 
 		// patch: only patches.
-		{registry.KindPatch, AutoPatch, DecideAuto},
-		{registry.KindMinor, AutoPatch, DecideApprove},
-		{registry.KindMajor, AutoPatch, DecideApprove},
-		{registry.KindUnknown, AutoPatch, DecideApprove},
+		{version.KindPatch, AutoPatch, DecideAuto},
+		{version.KindMinor, AutoPatch, DecideApprove},
+		{version.KindMajor, AutoPatch, DecideApprove},
+		{version.KindUnknown, AutoPatch, DecideApprove},
 
 		// minor: patches and minors.
-		{registry.KindPatch, AutoMinor, DecideAuto},
-		{registry.KindMinor, AutoMinor, DecideAuto},
-		{registry.KindMajor, AutoMinor, DecideApprove},
-		{registry.KindUnknown, AutoMinor, DecideApprove},
+		{version.KindPatch, AutoMinor, DecideAuto},
+		{version.KindMinor, AutoMinor, DecideAuto},
+		{version.KindMajor, AutoMinor, DecideApprove},
+		{version.KindUnknown, AutoMinor, DecideApprove},
 
 		// major: everything, including what could not be classified.
-		{registry.KindPatch, AutoMajor, DecideAuto},
-		{registry.KindMinor, AutoMajor, DecideAuto},
-		{registry.KindMajor, AutoMajor, DecideAuto},
-		{registry.KindUnknown, AutoMajor, DecideAuto},
+		{version.KindPatch, AutoMajor, DecideAuto},
+		{version.KindMinor, AutoMajor, DecideAuto},
+		{version.KindMajor, AutoMajor, DecideAuto},
+		{version.KindUnknown, AutoMajor, DecideAuto},
 	} {
 		f := Finding{Status: StatusAvailable, Kind: KindTag, Bump: tc.bump}
 		got, why := Decide(f, tc.auto)
@@ -89,7 +89,7 @@ func TestDecide_TagCandidates(t *testing.T) {
 // a change is, it is not one to make unattended. The explanation should say
 // so rather than claiming it exceeded a threshold.
 func TestDecide_UnknownExplainsItself(t *testing.T) {
-	f := Finding{Status: StatusAvailable, Kind: KindTag, Bump: registry.KindUnknown}
+	f := Finding{Status: StatusAvailable, Kind: KindTag, Bump: version.KindUnknown}
 	_, why := Decide(f, AutoMinor)
 	// What matters is that it does not claim a threshold was exceeded, which
 	// would be a different and wrong diagnosis. The phrasing is free.
