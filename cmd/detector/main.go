@@ -141,57 +141,13 @@ func run(log zerolog.Logger) error {
 	// be reported at all.
 	startedAt := time.Now()
 
-	var found, failed int
 	reporter := newReporter(os.Getenv("DETECTOR_WEBHOOK_URL"), host, log)
-
-	for _, svc := range services {
-		// Said before the work, not after. A service with many tags takes
-		// tens of seconds -- one request per candidate -- and a run that
-		// printed nothing until it found something was indistinguishable
-		// from one that had hung. It cost three misdiagnoses before anyone
-		// noticed it was merely slow.
-		log.Debug().Msgf("checking %s (%s)", svc.Name, svc.Image)
-		began := time.Now()
-
-		before := found
-		err := detect.Since(svc, cutoff, reg, func(f detect.Finding) {
-			found++
-			// Printed as it is discovered, not after the service finishes.
-			// Info, not warn: a published tag is the ordinary output of this
-			// tool, not something wrong -- whether it matters is the gate's
-			// call, and warning about every one would make the level mean
-			// "the detector worked".
-			//
-			// And nothing about what the service is on. Saying "currently on
-			// dev" alongside 2.24.0 implies the one could replace the other,
-			// which is a version judgement this tool has no basis for.
-			log.Info().Msgf("%s: %s was published %s",
-				f.Service, f.Tag, f.Published.Local().Format("2006-01-02 15:04:05 MST"))
-			reporter.report(f)
-		})
-
-		if d := time.Since(began); d > slowCheck {
-			log.Warn().Msgf("%s took %s to check — it has many tags, and each one costs a request",
-				svc.Name, d.Round(time.Second))
-		}
-		if err != nil {
-			failed++
-			log.Error().Msgf("%s: could not check it — %v", svc.Name, err)
-			continue
-		}
-		if found == before {
-			log.Debug().Msgf("%s: nothing published since the last check", svc.Name)
-		}
-	}
+	found, failed := checkAll(services, cutoff, reg, reporter.report, log)
 
 	log.Info().Msgf("check complete: %d new tag(s) across %d service(s), %d could not be checked",
 		found, len(services), failed)
 
-	// The cutoff advances only when nothing failed. A run with holes in it
-	// must not move the line forward, or whatever was published during the
-	// outage is skipped silently and forever -- the one thing a detector
-	// must never do.
-	if failed > 0 {
+	if !mayAdvance(failed) {
 		log.Warn().Msgf("not advancing the cutoff: %d service(s) could not be checked, "+
 			"so moving it would silently skip anything they published", failed)
 		return nil
@@ -202,6 +158,20 @@ func run(log zerolog.Logger) error {
 	log.Info().Msgf("cutoff advanced to %s", startedAt.Local().Format("2006-01-02 15:04:05 MST"))
 	return nil
 }
+
+// mayAdvance says whether a run earned the right to move the cutoff forward.
+//
+// Only a complete one does. A run with holes in it must not move the line,
+// or whatever was published by the services it could not reach falls between
+// the old cutoff and the new one and is never reported -- silently, and
+// forever. That is the one thing a detector must never do, which is why the
+// rule is a named function rather than an `if` buried in a loop: it is the
+// most important sentence in this program and deserves somewhere to be
+// tested.
+//
+// The cost of being wrong the other way is one noisy run. The asymmetry is
+// the whole argument.
+func mayAdvance(failed int) bool { return failed == 0 }
 
 // readServices turns the compose project into what the detector looks at.
 //
