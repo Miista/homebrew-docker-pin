@@ -1,0 +1,33 @@
+# The decider: the gate.
+#
+# It reads the compose project, decides what a detector's notification means,
+# and hands what policy allows to an actor. It talks to no registry and holds
+# no docker socket -- the only thing it can do to this host is read a file and
+# make an HTTP call to something that was configured for it.
+#
+# That is why this image carries nothing: no docker CLI, no git, no shell.
+# Compare the actor's, which needs all three.
+
+# Base images are pinned by digest, the same way this tool asks a compose file
+# to pin its own: the tag says which stream to follow, the digest records what
+# was actually built.
+FROM golang:1.26-alpine@sha256:28d89ee9cc0ff9fec75c82ca201e6bf7fdf9a679d4b7b24dfa04f2bb766bb468 AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+ARG VERSION=dev
+RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /out/decider ./cmd/decider
+
+# Distroless static: the decider shells out to nothing, so there is nothing
+# for a shell to be useful for.
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:6ec5aa99dc335666e79dc64e4a6c8b89c33a543a1967f20d360922a80dd21f02
+COPY --from=build /out/decider /decider
+
+# /compose is read-only: the decider reads what this host declares and never
+# writes it. Writing is the actor's, and giving both the ability would make
+# the split a convention rather than a constraint.
+VOLUME ["/compose"]
+EXPOSE 8080
+USER nonroot:nonroot
+ENTRYPOINT ["/decider"]
