@@ -183,6 +183,22 @@ progress. There is no session to guess at and nothing to leak: either work is
 happening, and its log is the same thing the UI would be shown anyway, or the
 response is empty.
 
+**The actor has to be told its own address.** Inside a container it sees a
+compose-network address and its own container name, neither of which resolves
+from wherever the UI runs. So the stream URL is built from configuration —
+`ACTOR_PUBLIC_URL` or equivalent — the same way the UI is configured with where
+its deciders are: told, not inferred.
+
+The alternative is the decider constructing the URL, since it necessarily knows
+an address that works for the UI. But that puts the decider back in the middle
+of the one thing it just got out of, and it breaks the property that makes this
+worth doing: an actor that opens a pull request instead of pulling an image has
+a progress URL that is not on its host at all, and only the actor knows that.
+
+The consequence is that the actor publishes a port where the decider does not.
+The stream is read-only and empty when idle, so this is a small surface — but
+it is a real one, and worth stating rather than discovering.
+
 ## Carried over from v3, unchanged
 
 - **Transport is a webhook POST.** Not a queue, not a socket.
