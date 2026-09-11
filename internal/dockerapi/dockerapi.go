@@ -1,4 +1,4 @@
-package main
+package dockerapi
 
 import (
 	"bytes"
@@ -220,10 +220,10 @@ func toStrings(v any) []string {
 	return out
 }
 
-// containerNameOf is what a service's container is called, or the service
+// ContainerName is what a service's container is called, or the service
 // name when there is no container to ask -- a service that is not running
 // still has to be named in a log line.
-func containerNameOf(service string) string {
+func ContainerName(service string) string {
 	id, err := findContainer(service)
 	if err != nil {
 		return service
@@ -241,7 +241,7 @@ func containerNameOf(service string) string {
 	return strings.TrimPrefix(named.Name, "/")
 }
 
-// recreateContainer replaces a service's container with one running the image
+// Recreate replaces a service's container with one running the image
 // its compose file now pins.
 //
 // The compose file is not read: what the container should be is already
@@ -249,7 +249,7 @@ func containerNameOf(service string) string {
 // The name is reused, so the replacement is indistinguishable from the
 // original to anything that refers to it -- including compose, which keeps
 // managing it because its labels come across untouched.
-func recreateContainer(composeFile, service string) error {
+func Recreate(composeFile, service string) error {
 	id, err := findContainer(service)
 	if err != nil {
 		return err
@@ -307,7 +307,7 @@ func recreateContainer(composeFile, service string) error {
 	return nil
 }
 
-// pullImageAPI fetches an image through the daemon.
+// Pull fetches an image through the daemon.
 //
 // The daemon does the pulling: duva names the image and, for a private
 // registry, passes credentials. It does not fetch layers itself -- the image
@@ -317,7 +317,7 @@ func recreateContainer(composeFile, service string) error {
 // and abandoning it aborts the pull: the request returns promptly and the
 // image is not there, which looks like a registry problem rather than a
 // mistake here. Watchtower and WUD both drain it for the same reason.
-func pullImageAPI(ref string) error {
+func Pull(ref string) error {
 	name, tag := splitRef(ref)
 	path := "/images/create?fromImage=" + url.QueryEscape(name) + "&tag=" + url.QueryEscape(tag)
 
@@ -416,9 +416,9 @@ func registryOf(image string) string {
 	return hub
 }
 
-// imageDigest is the repo digest of an image the daemon already has: what it
+// Digest is the repo digest of an image the daemon already has: what it
 // can be pulled by on another host.
-func imageDigest(ref string) (string, error) {
+func Digest(ref string) (string, error) {
 	raw, err := dockerDo(http.MethodGet, "/images/"+url.PathEscape(ref)+"/json", nil)
 	if err != nil {
 		return "", fmt.Errorf("inspecting %s: %w", ref, err)

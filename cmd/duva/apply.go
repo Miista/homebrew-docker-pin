@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/Miista/homebrew-docker-pin/internal/compose"
+	"github.com/Miista/homebrew-docker-pin/internal/dockerapi"
 	"github.com/Miista/homebrew-docker-pin/internal/pin"
 	"github.com/Miista/homebrew-docker-pin/internal/watch"
 )
@@ -65,10 +66,10 @@ type Git struct {
 // at runtime. Watchtower and WUD both work this way, for the same reason:
 // there is nothing the CLI does here that the daemon does not expose.
 var realDocker = Docker{
-	Pull:          pullImageAPI,
-	GetDigest:     imageDigest,
-	ComposeUp:     recreateContainer,
-	ContainerName: containerNameOf,
+	Pull:          dockerapi.Pull,
+	GetDigest:     dockerapi.Digest,
+	ComposeUp:     dockerapi.Recreate,
+	ContainerName: dockerapi.ContainerName,
 }
 
 var realGit = Git{

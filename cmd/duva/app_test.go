@@ -348,7 +348,7 @@ func TestApp_RemovingTheIncludeLabel_ChangesWhatIsAsked(t *testing.T) {
 	svc := f.WithAuto(f.WithUpdate(f.PinnedService(), fixture.BumpPatch), "patch")
 
 	delete(svc.Labels, "duva.include_tags") // the one break
-	svc.AvailableDigest = svc.Digest   // a moving-tag lookup now answers
+	svc.AvailableDigest = svc.Digest        // a moving-tag lookup now answers
 
 	findings, _ := app(t, f.Project(svc), f.Registry(svc))
 	got := findingFor(t, findings, svc.Name)

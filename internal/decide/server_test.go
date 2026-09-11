@@ -270,3 +270,31 @@ func TestStreamWithNoServiceIsRejected(t *testing.T) {
 		t.Errorf("status = %d, want 400", resp.StatusCode)
 	}
 }
+
+// An approved entry is no longer waiting, so it leaves the queue. Leaving it
+// there would offer a person the chance to approve the same update twice.
+func TestApprovingRemovesItFromTheQueue(t *testing.T) {
+	q := NewPending()
+	q.Put(entry("app", "1.0.0", "1.1.0"), now)
+	srv := serverWith(t, q, &fakeApplier{}, "")
+
+	do(t, http.MethodPost, srv.URL+"/v1/apply/app", "", "")
+
+	if q.Len() != 0 {
+		t.Errorf("the approved entry is still queued: %+v", q.List())
+	}
+}
+
+// A refused start leaves it queued: failing to start is not a decision, and
+// the entry still needs one.
+func TestARefusedStartLeavesItQueued(t *testing.T) {
+	q := NewPending()
+	q.Put(entry("app", "1.0.0", "1.1.0"), now)
+	srv := serverWith(t, q, &fakeApplier{err: errString("busy")}, "")
+
+	do(t, http.MethodPost, srv.URL+"/v1/apply/app", "", "")
+
+	if q.Len() != 1 {
+		t.Error("a refused start dropped the entry")
+	}
+}
