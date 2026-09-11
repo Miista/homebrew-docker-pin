@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Miista/homebrew-docker-pin/internal/version"
+	"github.com/Miista/homebrew-docker-pin/oci/version"
 )
 
 func statePath(t *testing.T) string {

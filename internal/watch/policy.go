@@ -2,7 +2,7 @@ package watch
 
 import (
 	"fmt"
-	"github.com/Miista/homebrew-docker-pin/internal/version"
+	"github.com/Miista/homebrew-docker-pin/oci/version"
 	"strings"
 )
 

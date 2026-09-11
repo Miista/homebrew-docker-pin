@@ -36,8 +36,18 @@ docker-duva:
 
 test: test-unit test-integration
 
+# Each module is tested on its own, and their coverage is deliberately not
+# pooled. oci in particular is the one part of this repo whose correctness is
+# bounded by somebody else's server behaving as documented, so its tests
+# exercise retries, auth discovery and pagination against fakes rather than
+# the logic the rest of the repo is about. duva-v4 has its own Makefile for
+# building and imaging; this only runs its tests alongside everything else.
 test-unit:
 	go test -shuffle=on ./...
+	cd compose && go test -shuffle=on ./...
+	cd dockerapi && go test -shuffle=on ./...
+	cd oci && go test -shuffle=on ./...
+	cd duva-v4 && go test -shuffle=on ./...
 
 # -p 1 keeps packages sequential: the suites share a registry port and a
 # testbed, and duva does not run several copies of itself in production

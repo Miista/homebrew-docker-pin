@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Miista/homebrew-docker-pin/internal/version"
+	"github.com/Miista/homebrew-docker-pin/oci/version"
 )
 
 // Detection is a function: a compose project and a set of registry answers in,

@@ -16,7 +16,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/Miista/homebrew-docker-pin/internal/compose"
+	"github.com/Miista/homebrew-docker-pin/compose"
 	"regexp"
 	"strconv"
 	"time"
@@ -75,13 +75,13 @@ func Compute(composeFile, service, pullRef string, d Docker) (Outcome, error) {
 		return Outcome{}, err
 	}
 
-	out := Outcome{OldRaw: oldRaw, NewRaw: oldRaw, Tag: currentTag, Digest: DigestOf(oldRaw)}
+	out := Outcome{OldRaw: oldRaw, NewRaw: oldRaw, Tag: currentTag, Digest: compose.DigestOf(oldRaw)}
 
 	digest, err := d.GetDigest(pullRef)
 	if err != nil {
 		return out, err
 	}
-	if oldDigest := DigestOf(oldRaw); oldDigest != "" && oldDigest == digest {
+	if oldDigest := compose.DigestOf(oldRaw); oldDigest != "" && oldDigest == digest {
 		return out, nil // already at this digest
 	}
 
@@ -99,48 +99,6 @@ func Apply(composeFile, service string, out Outcome) error {
 	return compose.PinImage(composeFile, service, out.NewRaw)
 }
 
-// DigestOf extracts "sha256:..." from an "image@sha256:..." reference, or ""
-// if the reference carries no digest.
-func DigestOf(image string) string {
-	if i := strings.Index(image, "@"); i != -1 {
-		return image[i+1:]
-	}
-	return ""
-}
-
-// TagOf extracts the tag from "base:tag" or "base:tag@sha256:...".
-func TagOf(image string) string {
-	if i := strings.Index(image, "@"); i != -1 {
-		image = image[:i]
-	}
-	if i := strings.LastIndex(image, ":"); i != -1 {
-		// A colon before the last slash is a registry port, not a tag.
-		if !strings.Contains(image[i:], "/") {
-			return image[i+1:]
-		}
-	}
-	return ""
-}
-
-// ShortDigest abbreviates "sha256:<64 hex>" to its first 12 hex characters.
-func ShortDigest(digest string) string {
-	const prefix = "sha256:"
-	if strings.HasPrefix(digest, prefix) && len(digest) > len(prefix)+12 {
-		return digest[:len(prefix)+12]
-	}
-	return digest
-}
-
-// duva.delay is how long a release must have been out before duva will take
-// it. It lived in internal/schedule while `docker pin schedule` owned the
-// concept of waiting; the label is duva's, so the parser is too.
-
-var delayRe = regexp.MustCompile(`^(\d+)(h|d|w)$`)
-
-// ParseDelay parses a release-age delay: "48h", "7d" or "2w".
-//
-// Days and weeks rather than only hours because that is how the wait is
-// actually chosen -- "a week" is a decision, "168h" is arithmetic.
 func ParseDelay(s string) (time.Duration, error) {
 	m := delayRe.FindStringSubmatch(strings.TrimSpace(s))
 	if m == nil {
@@ -159,3 +117,14 @@ func ParseDelay(s string) (time.Duration, error) {
 	}
 	return time.Duration(n) * unit, nil
 }
+
+// duva.delay is how long a release must have been out before duva will take
+// it. It lived in internal/schedule while `docker pin schedule` owned the
+// concept of waiting; the label is duva's, so the parser is too.
+
+var delayRe = regexp.MustCompile(`^(\d+)(h|d|w)$`)
+
+// ParseDelay parses a release-age delay: "48h", "7d" or "2w".
+//
+// Days and weeks rather than only hours because that is how the wait is
+// actually chosen -- "a week" is a decision, "168h" is arithmetic.

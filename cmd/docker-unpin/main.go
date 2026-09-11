@@ -7,9 +7,8 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"github.com/Miista/homebrew-docker-pin/internal/compose"
+	"github.com/Miista/homebrew-docker-pin/compose"
 	"github.com/Miista/homebrew-docker-pin/internal/help"
-	pinpkg "github.com/Miista/homebrew-docker-pin/internal/pin"
 )
 
 const (
@@ -197,7 +196,7 @@ func run(service string, dryRun bool) (unpinOutcome, error) {
 	}
 
 	unpinned := base + ":" + tag
-	outcome := unpinOutcome{OldRaw: rawImage, NewRaw: unpinned, Tag: tag, Digest: pinpkg.DigestOf(rawImage)}
+	outcome := unpinOutcome{OldRaw: rawImage, NewRaw: unpinned, Tag: tag, Digest: compose.DigestOf(rawImage)}
 	if dryRun {
 		return outcome, nil
 	}

@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/Miista/homebrew-docker-pin/internal/compose"
-	"github.com/Miista/homebrew-docker-pin/internal/dockerapi"
+	"github.com/Miista/homebrew-docker-pin/compose"
+	"github.com/Miista/homebrew-docker-pin/dockerapi"
 	"github.com/Miista/homebrew-docker-pin/internal/pin"
 	"github.com/Miista/homebrew-docker-pin/internal/watch"
 )

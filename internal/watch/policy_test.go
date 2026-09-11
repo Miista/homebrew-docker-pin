@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Miista/homebrew-docker-pin/internal/version"
+	"github.com/Miista/homebrew-docker-pin/oci/version"
 )
 
 func TestParseAuto(t *testing.T) {

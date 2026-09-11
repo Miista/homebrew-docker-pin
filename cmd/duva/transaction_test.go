@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Miista/homebrew-docker-pin/internal/compose"
+	"github.com/Miista/homebrew-docker-pin/compose"
 	"github.com/Miista/homebrew-docker-pin/internal/fixture"
 	"github.com/Miista/homebrew-docker-pin/internal/watch"
 )

@@ -5,8 +5,8 @@ import (
 	"regexp"
 	"time"
 
-	"github.com/Miista/homebrew-docker-pin/internal/compose"
-	"github.com/Miista/homebrew-docker-pin/internal/registry"
+	"github.com/Miista/homebrew-docker-pin/compose"
+	"github.com/Miista/homebrew-docker-pin/oci/registry"
 )
 
 // MaxDelayChecks bounds how many candidate publish dates one service may

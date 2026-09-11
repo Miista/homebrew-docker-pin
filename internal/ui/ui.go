@@ -19,7 +19,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/Miista/homebrew-docker-pin/internal/pin"
+	"github.com/Miista/homebrew-docker-pin/compose"
 	"github.com/Miista/homebrew-docker-pin/internal/watch"
 	"net/url"
 )
@@ -330,7 +330,7 @@ func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 // notification or a commit.
 func display(p watch.Pending) string {
 	if p.Kind == watch.KindDigest {
-		return pin.ShortDigest(p.Candidate)
+		return compose.ShortDigest(p.Candidate)
 	}
 	return p.Candidate
 }

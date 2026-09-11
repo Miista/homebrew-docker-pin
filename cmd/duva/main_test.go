@@ -15,8 +15,8 @@ import (
 	"time"
 
 	// Aliased: this package has its own `version`, the build string.
-	semver "github.com/Miista/homebrew-docker-pin/internal/version"
 	"github.com/Miista/homebrew-docker-pin/internal/watch"
+	semver "github.com/Miista/homebrew-docker-pin/oci/version"
 )
 
 // setupFixture creates a temp dir with a compose file and points the

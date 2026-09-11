@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/Miista/homebrew-docker-pin/compose"
 	"github.com/Miista/homebrew-docker-pin/internal/pin"
 	"github.com/Miista/homebrew-docker-pin/internal/watch"
 )
@@ -160,9 +161,9 @@ func apply(f watch.Finding, d Docker, g Git, opts applyOptions) Result {
 		Host:       opts.Host,
 		Container:  f.Service,
 		Image:      f.Image,
-		OldVersion: pin.TagOf(before),
+		OldVersion: compose.TagOf(before),
 		NewVersion: out.Tag,
-		OldDigest:  pin.DigestOf(before),
+		OldDigest:  compose.DigestOf(before),
 		NewDigest:  out.Digest,
 	})
 	if err != nil {

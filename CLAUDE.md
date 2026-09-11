@@ -41,7 +41,7 @@ it prints the metadata JSON Docker expects; otherwise it strips a leading
 `docker pin` also accepts an `upgrade` subcommand with an optional positional
 `[version]` argument.
 
-### `internal/compose`
+### `compose/` (module)
 - `FindFile(dir)` — walks up from `dir` looking for `docker-compose.yml|yaml` /
   `compose.yml|yaml`.
 - YAML is parsed only to read service names / image strings. `ListServices`,
@@ -57,8 +57,11 @@ Shells out to the `docker` CLI, for the plugins: `Pull` streams `docker pull`;
 not use this — it runs in a container and talks to the daemon's API over the
 mounted socket, so its image needs no CLI.
 
-### `internal/registry`
-Tag listing and selection for `upgrade` and duva. Talks to
+### `oci/registry` (module)
+Tag listing and selection for `upgrade`, duva and the v4 detector.
+Version comparison lives beside it in `oci/version`: `Classify` and
+`CompareVersions` never touched a registry, and filing them under one left
+the v4 decider importing a registry client to answer a question about text. Talks to
 registries directly over HTTPS — GHCR, Docker Hub, or any OCI Distribution
 registry — discovering bearer auth from the `WWW-Authenticate` challenge.
 - `ListMatchingTags` / `MatchingCandidates` keep only version-like tags and
@@ -118,32 +121,69 @@ a host looks exactly like that host having nothing to do.
 Agents are configured, not discovered: at this scale a registration protocol
 would only add an inbound path by which something could claim to be an agent.
 
-### The v4 split (`internal/decide`, `internal/actor`, `internal/diun`, `cmd/decider`)
+## Modules
 
-A second design, on `feature/duva-v4-decider`, that separates what duva does
-into single-purpose parts. Built and working end to end, not deployed; duva
-itself is untouched and still ships. See `docs/duva-v4-diun-decider-actor.md`.
+The repo is five modules. Not for its own sake: Go's `internal/` is invisible
+across a module boundary, so anything two of them share cannot be internal to
+either -- and `docker pin` and duva v4 genuinely do share file-format code and
+nothing else.
 
-- **detector** — diun, which already runs on both hosts and already carries
-  per-service `diun.include_tags` constraints. Not ours.
-- **`internal/decide`** — the gate, as pure functions: given a notice and what
-  the compose file declares, is this an update, how big, and may it be applied
-  unattended. Holds the queue, which is keyed by service so a newer candidate
-  supersedes a pending one. `Lookup` is the only impure part.
-- **`internal/actor`** — the *contract* and a client, no implementation. What
-  the decider may know is an endpoint, a payload, and that the answer carries a
-  stream URL; it may not know that applying involves a registry, a container or
-  git, because an actor that opens a pull request touches none of them.
-  Completion means the actor did its job, not that the host runs a new image.
-- **`internal/diun`** — translates diun's webhook, so nothing else knows which
-  detector is in use.
-- **`cmd/decider`** — the gate's binary. Reads `/compose` read-only, holds no
-  docker socket, talks to no registry, and is distroless as a result.
-- **`cmd/actor`** — the reference actor: the five-step transaction lifted from
-  duva. Holds `/compose` read-write and the docker socket, because applying
-  needs them, and carries git for the commit.
-- **`internal/dockerapi`** — the docker client, moved out of `cmd/duva` so both
-  binaries share one rather than growing a second that could drift from it.
+| module | what | who uses it |
+|---|---|---|
+| `.` | the plugins, duva, and their support | — |
+| `compose/` | reading and rewriting compose files | everything |
+| `dockerapi/` | the docker daemon client | duva, the v4 actor |
+| `oci/` | registry client + version comparison | `docker pin`, duva, the detector |
+| `duva-v4/` | detector, decider, actor | — |
+
+Each replaces the others by relative path rather than by version: they are
+developed together, and a version would mean tagging a release to change one
+line.
+
+`oci` is separate mostly so its coverage is not mixed with the rest. It is the
+one part of this repo whose correctness is bounded by somebody else's server
+behaving as documented, so its tests exercise retries, auth discovery and
+pagination against fakes rather than the logic the rest of the repo is about.
+It also means swapping it for a library would be a module replacement rather
+than surgery -- measured, and not worth it today: go-containerregistry is
+6.9MB and 48 modules for a program that only lists tags, regclient 7.4MB and
+20, against 7.4MB for the whole current detector. Neither is lighter where it
+matters, and neither exposes Docker Hub's `tag_last_pushed`, which is a Hub
+extension rather than an OCI concept.
+
+### duva v4 (`duva-v4/`)
+
+Three single-purpose processes, replacing what duva does in one. Built and
+working end to end, not deployed. duva itself is untouched and still ships.
+See `docs/duva-v4-diun-decider-actor.md`.
+
+- **`detector/`** — what exists, and when. Lists tags, keeps the ones
+  published since the last check, publishes them to a webhook. Knows nothing
+  about versions: not semver, not calver, not whether 4.39.25 beats 4.39.20.
+  Its only state is one timestamp, so losing it costs a noisy run rather than
+  a rebuild. Reads `diun.include_tags` / `diun.exclude_tags`, which ~45
+  services already carry.
+- **`decider/`** — the gate. Given a notice and what the compose file
+  declares: is this an update, how big, and may it be applied unattended.
+  Holds the queue, keyed by service so a newer candidate supersedes a pending
+  one. Holds no docker socket and talks to no registry.
+- **`actor/`** — the reference implementation of the contract: pull, write the
+  pin, recreate, commit, push. The only one of the three that depends on
+  `docker pin` -- applying an update means rewriting a pin, which is its
+  engine.
+- **`internal/actor`** — the *contract*, and a client. What the decider may
+  know is an endpoint, a payload, and that the answer carries a stream URL; it
+  may not know that applying involves a registry, a container or git, because
+  an actor that opens a pull request touches none of them. Completed means the
+  actor did its job, not that the host runs a new image.
+- **`internal/detectevent`** — translates the detector's webhook, so nothing
+  else knows which detector is in use. One shape at a time: a gate sniffing
+  between payload formats would carry translators for detectors nobody runs.
+
+Each binary has its own Dockerfile, because each needs a different thing: the
+detector and decider hold no socket and shell out to nothing; the actor holds
+the socket and carries git. The build context is the repository root, since
+the module replaces its siblings by relative path.
 
 ### duva (`cmd/duva`)
 A container, not a CLI plugin. It watches the compose project mounted at

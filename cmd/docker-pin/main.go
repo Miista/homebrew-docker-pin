@@ -18,11 +18,11 @@ import (
 
 	"github.com/opencontainers/go-digest"
 
-	"github.com/Miista/homebrew-docker-pin/internal/compose"
+	"github.com/Miista/homebrew-docker-pin/compose"
 	"github.com/Miista/homebrew-docker-pin/internal/docker"
 	"github.com/Miista/homebrew-docker-pin/internal/help"
 	pinpkg "github.com/Miista/homebrew-docker-pin/internal/pin"
-	"github.com/Miista/homebrew-docker-pin/internal/registry"
+	"github.com/Miista/homebrew-docker-pin/oci/registry"
 )
 
 const (
@@ -342,7 +342,7 @@ func pinInFile(composeFile, service string, d dockerFuncs, dryRun bool) (pinOutc
 		// discard something a person wrote -- and the fix is one they should
 		// choose. `docker unpin` strips it, `docker pin upgrade` replaces it;
 		// both work on a malformed digest today.
-		if d := pinpkg.DigestOf(raw); digest.Digest(d).Validate() != nil {
+		if d := compose.DigestOf(raw); digest.Digest(d).Validate() != nil {
 			return pinOutcome{}, fmt.Errorf(
 				"%s is pinned to %s, which is not a valid digest and cannot be pulled: "+
 					"`docker unpin %s` to strip it, or `docker pin upgrade %s <version>` to replace it",
@@ -352,7 +352,7 @@ func pinInFile(composeFile, service string, d dockerFuncs, dryRun bool) (pinOutc
 			fmt.Printf("%s is already pinned to %s\n", service, raw)
 			fmt.Println("Run `docker unpin` first, or `docker pin upgrade` to move to a new version.")
 		}
-		return pinOutcome{OldRaw: raw, NewRaw: raw, Tag: tag, Digest: pinpkg.DigestOf(raw), AlreadyPinned: true}, nil
+		return pinOutcome{OldRaw: raw, NewRaw: raw, Tag: tag, Digest: compose.DigestOf(raw), AlreadyPinned: true}, nil
 	}
 
 	pullRef := baseImage + ":" + tag
@@ -473,7 +473,7 @@ func listInFile(composeFile string, missing, quiet bool, out io.Writer) (unpinne
 		if err != nil {
 			return 0, err
 		}
-		digest := pinpkg.DigestOf(raw)
+		digest := compose.DigestOf(raw)
 		r := row{service: service, base: base, tag: tag, digest: digest, pinned: digest != ""}
 		if !r.pinned {
 			unpinned++
@@ -706,13 +706,13 @@ func upgradeAll(d dockerFuncs, dryRun bool, concurrency int) error {
 		fmt.Fprintln(w, "SERVICE\tACTION\tTAG\tSHA")
 		for _, r := range results {
 			action := "none"
-			tag := pinpkg.TagOf(r.outcome.OldRaw)
+			tag := compose.TagOf(r.outcome.OldRaw)
 			switch {
 			case r.outcome.Built:
 				action = "built"
 			case r.outcome.Changed:
 				action = "upgrade"
-				if newTag := pinpkg.TagOf(r.outcome.NewRaw); newTag != tag {
+				if newTag := compose.TagOf(r.outcome.NewRaw); newTag != tag {
 					tag = tag + " -> " + newTag
 				}
 			}
@@ -854,7 +854,7 @@ func computeUpgrade(composeFile, service, pullRef string, d dockerFuncs, dryRun,
 	}
 	if !out.Changed && !out.Built && !dryRun && !quiet {
 		fmt.Printf("%s: up to date — %s still points at the pinned digest (%s)\n",
-			service, pullRef, pinpkg.ShortDigest(out.Digest))
+			service, pullRef, compose.ShortDigest(out.Digest))
 	}
 	return out, nil
 }

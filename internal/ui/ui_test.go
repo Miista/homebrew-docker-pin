@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Miista/homebrew-docker-pin/internal/version"
 	"github.com/Miista/homebrew-docker-pin/internal/watch"
+	"github.com/Miista/homebrew-docker-pin/oci/version"
 )
 
 type fakeSource struct {

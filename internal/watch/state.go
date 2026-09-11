@@ -8,7 +8,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/Miista/homebrew-docker-pin/internal/version"
+	"github.com/Miista/homebrew-docker-pin/oci/version"
 )
 
 // State is what duva remembers between runs. It lives as one JSON file on the

@@ -44,13 +44,13 @@ import (
 	// setting mean what it says without depending on the base image.
 	_ "time/tzdata"
 
+	"github.com/Miista/homebrew-docker-pin/compose"
 	"github.com/Miista/homebrew-docker-pin/internal/agent"
-	"github.com/Miista/homebrew-docker-pin/internal/compose"
 	"github.com/Miista/homebrew-docker-pin/internal/croncal"
 	"github.com/Miista/homebrew-docker-pin/internal/notify"
-	"github.com/Miista/homebrew-docker-pin/internal/registry"
 	"github.com/Miista/homebrew-docker-pin/internal/ui"
 	"github.com/Miista/homebrew-docker-pin/internal/watch"
+	"github.com/Miista/homebrew-docker-pin/oci/registry"
 	"strconv"
 )
 

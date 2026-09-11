@@ -21,9 +21,9 @@ import (
 
 	"github.com/opencontainers/go-digest"
 
-	"github.com/Miista/homebrew-docker-pin/internal/compose"
+	"github.com/Miista/homebrew-docker-pin/compose"
 	"github.com/Miista/homebrew-docker-pin/internal/pin"
-	"github.com/Miista/homebrew-docker-pin/internal/version"
+	"github.com/Miista/homebrew-docker-pin/oci/version"
 )
 
 // Registry is the registry access detection needs, seamed for tests.
@@ -275,7 +275,7 @@ func service(rootFile, name string, reg Registry, baseline Baseline) Finding {
 	// out, which is a choice, but this one meant to opt in and got it wrong.
 	// Saying nothing would leave someone believing a service is watched when
 	// it is not.
-	if d := pin.DigestOf(raw); digest.Digest(d).Validate() != nil {
+	if d := compose.DigestOf(raw); digest.Digest(d).Validate() != nil {
 		f.Image = raw
 		return errorf(f, fmt.Errorf(
 			"%s is not a valid digest, so this reference cannot be pulled", d))
@@ -297,7 +297,7 @@ func service(rootFile, name string, reg Registry, baseline Baseline) Finding {
 	if err != nil {
 		return errorf(f, err)
 	}
-	f.Image, f.CurrentTag, f.CurrentDigest = image, tag, pin.DigestOf(raw)
+	f.Image, f.CurrentTag, f.CurrentDigest = image, tag, compose.DigestOf(raw)
 
 	rules, err := Labels(serviceFile, name)
 	if err != nil {
