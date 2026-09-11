@@ -157,24 +157,78 @@ Mostly extraction, which is the argument for the shape being right:
 
 Genuinely new: a webhook receiver, the service-mapping rule, and the lock.
 
+## The webhook payload
+
+Captured from diun 4.33 against a real container, not read from docs:
+
+```json
+{
+  "diun_version": "v4.33.0",
+  "hostname": "b110ea828afd",
+  "status": "new",
+  "provider": "docker",
+  "image": "docker.io/fnsys/dockhand:latest",
+  "hub_link": "https://dockhand.pro",
+  "mime_type": "application/vnd.oci.image.index.v1+json",
+  "digest": "sha256:4e0c30e703f1...",
+  "created": "2026-09-02T14:38:12Z",
+  "platform": "linux/amd64",
+  "metadata": {
+    "ctn_id": "9dca70d6637a...",
+    "ctn_names": "dockhand",
+    "ctn_state": "running",
+    "ctn_status": "Up 2 hours (healthy)",
+    "ctn_command": "...",
+    "ctn_createdat": "...",
+    "ctn_size": "0B"
+  }
+}
+```
+
+`status` is `new` on first sight and `update` when something moved. Only the
+latter is a signal; the former is diun recording a baseline.
+
+There is no previous digest and no semver classification, which is why the
+decider reads the compose file for the current tag.
+
+## Mapping a webhook to a service
+
+Settled by the payload above: **`metadata.ctn_id`**.
+
+A container id is unambiguous where an image reference is not — `caddy`,
+`ofelia`, `cloudflared` and `restic` all run on more than one host, and two
+services on one host can share an image. From the id the decider reads the
+container's own compose labels (`com.docker.compose.service`,
+`com.docker.compose.project.config_files`) and lands on exactly one service in
+exactly one file. `ctn_names` is a readable fallback.
+
+The host ambiguity disappears for free: diun runs per host and reports a
+container id local to that host, and the decider is co-located with it.
+
+The consequence is that **the decider needs the docker socket**, read-only, to
+resolve the id. A small privilege it would not otherwise have wanted.
+
+## The soak is not a separate thing
+
+`duva.delay` holds a release back until it is old enough. That is the same
+structure as a pending update awaiting a person: an entry in the queue that is
+not yet released. The gate differs — a clock rather than a human — but the
+queue does not.
+
+So there is one queue with two release conditions, not a queue and a soak
+list. `State.Soaking` and `ReconcileSoaking` go away.
+
+## Policy lives on the container
+
+`duva.auto` stays a label on the service it governs, alongside what kind of
+update may be applied automatically. Config that governs a service lives with
+that service, which is the argument the existing labels were chosen on.
+
+A service therefore carries `diun.*` for detection and `duva.*` for policy.
+Two namespaces, but they answer to two different tools — which is the point of
+the split rather than a wart in it.
+
 ## Open questions
-
-**Mapping a webhook to a service.** diun sends an image reference, not a
-compose service name, and the same image can back more than one service —
-`caddy`, `ofelia`, `cloudflared` and `restic` all run on both hosts. The
-payload's `metadata` carries container id and names, which is probably enough,
-but the rule needs writing down: acting on the wrong container is the worst
-failure this design can have.
-
-**Does the decider still need the soak?** `duva.delay` holds a release back
-until it is old enough. diun reports on discovery, so the decider would have to
-hold the candidate itself and re-evaluate on a timer — which is state with a
-clock, and the only part of the decider that is not purely reactive.
-
-**What replaces `duva.auto`?** The threshold has to live somewhere. Another
-label on the service is the obvious answer and keeps config next to what it
-governs, but it means a service carries both `diun.*` (detection) and
-something-else (policy), which is two namespaces for one concern.
 
 **Is this better than what runs today?** Today's duva works and is tested end
 to end. The honest case for v4 is that diun already detects what duva cannot,
