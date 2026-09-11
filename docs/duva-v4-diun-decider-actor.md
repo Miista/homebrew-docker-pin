@@ -1,7 +1,12 @@
 # duva v4: diun, decider, actor
 
-Idea, not a decision. Nothing here is implemented. `duva-v3-monitor-handler.md`
-proposed carving duva into a monitor and a handler; this goes further and asks
+**Status: the decider is built** (`internal/decide`, `internal/actor`,
+`internal/diun`, `cmd/decider`), on `feature/duva-v4-decider`. The actor is
+not. Existing duva is untouched and still running.
+
+What follows was the design note, and is now partly a description.
+
+`duva-v3-monitor-handler.md` proposed carving duva into a monitor and a handler; this goes further and asks
 what happens when the **detection** half is not duva's either.
 
 The existing duva is not touched by any of this. It keeps running as it is.

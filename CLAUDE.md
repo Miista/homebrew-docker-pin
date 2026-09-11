@@ -118,6 +118,28 @@ a host looks exactly like that host having nothing to do.
 Agents are configured, not discovered: at this scale a registration protocol
 would only add an inbound path by which something could claim to be an agent.
 
+### The v4 split (`internal/decide`, `internal/actor`, `internal/diun`, `cmd/decider`)
+
+An unfinished second design, on `feature/duva-v4-decider`, that separates what
+duva does into single-purpose parts. The decider is built; the actor is not.
+duva itself is untouched and still ships. See `docs/duva-v4-diun-decider-actor.md`.
+
+- **detector** — diun, which already runs on both hosts and already carries
+  per-service `diun.include_tags` constraints. Not ours.
+- **`internal/decide`** — the gate, as pure functions: given a notice and what
+  the compose file declares, is this an update, how big, and may it be applied
+  unattended. Holds the queue, which is keyed by service so a newer candidate
+  supersedes a pending one. `Lookup` is the only impure part.
+- **`internal/actor`** — the *contract* and a client, no implementation. What
+  the decider may know is an endpoint, a payload, and that the answer carries a
+  stream URL; it may not know that applying involves a registry, a container or
+  git, because an actor that opens a pull request touches none of them.
+  Completion means the actor did its job, not that the host runs a new image.
+- **`internal/diun`** — translates diun's webhook, so nothing else knows which
+  detector is in use.
+- **`cmd/decider`** — the binary. Reads `/compose` read-only, holds no docker
+  socket, talks to no registry.
+
 ### duva (`cmd/duva`)
 A container, not a CLI plugin. It watches the compose project mounted at
 `/compose` and records state in `/data/duva.json` — both fixed, because duva
