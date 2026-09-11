@@ -162,16 +162,28 @@ push — including what a failure at each step means.
 The actor must run where the socket and the compose file are, so decider and
 actor are per host. diun already is.
 
-The UI is central, over every host's decider — the agent/hub split shipped in
-`feature/duva-v2` is exactly this shape, and it would be a shame to end up with
-one UI per host again.
+The UI is **one instance over all of them**, and the deciders are **registered
+with it** — the same arrangement Dockhand uses for its agents, and the same one
+the hub shipped in `feature/duva-v2` already implements: a static list of
+`host=url`, dialled outbound, rows labelled with the configured host rather
+than whatever the far end calls itself.
 
 ```
-host A:  diun ──▶ decider ──▶ actor
-host B:  diun ──▶ decider ──▶ actor
-                     ▲
-                  central UI
+  host A:   diun ──▶ decider-A ──▶ actor-A
+  host B:   diun ──▶ decider-B ──▶ actor-B
+
+                 UI ──reads──▶ decider-A
+                    ──reads──▶ decider-B      one page, every queue
 ```
+
+The UI stays a separate process rather than moving inside the decider. It is
+only a thin view on the queue, which is an argument for folding it in — but the
+decider is per host, so a UI inside it means one page per host, which is the
+thing having a UI at all was meant to fix.
+
+Configured, not discovered, for the reason the hub already documents: at this
+scale a registration protocol adds an inbound path by which something could
+claim to be a decider, to solve a problem a two-line config solves.
 
 ## What is new and what is extraction
 
@@ -186,7 +198,7 @@ Mostly extraction, which is the argument for the shape being right:
 | queue + supersession | `internal/watch` (`State.Reconcile`) |
 | actor | `cmd/duva/apply.go`, `transaction.go`, `recreate.go` |
 | UI | `internal/ui` |
-| transport | `internal/agent`, `internal/hub` |
+| UI transport | `internal/agent`, `internal/hub` — deciders replace agents |
 
 Genuinely new: a webhook receiver, the service-mapping rule, and the lock.
 
