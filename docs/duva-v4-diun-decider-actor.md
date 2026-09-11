@@ -55,10 +55,11 @@ half complicated.
 
 | | docker socket | registry client | compose (read) | compose (write) | git |
 |---|---|---|---|---|---|
-| diun | read-only | **yes** | — | — | — |
 | decider | — | — | yes | — | — |
 | actor | read-write | — | yes | yes | yes |
 | UI | — | — | — | — | — |
+
+(diun is a dependency, not a component. What it needs is its own business.)
 
 Two things worth drawing out.
 
