@@ -435,6 +435,9 @@ func checkWith(cfg envConfig, log zerolog.Logger, reg watch.Registry, st *watch.
 // runOnce performs a single check and prints what it found.
 func runOnce(reg watch.Registry, log zerolog.Logger) error {
 	cfg := loadEnvConfig()
+	if err := preflight(cfg); err != nil {
+		return err
+	}
 	st, err := watch.LoadState(stateFile)
 	if err != nil {
 		return fmt.Errorf("loading state: %w", err)
@@ -829,6 +832,13 @@ func serve(reg watch.Registry, log zerolog.Logger) error {
 	// agents report.
 	if cfg.Mode == ModeHub {
 		return serveHub(cfg, log)
+	}
+
+	// Before the schedule, before the state, before anything leaves this
+	// machine: a duva that cannot keep what it finds should say so now, not
+	// after the first check has already thrown its results away.
+	if err := preflight(cfg); err != nil {
+		return err
 	}
 
 	if _, err := croncal.Next(cfg.Schedule, time.Now()); err != nil {

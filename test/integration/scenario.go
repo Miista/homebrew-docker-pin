@@ -431,3 +431,30 @@ func (s *Scenario) stateDirs() []string {
 	}
 	return dirs
 }
+
+// StartExpectingFailure brings a duva up and waits for it to exit.
+//
+// The mirror of Start, for a scenario about duva refusing to run: Start
+// waits for a check, which a duva that correctly stopped will never do, so
+// asserting on a refusal through it means waiting out the timeout.
+func (s *Scenario) StartExpectingFailure(service string) {
+	s.t.Helper()
+	// up without --wait: the container is expected to exit, and --wait
+	// would call that a failure to come up.
+	if out, err := s.compose("up", "-d", "--no-deps", service); err != nil {
+		s.t.Fatalf("starting %s: %v\n%s", service, err, out)
+	}
+	s.waitFor(service+" to stop", 60*time.Second,
+		func() bool { return !s.running(service) },
+		func() string { return s.Logs(service) })
+}
+
+// running reports whether a service's container is up.
+func (s *Scenario) running(service string) bool {
+	s.t.Helper()
+	out, err := s.compose("ps", "-q", "--status", "running", service)
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(out) != ""
+}

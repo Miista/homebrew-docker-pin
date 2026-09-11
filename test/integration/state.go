@@ -463,3 +463,20 @@ func (s *Scenario) QueueContaining(want string) string {
 		func() string { return body })
 	return body
 }
+
+// RootOwn makes a path inside the project root-owned, as the daemon leaves a
+// bind mount whose host path did not exist.
+//
+// Through a container because this user cannot chown to root. Used to undo
+// the harness's own kindness: Up creates the state directories as the test
+// user, which is correct for every other scenario and is exactly what hid
+// the unwritable-state bug.
+func (s *Scenario) RootOwn(rel string) {
+	s.t.Helper()
+	out, err := exec.Command("docker", "run", "--rm",
+		"-v", s.Dir+":/w", "alpine:3.20",
+		"sh", "-c", "chown -R root:root /w/"+rel+" && chmod 755 /w/"+rel).CombinedOutput()
+	if err != nil {
+		s.t.Fatalf("making %s root-owned: %v\n%s", rel, err, out)
+	}
+}

@@ -1,0 +1,32 @@
+# duva pointed at a /data it cannot write.
+#
+# This is what a first deployment looks like: the bind mount's host path is
+# created by the daemon, owned by root, while duva runs as the host user so
+# that git will touch the repository at all. Everything appears to work --
+# the check succeeds, the queue renders -- and nothing is ever remembered.
+#
+# The test makes the directory root-owned itself; the harness creates the
+# ones a fixture declares as the test user, which is exactly the kindness
+# that hid this bug in the first place.
+services:
+  app:
+    image: localhost:5555/app:1.0.0
+    labels:
+      duva.include_tags: '^1\.0\.\d+$'
+
+  duva:
+    image: duva:integration
+    command: serve
+    # The host user, as in production: git refuses to operate in a
+    # repository owned by someone else.
+    user: "1000:1000"
+    environment:
+      DUVA_HOSTNAME: preflight
+      DUVA_SCHEDULE: "0 3 * * *"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - .:/compose
+      - ./data:/data
+      - ./certs/cert.pem:/etc/ssl/certs/ca-certificates.crt:ro
+    extra_hosts:
+      - localhost:host-gateway
