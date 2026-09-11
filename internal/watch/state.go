@@ -41,8 +41,11 @@ type State struct {
 // Soaking is a candidate duva.delay is holding back.
 type Soaking struct {
 	Service string `json:"service"`
-	File    string `json:"file"`
-	Image   string `json:"image"`
+	// Host is the box this service runs on. Filled in by the hub, omitted by
+	// an agent, for the same reason as Pending.Host.
+	Host  string `json:"host,omitempty"`
+	File  string `json:"file"`
+	Image string `json:"image"`
 	// CurrentTag is what the file pins now; Candidate is what is waiting.
 	CurrentTag string `json:"current_tag"`
 	Candidate  string `json:"candidate"`
@@ -62,8 +65,13 @@ type Soaking struct {
 // to re-derive it from the compose file.
 type Pending struct {
 	Service string `json:"service"`
-	File    string `json:"file"`
-	Image   string `json:"image"`
+	// Host is the box this service runs on, filled in by the hub as it
+	// collects from each agent. Omitted on an agent's own state file: it is
+	// one host's queue, and a field naming it in every entry would be noise
+	// on disk and a lie waiting to happen if the host were ever renamed.
+	Host  string `json:"host,omitempty"`
+	File  string `json:"file"`
+	Image string `json:"image"`
 	// CurrentTag and CurrentDigest are what the compose file pins now.
 	CurrentTag    string `json:"current_tag"`
 	CurrentDigest string `json:"current_digest"`
@@ -87,6 +95,24 @@ type Pending struct {
 	// Kept because it is one string per entry and the only place the answer
 	// to "how long has this waited" survives a restart. RFC 3339.
 	FirstSeen string `json:"first_seen"`
+}
+
+// Key is what identifies this row to the thing that will apply it.
+//
+// "host/service" when the row came from a hub, which has several hosts and so
+// several services of the same name to tell apart; the bare service when it
+// did not, so a single-host duva sends exactly what it always sent and its
+// Applier needs no knowledge of hosts at all.
+func (p Pending) Key() string { return rowKey(p.Host, p.Service) }
+
+// Key identifies a soaking row, on the same terms as Pending.Key.
+func (s Soaking) Key() string { return rowKey(s.Host, s.Service) }
+
+func rowKey(host, service string) string {
+	if host == "" {
+		return service
+	}
+	return host + "/" + service
 }
 
 // NewState returns an empty state with its maps ready to use.

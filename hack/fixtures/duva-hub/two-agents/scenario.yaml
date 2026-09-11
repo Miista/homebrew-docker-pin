@@ -1,0 +1,8 @@
+# Newer versions for both agents' services to find.
+#
+# alpha and beta are deliberately different images so a row can be traced to
+# the agent it came from, and caddy-alike is the same service name on both --
+# which is the case the host label exists for.
+updates:
+  app:
+    - 1.0.1

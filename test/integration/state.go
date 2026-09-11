@@ -424,3 +424,42 @@ func (s *Scenario) UpdateNow(service string) string {
 	}
 	return string(body)
 }
+
+// Network is the compose network this scenario's services share, for a test
+// that needs to reach one of them as a peer rather than through a published
+// port.
+//
+// Asked of a running container rather than derived from the project name:
+// compose's naming rules are its own business, and a test that reimplemented
+// them would break on a version that changed them.
+func (s *Scenario) Network(service string) string {
+	s.t.Helper()
+	container := s.Container(service)
+	if container == "" {
+		s.t.Fatalf("%s is not running, so it has no network", service)
+	}
+	out, err := exec.Command("docker", "inspect", container,
+		"--format", `{{range $name, $_ := .NetworkSettings.Networks}}{{$name}}{{end}}`).Output()
+	if err != nil {
+		s.t.Fatalf("reading %s's network: %v", service, err)
+	}
+	return trimmed(out)
+}
+
+// QueueContaining reads the hub's queue until it contains want, or fails.
+//
+// A hub serves a cache it refreshes on a timer, and its agents check on their
+// own schedule -- so "the agent has found it" and "the page shows it" are two
+// moments, not one. A test that read once would be asserting on whichever
+// happened to come first, which is how it passed alone and failed in a suite.
+func (s *Scenario) QueueContaining(want string) string {
+	s.t.Helper()
+	var body string
+	s.waitFor("the queue to show "+want, 60*time.Second,
+		func() bool {
+			body = s.Queue()
+			return strings.Contains(body, want)
+		},
+		func() string { return body })
+	return body
+}

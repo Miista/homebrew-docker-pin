@@ -77,6 +77,9 @@
                  border-top: 0; border-radius: 0 0 10px 10px; }
   .head span { font-size: .69rem; font-weight: 700; text-transform: uppercase;
                letter-spacing: .07em; color: var(--faint); }
+  /* The host a row came from, shown only when a hub is serving several. */
+  .on { display: block; font-size: .7rem; font-weight: 500; color: var(--accent);
+        letter-spacing: .02em; margin-top: .1rem; }
   .svc { font-size: .9rem; font-weight: 550; letter-spacing: -.005em; white-space: nowrap;
          min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .img { display: block; font-size: .72rem; color: var(--faint);
@@ -204,12 +207,12 @@
   <ul class="rows">
     {{range .Pending}}
     <li>
-      <span class="svc">{{.Service}}<span class="img mono">{{.Image}}</span></span>
+      <span class="svc">{{.Service}}{{if .Host}}<span class="on mono">{{.Host}}</span>{{end}}<span class="img mono">{{.Image}}</span></span>
       <span class="jump mono"><span class="from">{{.CurrentTag}}</span><span class="arrow">&rarr;</span><span class="to">{{.Candidate}}</span></span>
       <span class="kind kind-{{.Kind}}"{{if eq .Kind "unknown"}} title="duva could not compare these tags — not a semantic version"{{end}}>{{.Kind}}</span>
       {{if $.CanApply}}
       <form method="post" action="/apply">
-        <input type="hidden" name="service" value="{{.Service}}">
+        <input type="hidden" name="service" value="{{.Key}}">
         <button class="apply" type="submit">Update</button>
       </form>
       {{end}}
@@ -234,13 +237,13 @@
     <ul class="rows">
       {{range .Soaking}}
       <li>
-        <span class="svc">{{.Service}}<span class="img mono">{{.Image}}</span></span>
+        <span class="svc">{{.Service}}{{if .Host}}<span class="on mono">{{.Host}}</span>{{end}}<span class="img mono">{{.Image}}</span></span>
         <span class="jump mono"><span class="from">{{.CurrentTag}}</span><span class="arrow">&rarr;</span><span class="to">{{.Candidate}}</span></span>
         <span class="kind kind-{{.Kind}}"{{if eq .Kind "unknown"}} title="duva could not compare these tags — not a semantic version"{{end}}>{{.Kind}}</span>
         <span class="when">{{.Why}}</span>
         {{if $.CanApply}}
         <form method="post" action="/apply">
-          <input type="hidden" name="service" value="{{.Service}}">
+          <input type="hidden" name="service" value="{{.Key}}">
           <button class="early" type="submit">Update now</button>
         </form>
         {{end}}

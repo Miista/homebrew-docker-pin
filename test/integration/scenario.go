@@ -106,11 +106,18 @@ func Up(t T, name string) *Scenario {
 	}
 	s.copyTree(src, s.Dir)
 
-	// duva's state directory. Docker would create it as a side effect of the
-	// bind mount, but only when its parent already exists -- so whether it
-	// worked depended on what a previous test happened to leave behind.
-	if err := os.MkdirAll(filepath.Join(s.Dir, "data"), 0o777); err != nil {
-		t.Fatalf("preparing the state directory: %v", err)
+	// duva's state directories. Docker would create them as a side effect of
+	// the bind mount, but only when the parent already exists -- so whether
+	// it worked depended on what a previous test happened to leave behind --
+	// and it creates them owned by root, which duva then cannot write.
+	//
+	// Every /data bind the fixture declares, not just "data": a scenario
+	// running several duvas gives each its own, and one of them silently
+	// unwritable looks like a duva that found nothing.
+	for _, dir := range s.stateDirs() {
+		if err := os.MkdirAll(filepath.Join(s.Dir, dir), 0o777); err != nil {
+			t.Fatalf("preparing the state directory %s: %v", dir, err)
+		}
 	}
 
 	s.copyCerts()
@@ -193,9 +200,16 @@ func (s *Scenario) duvaServices() []string {
 	}
 	var duvas []string
 	for _, name := range strings.Fields(out) {
-		if strings.HasPrefix(name, "duva") {
-			duvas = append(duvas, name)
+		if !strings.HasPrefix(name, "duva") {
+			continue
 		}
+		// A hub checks nothing -- it has no schedule, no registry and no
+		// compose file -- so there is no check to wait for. Waiting on one
+		// would time out on a service that is working correctly.
+		if strings.Contains(name, "hub") {
+			continue
+		}
+		duvas = append(duvas, name)
 	}
 	if len(duvas) == 0 {
 		s.t.Fatalf("the fixture for %s declares no duva service", s.Name)
@@ -275,7 +289,16 @@ func (s *Scenario) sweep() {
 		s.volumesAtStart = nil
 	}
 
-	_ = os.RemoveAll(s.Dir)
+	// duva commits from inside a container as root, so the repository it
+	// wrote into -- and the state files beside it -- can be owned by root
+	// on this host. RemoveAll then leaves them, and the next scenario's
+	// git init fails on a .git it cannot write. Falling back to a
+	// throwaway container, which is root, removes what this user cannot.
+	if err := os.RemoveAll(s.Dir); err != nil {
+		_ = exec.Command("docker", "run", "--rm",
+			"-v", filepath.Dir(s.Dir)+":/w", "alpine:3.20",
+			"rm", "-rf", "/w/"+filepath.Base(s.Dir)).Run()
+	}
 }
 
 func (s *Scenario) copyTree(src, dst string) {
@@ -374,4 +397,37 @@ func danglingVolumes() map[string]bool {
 		set[name] = true
 	}
 	return set
+}
+
+// stateDirs is every host path the fixture binds to a duva's /data, relative
+// to the project.
+//
+// Read from the compose file rather than assumed, so a scenario with two
+// agents gets both of their directories created and owned by this user. Falls
+// back to "data" when the fixture declares none, which is every single-duva
+// scenario.
+func (s *Scenario) stateDirs() []string {
+	s.t.Helper()
+	raw, err := os.ReadFile(filepath.Join(s.Dir, "docker-compose.yml"))
+	if err != nil {
+		return []string{"data"}
+	}
+	var dirs []string
+	seen := map[string]bool{}
+	for _, line := range strings.Split(string(raw), "\n") {
+		line = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "- "))
+		src, dest, ok := strings.Cut(line, ":")
+		if !ok || strings.TrimSpace(dest) != "/data" {
+			continue
+		}
+		src = strings.TrimPrefix(strings.TrimSpace(src), "./")
+		if src != "" && !seen[src] {
+			seen[src] = true
+			dirs = append(dirs, src)
+		}
+	}
+	if len(dirs) == 0 {
+		return []string{"data"}
+	}
+	return dirs
 }

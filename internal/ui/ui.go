@@ -234,7 +234,15 @@ func (s *Server) progress(w http.ResponseWriter, r *http.Request) {
 }
 
 type row struct {
-	Service    string
+	Service string
+	// Host is the box the service runs on, empty unless a hub is serving
+	// several. Shown in the row, so two services of the same name on
+	// different hosts are tellable apart.
+	Host string
+	// Key is what the apply form posts back: "host/service" from a hub,
+	// the bare service otherwise. The row carries it rather than the page
+	// rebuilding it, so there is one definition of what identifies a row.
+	Key        string
 	Image      string
 	CurrentTag string
 	Candidate  string
@@ -257,6 +265,8 @@ func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 	for _, p := range pending {
 		rows = append(rows, row{
 			Service:    p.Service,
+			Host:       p.Host,
+			Key:        p.Key(),
 			Image:      p.Image,
 			CurrentTag: p.CurrentTag,
 			Candidate:  display(p),
@@ -274,6 +284,8 @@ func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 	for _, p := range soaking {
 		waiting = append(waiting, row{
 			Service:    p.Service,
+			Host:       p.Host,
+			Key:        p.Key(),
 			Image:      p.Image,
 			CurrentTag: p.CurrentTag,
 			Candidate:  p.Candidate,

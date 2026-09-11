@@ -44,6 +44,7 @@ import (
 	// setting mean what it says without depending on the base image.
 	_ "time/tzdata"
 
+	"github.com/Miista/homebrew-docker-pin/internal/agent"
 	"github.com/Miista/homebrew-docker-pin/internal/compose"
 	"github.com/Miista/homebrew-docker-pin/internal/croncal"
 	"github.com/Miista/homebrew-docker-pin/internal/notify"
@@ -163,9 +164,49 @@ type envConfig struct {
 	// container that already holds the docker socket, for value a human's
 	// next push delivers anyway.
 	Push bool
+
+	// Mode is what this process is: see Mode.
+	Mode Mode
+	// AgentToken is the bearer token this agent requires, and the one a hub
+	// presents. Empty means the agent is open to anything that can reach it.
+	AgentToken string
+	// Agents is the hub's list, as "host=url" entries. Configured rather
+	// than discovered: at this scale a registration protocol would add an
+	// inbound path by which something could claim to be an agent, to solve a
+	// problem a two-line config already solves.
+	Agents []agentAddr
+}
+
+// Mode is which half of duva this process runs.
+//
+// The default is ModeLocal -- what duva has always been, one process that
+// both watches a host and serves the page about it. A single-host install
+// stays exactly as it was, and nothing needs configuring to keep working.
+type Mode string
+
+const (
+	// ModeLocal watches this host and serves its own page.
+	ModeLocal Mode = "local"
+	// ModeAgent watches this host and exposes JSON for a hub. No page: the
+	// operator reads the hub's.
+	ModeAgent Mode = "agent"
+	// ModeHub serves the page over other hosts' agents. Watches nothing,
+	// and needs neither the docker socket nor the compose files.
+	ModeHub Mode = "hub"
+)
+
+// agentAddr is one entry in a hub's agent list.
+type agentAddr struct {
+	Host string
+	URL  string
 }
 
 func loadEnvConfig() envConfig {
+	agents, err := parseAgents(os.Getenv("DUVA_AGENTS"))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: DUVA_AGENTS: %v\n", err)
+		os.Exit(1)
+	}
 	return envConfig{
 		Schedule:  os.Getenv("DUVA_SCHEDULE"),
 		Hostname:  os.Getenv("DUVA_HOSTNAME"),
@@ -174,7 +215,65 @@ func loadEnvConfig() envConfig {
 		NtfyToken: os.Getenv("DUVA_NTFY_TOKEN"),
 
 		Push: boolEnv("DUVA_GIT_PUSH", false),
+
+		Mode:       parseMode(os.Getenv("DUVA_MODE")),
+		AgentToken: os.Getenv("DUVA_AGENT_TOKEN"),
+		Agents:     agents,
 	}
+}
+
+// parseMode reads DUVA_MODE. Unset is local -- the behaviour duva has always
+// had -- and an unrecognised value is fatal rather than falling back to it: a
+// typo silently meaning "keep doing what you did before" would leave an
+// operator who meant to split a host wondering why the hub saw nothing.
+func parseMode(raw string) Mode {
+	switch raw {
+	case "", string(ModeLocal):
+		return ModeLocal
+	case string(ModeAgent):
+		return ModeAgent
+	case string(ModeHub):
+		return ModeHub
+	default:
+		fmt.Fprintf(os.Stderr, "Error: DUVA_MODE=%q is not local, agent or hub\n", raw)
+		os.Exit(1)
+		return ""
+	}
+}
+
+// parseAgents reads a hub's agent list: comma-separated "host=url" entries.
+//
+//	DUVA_AGENTS=optiplex=http://192.0.2.10:10256,pi=http://192.0.2.12:10256
+//
+// The host is named explicitly rather than derived from the URL because it is
+// what rows are labelled with and what applies route on; a hostname parsed
+// out of an address would change meaning the day an agent moved.
+func parseAgents(raw string) ([]agentAddr, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	var out []agentAddr
+	seen := map[string]bool{}
+	for _, entry := range strings.Split(raw, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		host, url, ok := strings.Cut(entry, "=")
+		host, url = strings.TrimSpace(host), strings.TrimSpace(url)
+		if !ok || host == "" || url == "" {
+			return nil, fmt.Errorf("%q is not host=url", entry)
+		}
+		// Two agents under one name would make a row ambiguous in exactly
+		// the way the host label exists to prevent.
+		if seen[host] {
+			return nil, fmt.Errorf("%q appears twice", host)
+		}
+		seen[host] = true
+		out = append(out, agentAddr{Host: host, URL: url})
+	}
+	return out, nil
 }
 
 // boolEnv reads a boolean environment variable, treating anything unset as
@@ -724,6 +823,14 @@ func (s *store) LastCheckExact() string {
 // alongside it.
 func serve(reg watch.Registry, log zerolog.Logger) error {
 	cfg := loadEnvConfig()
+
+	// A hub watches nothing, so it has no schedule to validate, no state to
+	// load and no docker socket to hold. It is served entirely from what the
+	// agents report.
+	if cfg.Mode == ModeHub {
+		return serveHub(cfg, log)
+	}
+
 	if _, err := croncal.Next(cfg.Schedule, time.Now()); err != nil {
 		return fmt.Errorf("schedule %q: %w", cfg.Schedule, err)
 	}
@@ -738,21 +845,47 @@ func serve(reg watch.Registry, log zerolog.Logger) error {
 	defer stop()
 
 	{
-		srv := &http.Server{
-			Addr: uiAddr,
-			Handler: (&ui.Server{
+		// The same three interfaces either way -- the store does not know
+		// whether it is answering a page or a hub, which is what makes an
+		// agent behave identically to the duva it was split out of.
+		var handler http.Handler
+		var banner string
+		if cfg.Mode == ModeAgent {
+			handler = (&agent.Server{
 				Source:    s,
 				Host:      hostLabel(cfg),
 				Version:   version,
 				Applier:   s,
 				Refresher: s,
-			}).Handler(),
+				Token:     cfg.AgentToken,
+			}).Handler()
+			banner = "serving as an agent on " + uiAddr
+			if cfg.AgentToken == "" {
+				// Worth a line rather than silence: an open agent is a
+				// root shell on this host for anything that can reach the
+				// port, which is a choice someone should have made on
+				// purpose.
+				log.Warn().Msg("no DUVA_AGENT_TOKEN: this agent will accept any caller that can reach it")
+			}
+		} else {
+			handler = (&ui.Server{
+				Source:    s,
+				Host:      hostLabel(cfg),
+				Version:   version,
+				Applier:   s,
+				Refresher: s,
+			}).Handler()
+			banner = "the approval queue is on " + uiAddr
+		}
+		srv := &http.Server{
+			Addr:              uiAddr,
+			Handler:           handler,
 			ReadHeaderTimeout: 10 * time.Second,
 		}
 		go func() {
-			log.Info().Msgf("the approval queue is on %s", uiAddr)
+			log.Info().Msg(banner)
 			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				log.Error().Msgf("the approval queue stopped serving: %v", err)
+				log.Error().Msgf("stopped serving: %v", err)
 			}
 		}()
 		defer func() {

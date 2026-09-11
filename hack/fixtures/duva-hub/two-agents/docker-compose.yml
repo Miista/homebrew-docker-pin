@@ -1,0 +1,63 @@
+# One hub over two agents.
+#
+# Both agents watch this same project -- there is only one host in the test
+# world -- but they are configured as separate hosts, which is what the hub
+# has to tell apart. The service that matters is `shared`: both agents report
+# an update for a service of that name, and the hub must render two rows and
+# route a click on each to the agent it came from.
+#
+# The hub holds no docker socket, no compose mount and no repository. That it
+# can still serve the queue is the point of the split.
+services:
+  shared:
+    image: localhost:5555/app:1.0.0
+    labels:
+      duva.include_tags: '^1\.0\.\d+$'
+
+  # duva-* names are what the harness recognises as duvas to wait for.
+  duva-alpha:
+    image: duva:integration
+    command: serve
+    environment:
+      DUVA_MODE: agent
+      DUVA_HOSTNAME: alpha
+      DUVA_SCHEDULE: "0 3 * * *"
+      DUVA_AGENT_TOKEN: integration-token
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - .:/compose
+      - ./data/alpha:/data
+      - ./certs/cert.pem:/etc/ssl/certs/ca-certificates.crt:ro
+    extra_hosts:
+      - localhost:host-gateway
+
+  duva-beta:
+    image: duva:integration
+    command: serve
+    environment:
+      DUVA_MODE: agent
+      DUVA_HOSTNAME: beta
+      DUVA_SCHEDULE: "0 3 * * *"
+      DUVA_AGENT_TOKEN: integration-token
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - .:/compose
+      - ./data/beta:/data
+      - ./certs/cert.pem:/etc/ssl/certs/ca-certificates.crt:ro
+    extra_hosts:
+      - localhost:host-gateway
+
+  # The hub. Note what it does NOT mount: no socket, no /compose, no /data.
+  duva-hub:
+    image: duva:integration
+    command: serve
+    environment:
+      DUVA_MODE: hub
+      DUVA_HOSTNAME: hub
+      DUVA_AGENTS: alpha=http://duva-alpha:8080,beta=http://duva-beta:8080
+      DUVA_AGENT_TOKEN: integration-token
+    ports:
+      - "8098:8080"
+    depends_on:
+      - duva-alpha
+      - duva-beta

@@ -66,6 +66,12 @@ const (
 // Finding is what detection learned about one service.
 type Finding struct {
 	Service string
+	// Host is the box the service runs on. Empty on a finding an agent made
+	// about itself -- it has no name for itself that its own operator needs
+	// to read -- and filled in by the hub as it collects, because a service
+	// name alone does not identify anything once two hosts are in one queue:
+	// caddy, ofelia, cloudflared and restic all run on more than one.
+	Host string
 	// File is the compose file the service is declared in, which is not
 	// necessarily the project root: include: is resolved.
 	File string

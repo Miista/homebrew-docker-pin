@@ -532,3 +532,48 @@ func TestIndex_ReferencesTheLogoAndFavicon(t *testing.T) {
 		t.Error("the page should link the favicon")
 	}
 }
+
+// A hub's rows carry the host they came from, and post it back as part of the
+// key -- otherwise two services named the same on different hosts are one
+// indistinguishable row, and clicking either applies to whichever the
+// Applier happened to find first.
+func TestIndex_HubRowsCarryHostAndRouteByKey(t *testing.T) {
+	s := &Server{Source: fakeSource{pending: []watch.Pending{
+		{Service: "caddy", Host: "optiplex", Image: "caddy", CurrentTag: "2.11.4-alpine",
+			Kind: watch.KindTag, Candidate: "2.12.0-alpine", Bump: registry.KindMinor},
+		{Service: "caddy", Host: "pi", Image: "caddy", CurrentTag: "2.11.4-alpine",
+			Kind: watch.KindTag, Candidate: "2.12.0-alpine", Bump: registry.KindMinor},
+	}}, Host: "hub", Version: "test", Applier: &fakeApplier{}}
+
+	body := get(t, s, "/").Body.String()
+	for _, want := range []string{
+		`value="optiplex/caddy"`,
+		`value="pi/caddy"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body missing %q -- the row must post back a routable key", want)
+		}
+	}
+	// And the host must be visible, not merely encoded in the form.
+	if strings.Count(body, "optiplex") == 0 || strings.Count(body, ">pi<") == 0 {
+		t.Error("the host should be shown on the row")
+	}
+}
+
+// A single-host duva posts the bare service name, exactly as before: its
+// Applier knows nothing about hosts, and a key it did not expect would not
+// route.
+func TestIndex_LocalRowsPostBareServiceName(t *testing.T) {
+	s := &Server{Source: fakeSource{pending: []watch.Pending{
+		{Service: "caddy", Image: "caddy", CurrentTag: "2.11.4-alpine",
+			Kind: watch.KindTag, Candidate: "2.12.0-alpine", Bump: registry.KindMinor},
+	}}, Host: "optiplex", Version: "test", Applier: &fakeApplier{}}
+
+	body := get(t, s, "/").Body.String()
+	if !strings.Contains(body, `value="caddy"`) {
+		t.Error(`want value="caddy" -- a local duva must post the bare service name`)
+	}
+	if strings.Contains(body, `value="optiplex/caddy"`) {
+		t.Error("a local duva must not post a host-qualified key")
+	}
+}
