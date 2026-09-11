@@ -137,8 +137,13 @@ func run(log zerolog.Logger) error {
 
 	go func() {
 		log.Info().Msgf("deciding for %s, serving on %s", cfg.Host, addr)
-		if cfg.Token == "" {
-			log.Warn().Msg("no DECIDER_TOKEN: anything that can reach this can approve an update")
+		if os.Getenv("DECIDER_TOKEN") == "" {
+			// Printed, because a token nobody can read is a decider nobody
+			// can approve through. It is in the container's log rather than
+			// anywhere durable on purpose: it lasts as long as this process
+			// does, and the next restart mints another.
+			log.Warn().Msgf("no DECIDER_TOKEN was given, so one was minted: %s", cfg.Token)
+			log.Warn().Msg("it changes on every restart — set DECIDER_TOKEN to keep it stable")
 		}
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Error().Msgf("stopped serving: %v", err)
@@ -186,7 +191,7 @@ type config struct {
 func loadConfig() config {
 	c := config{
 		Host:          os.Getenv("DECIDER_HOST"),
-		Token:         os.Getenv("DECIDER_TOKEN"),
+		Token:         tokenFromEnv(),
 		ActorURL:      os.Getenv("DECIDER_ACTOR_URL"),
 		ActorToken:    os.Getenv("DECIDER_ACTOR_TOKEN"),
 		ComposeSubdir: os.Getenv("DECIDER_COMPOSE_SUBDIR"),

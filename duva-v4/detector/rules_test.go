@@ -2,12 +2,14 @@ package main
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/rs/zerolog"
 
 	"github.com/Miista/homebrew-docker-pin/duva-v4/internal/detect"
+	"github.com/Miista/homebrew-docker-pin/internal/croncal"
 )
 
 // The rules the detector exists to keep, tested as behaviour rather than as
@@ -233,3 +235,50 @@ func TestACleanRunWithNoFindingsStillAdvances(t *testing.T) {
 		t.Errorf("a clean run that found nothing did not advance: %v -> %v", before, after)
 	}
 }
+
+// --- the schedule ------------------------------------------------------------
+
+// An unset schedule is daily, not an error. The choice is between checking
+// daily and checking never, and never is not something to arrive at by
+// omission.
+func TestAnUnsetScheduleIsDaily(t *testing.T) {
+	t.Setenv("DETECTOR_SCHEDULE", "")
+	if got := scheduleFromEnv(); got != defaultSchedule {
+		t.Errorf("schedule = %q, want the default %q", got, defaultSchedule)
+	}
+}
+
+func TestAnExplicitScheduleWins(t *testing.T) {
+	t.Setenv("DETECTOR_SCHEDULE", "0 */6 * * *")
+	if got := scheduleFromEnv(); got != "0 */6 * * *" {
+		t.Errorf("schedule = %q, want what was set", got)
+	}
+}
+
+// The default has to be a schedule croncal can actually read -- a typo here
+// would not fail until something ran serve.
+func TestTheDefaultScheduleParses(t *testing.T) {
+	if _, err := croncal.Next(defaultSchedule, time.Now()); err != nil {
+		t.Errorf("the default schedule %q does not parse: %v", defaultSchedule, err)
+	}
+}
+
+// A schedule that does not parse stops the detector at startup rather than at
+// the first tick -- which for a daily schedule would be a day later, with
+// nothing in the log to say why nothing happened.
+func TestServeRefusesAnUnparseableSchedule(t *testing.T) {
+	t.Setenv("DETECTOR_SCHEDULE", "every tuesday-ish")
+	err := serve(zerolog.Nop())
+	if err == nil {
+		t.Fatal("an unparseable schedule was accepted")
+	}
+	if !strings.Contains(err.Error(), "every tuesday-ish") {
+		t.Errorf("the error should quote what it could not read, got %v", err)
+	}
+}
+
+// Not tested here: a schedule restricting both day-of-month and day-of-week.
+// croncal.Translate rejects that as ambiguous -- cron ORs them, systemd ANDs
+// them -- but croncal.Next, which is what serve uses, deliberately accepts it
+// and ORs as cron does. Asserting a refusal here would be asserting a rule
+// that lives in a function this never calls.

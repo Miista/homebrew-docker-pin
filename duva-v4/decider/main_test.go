@@ -246,3 +246,36 @@ func doRequest(t *testing.T, h http.Handler, method, path, token, body string) *
 	h.ServeHTTP(rec, r)
 	return rec
 }
+
+// --- the token ----------------------------------------------------------------
+
+// An injected token is used as given.
+func TestAnInjectedTokenIsUsed(t *testing.T) {
+	t.Setenv("DECIDER_TOKEN", "s3cret")
+	if got := tokenFromEnv(); got != "s3cret" {
+		t.Errorf("token = %q, want what was injected", got)
+	}
+}
+
+// No token means one is minted, not that the endpoint is left open. An
+// approval is a container being replaced on this host, and a default that
+// open is one nobody chose.
+func TestNoTokenMintsOne(t *testing.T) {
+	t.Setenv("DECIDER_TOKEN", "")
+	got := tokenFromEnv()
+	if got == "" {
+		t.Fatal("no token was minted; the approval endpoint would be open")
+	}
+	if len(got) != 64 {
+		t.Errorf("token is %d characters, want 64 (32 bytes hex)", len(got))
+	}
+}
+
+// Minted tokens differ. One that did not would be a shared secret pretending
+// to be a random one.
+func TestMintedTokensDiffer(t *testing.T) {
+	t.Setenv("DECIDER_TOKEN", "")
+	if tokenFromEnv() == tokenFromEnv() {
+		t.Error("two mints produced the same token")
+	}
+}

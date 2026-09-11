@@ -24,16 +24,20 @@
 //	DETECTOR_HOST            what this detector calls itself
 //	DETECTOR_COMPOSE_SUBDIR  where the project lives within /compose
 //	DETECTOR_WEBHOOK_URL     where to publish findings; empty means log only
+//	DETECTOR_SCHEDULE        a 5-field cron expression, for `serve`
 //	DETECTOR_SINCE           override the cutoff for one run (RFC 3339, or a
 //	                         duration like 168h meaning "the last week")
 //	DETECTOR_LOG_LEVEL       trace/debug/info/warn/error
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 	// The timezone database, embedded in the binary. Go reads TZ on its own,
 	// but resolves a name like Europe/Copenhagen against the host's
@@ -47,6 +51,7 @@ import (
 
 	"github.com/Miista/homebrew-docker-pin/compose"
 	"github.com/Miista/homebrew-docker-pin/duva-v4/internal/detect"
+	"github.com/Miista/homebrew-docker-pin/internal/croncal"
 	"github.com/Miista/homebrew-docker-pin/oci/registry"
 )
 
@@ -66,26 +71,108 @@ var (
 // reader guessing whether anything is happening.
 const slowCheck = 10 * time.Second
 
+// schedule is a 5-field cron expression, parsed by internal/croncal -- the
+// same parser duva uses, and for the same reason: it rejects restricting both
+// day-of-month and day-of-week, because cron ORs those and systemd ANDs them,
+// and a schedule that means two different things depending on who reads it is
+// not a schedule.
+//
+// Unset means daily at 03:00. A default rather than a refusal because a
+// detector with no schedule is not a configuration anyone wants: the choice
+// is between checking daily and checking never, and never is not a sensible
+// thing to arrive at by omission.
+//
+// Daily because that is how often these registries actually publish. Hourly
+// would multiply the request count by twenty-four to learn the same thing.
+func scheduleFromEnv() string {
+	if s := os.Getenv("DETECTOR_SCHEDULE"); s != "" {
+		return s
+	}
+	return defaultSchedule
+}
+
+const defaultSchedule = "0 3 * * *"
+
 func main() {
+	mode := "run"
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "version", "--version", "-v":
 			fmt.Println("detector", version)
 			return
-		case "run":
-			// The only mode. Named anyway, so the command reads as a verb
-			// and so adding a second one later does not change how this is
-			// invoked.
+		case "run", "serve":
+			mode = os.Args[1]
 		default:
-			fmt.Fprintln(os.Stderr, "Usage: detector [run|version]")
+			fmt.Fprintln(os.Stderr, "Usage: detector [run|serve|version]")
 			os.Exit(1)
 		}
 	}
 
 	log := newLogger(os.Getenv("DETECTOR_LOG_LEVEL"))
-	if err := run(log); err != nil {
+
+	var err error
+	if mode == "serve" {
+		err = serve(log)
+	} else {
+		err = run(log)
+	}
+	if err != nil {
 		log.Error().Msgf("%v", err)
 		os.Exit(1)
+	}
+}
+
+// serve checks on a schedule, until told to stop.
+//
+// `run` stays the whole of the program: serve is a loop around it, so a
+// scheduled check and a manual one do exactly the same thing. A separate
+// scheduled path would be a second implementation to keep in agreement with
+// the first.
+func serve(log zerolog.Logger) error {
+	expr := scheduleFromEnv()
+	// Validated before the first check rather than at the first tick: a
+	// schedule that does not parse should stop this now, not in a day, with
+	// nothing in the log to say why nothing happened.
+	if _, err := croncal.Next(expr, time.Now()); err != nil {
+		return fmt.Errorf("DETECTOR_SCHEDULE %q: %w", expr, err)
+	}
+	log.Info().Msgf("checking on schedule %q", expr)
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	// Once at startup, rather than waiting for the first tick. A daily
+	// schedule would otherwise leave a freshly deployed detector silent for
+	// up to a day, and it is what makes restarting the container a way to
+	// ask for a check now.
+	if err := run(log); err != nil {
+		log.Error().Msgf("%v", err)
+	}
+
+	for {
+		next, err := croncal.Next(expr, time.Now())
+		if err != nil {
+			return err
+		}
+		wait := time.Until(next)
+		// Local, with the zone named: an operator reading this wants to know
+		// when it fires in their own time.
+		log.Info().Msgf("next check at %s, in %s",
+			next.Local().Format("2006-01-02 15:04:05 MST"), wait.Round(time.Second))
+
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			log.Info().Msg("shutting down")
+			return nil
+		case <-timer.C:
+			if err := run(log); err != nil {
+				// A failed check is not a reason to stop checking: the next
+				// one may find the registry back.
+				log.Error().Msgf("%v", err)
+			}
+		}
 	}
 }
 
