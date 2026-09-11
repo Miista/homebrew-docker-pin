@@ -1,10 +1,10 @@
-# duva v4: detector, decider, actor.
+# duva v4: detector, decider, actor, ui.
 #
-# Its own build, because it is its own thing. The three binaries are released
-# and versioned together -- they speak one contract and a version skew between
+# Its own build, because it is its own thing. The binaries are released and
+# versioned together -- they speak one contract and a version skew between
 # them is a bug -- but separately from `docker pin`, which they are not part of.
 
-BINARIES    := detector decider actor
+BINARIES    := detector decider actor ui
 VERSION     ?= dev
 LDFLAGS     := -s -w -X main.version=$(VERSION)
 REGISTRY    ?= registry.example.com

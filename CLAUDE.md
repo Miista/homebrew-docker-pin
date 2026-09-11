@@ -134,7 +134,7 @@ nothing else.
 | `compose/` | reading and rewriting compose files | everything |
 | `dockerapi/` | the docker daemon client | duva, the v4 actor |
 | `oci/` | registry client + version comparison | `docker pin`, duva, the detector |
-| `duva-v4/` | detector, decider, actor | — |
+| `duva-v4/` | detector, decider, actor, ui | — |
 
 Each replaces the others by relative path rather than by version: they are
 developed together, and a version would mean tagging a release to change one
@@ -153,8 +153,9 @@ extension rather than an OCI concept.
 
 ### duva v4 (`duva-v4/`)
 
-Three single-purpose processes, replacing what duva does in one. Built and
-working end to end, not deployed. duva itself is untouched and still ships.
+Three single-purpose processes plus a page, replacing what duva does in one.
+Built and working end to end, not deployed. duva itself is untouched and
+still ships.
 See `docs/duva-v4-diun-decider-actor.md`.
 
 - **`detector/`** — what exists, and when. Lists tags, keeps the ones
@@ -179,6 +180,18 @@ See `docs/duva-v4-diun-decider-actor.md`.
 - **`internal/detectevent`** — translates the detector's webhook, so nothing
   else knows which detector is in use. One shape at a time: a gate sniffing
   between payload formats would carry translators for detectors nobody runs.
+- **`ui/`** — the page, over one or more deciders. Holds no compose file, no
+  docker socket and no registry credentials: it asks deciders what is queued
+  and asks them to apply what was clicked. Lifted from duva's `internal/ui`,
+  minus the soak list (a soak is an entry with a release time, not a second
+  list) and the refresh button (the detector owns when a check happens).
+  Deciders are configured, not discovered: `DUVA_UI_DECIDERS=host=url,...`,
+  with tokens in `DUVA_UI_TOKEN` or per-host `DUVA_UI_TOKEN_<HOST>` — never
+  in the list, so the list itself is not a secret. Refuses to start with no
+  deciders, since "nothing waiting for approval" is the most misleading
+  sentence it can print and is also what it says when all is well. An
+  unreachable decider renders as unreachable and suppresses that
+  reassurance.
 
 Each binary has its own Dockerfile, because each needs a different thing: the
 detector and decider hold no socket and shell out to nothing; the actor holds
