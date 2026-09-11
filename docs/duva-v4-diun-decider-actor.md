@@ -157,9 +157,24 @@ across hosts; everything else is same-network.
 | `POST /v1/apply/{service}` | UI | token |
 | `GET /healthz` | container runtime | none |
 
-`/v1/notify` is unauthenticated because there is one decider per host and diun
-reaches it over that host's compose network. Nothing else has a path to it —
-the same reason the agent shipped this morning publishes no port.
+Both the decider and the actor publish a port: the UI is central and they are
+per host, so it reaches them across hosts. That is what the registration model
+is for.
+
+`/v1/notify` is nonetheless unauthenticated, because diun reaches the decider
+over that host's own compose network by name and never uses the published
+address. It is still *exposed* on the published port, though, which is worth
+being honest about rather than pretending the network shape hides it.
+
+What an unauthenticated notify can do is bounded: it names a container and a
+digest, and the decider validates both against its own compose files. An
+unknown container is a loud error. A known one still has to clear
+classification and the service's `duva.auto` threshold — `none` everywhere
+today — before anything reaches the actor. So the worst case is a forged
+candidate appearing in the queue for a human to reject.
+
+That is a judgement about a LAN, not a principle. If it stops being one, the
+notify endpoint takes a token too, and diun's webhook notifier can send one.
 
 `internal/agent/server.go` is already most of this: snapshot, apply, healthz,
 bearer token on everything but health. What changes is that `/v1/refresh` goes
@@ -195,9 +210,10 @@ of the one thing it just got out of, and it breaks the property that makes this
 worth doing: an actor that opens a pull request instead of pulling an image has
 a progress URL that is not on its host at all, and only the actor knows that.
 
-The consequence is that the actor publishes a port where the decider does not.
-The stream is read-only and empty when idle, so this is a small surface — but
-it is a real one, and worth stating rather than discovering.
+Both publish a port, then. The decider's carries the UI's snapshot and apply,
+behind the token; the actor's carries an unauthenticated stream that is empty
+when idle. Neither is reachable from outside the LAN, on the same terms as the
+queue duva serves today.
 
 ## Carried over from v3, unchanged
 
