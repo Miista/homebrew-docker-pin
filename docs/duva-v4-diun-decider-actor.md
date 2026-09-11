@@ -193,20 +193,30 @@ decider reads the compose file for the current tag.
 
 ## Mapping a webhook to a service
 
-Settled by the payload above: **`metadata.ctn_id`**.
+Settled by the payload above: **`metadata.ctn_names`**.
 
-A container id is unambiguous where an image reference is not — `caddy`,
-`ofelia`, `cloudflared` and `restic` all run on more than one host, and two
-services on one host can share an image. From the id the decider reads the
-container's own compose labels (`com.docker.compose.service`,
-`com.docker.compose.project.config_files`) and lands on exactly one service in
-exactly one file. `ctn_names` is a readable fallback.
+The decider already parses the compose files to read the current pinned tag,
+so it builds `container_name -> (service, file)` from the same parse and looks
+the webhook's container name up in it. Every one of the 71 services across
+both hosts sets `container_name:` explicitly, so the map is total.
 
-The host ambiguity disappears for free: diun runs per host and reports a
-container id local to that host, and the decider is co-located with it.
+An image reference would not do: `caddy`, `ofelia`, `cloudflared` and `restic`
+each run on more than one host, and two services on one host can share an
+image. A container name is unique per host, and diun runs per host — so the
+host ambiguity disappears without anyone having to encode it.
 
-The consequence is that **the decider needs the docker socket**, read-only, to
-resolve the id. A small privilege it would not otherwise have wanted.
+**The decider therefore needs no docker socket.** Compose files in, decisions
+out. Only the actor talks to docker, which is a better privilege story than
+duva has today, where everything holds the socket because anything might act.
+
+The one risk is a future service with no `container_name`, which would be
+invisible. A webhook naming a container the decider cannot map must be a loud
+error, not a silent drop — the same reasoning as refusing to start on an
+unwritable `/data`: discovering it later means discovering it after something
+was already missed.
+
+(`ctn_id` would also work and is what the container's own compose labels key
+off, but reading those needs the socket. The name is enough and costs nothing.)
 
 ## The soak is not a separate thing
 
