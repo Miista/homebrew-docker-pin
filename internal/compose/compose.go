@@ -71,8 +71,13 @@ func FindFile(dir string) (string, error) {
 
 type composeFile struct {
 	Services map[string]struct {
-		Image  string      `yaml:"image"`
-		Labels labelsField `yaml:"labels"`
+		Image string `yaml:"image"`
+		// ContainerName is what the service calls its container. Read
+		// because a detector reports a container, not a service: it is the
+		// only field that maps one back to the other without asking the
+		// daemon.
+		ContainerName string      `yaml:"container_name"`
+		Labels        labelsField `yaml:"labels"`
 		// Build is only ever tested for presence, so its shape (string short
 		// form or mapping) does not matter -- yaml.Node accepts both.
 		Build yaml.Node `yaml:"build"`
@@ -435,4 +440,68 @@ func findImageLine(lines []string, serviceName string) (idx int, prefix string, 
 	default:
 		return 0, "", fmt.Errorf("image field not found for service %q", serviceName)
 	}
+}
+
+// ContainerIndex maps each service's container_name to its service name and
+// the file it is declared in, walking include: as ListServices does.
+//
+// A detector reports a container; policy is written against a service. This is
+// the only thing that joins them without asking the daemon, which is why it
+// exists: resolving through the container's own compose labels would work too,
+// but needs the docker socket, and nothing else in the deciding half does.
+//
+// Services with no container_name are absent rather than guessed at. Compose
+// derives a default name from the project and an ordinal, and a lookup table
+// that was right most of the time would be worse than one that is honest about
+// what it does not know -- the caller can then say so.
+func ContainerIndex(file string) (map[string]ServiceRef, error) {
+	index := map[string]ServiceRef{}
+	if err := collectContainers(file, index); err != nil {
+		return nil, err
+	}
+	return index, nil
+}
+
+// ServiceRef is where a service is declared.
+type ServiceRef struct {
+	Service string
+	File    string
+}
+
+func collectContainers(file string, index map[string]ServiceRef) error {
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return err
+	}
+	var cf composeFile
+	if err := yaml.Unmarshal(data, &cf); err != nil {
+		return fmt.Errorf("parsing %s: %w", file, err)
+	}
+	for name, svc := range cf.Services {
+		if svc.ContainerName == "" {
+			continue
+		}
+		// First declaration wins, and a later duplicate is an error rather
+		// than an overwrite: two services claiming one container name is a
+		// compose file that would not come up, and silently picking one
+		// would decide an update against whichever happened to parse last.
+		if prev, ok := index[svc.ContainerName]; ok {
+			return fmt.Errorf("container_name %q is claimed by both %s (%s) and %s (%s)",
+				svc.ContainerName, prev.Service, prev.File, name, file)
+		}
+		index[svc.ContainerName] = ServiceRef{Service: name, File: file}
+	}
+	dir := filepath.Dir(file)
+	for _, entry := range cf.Include {
+		for _, p := range entry.Paths {
+			included := p
+			if !filepath.IsAbs(included) {
+				included = filepath.Join(dir, included)
+			}
+			if err := collectContainers(included, index); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }

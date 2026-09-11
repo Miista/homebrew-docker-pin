@@ -1083,3 +1083,149 @@ func TestFindImageLine_StopsAtTheEndOfTheServicesSection(t *testing.T) {
 		t.Errorf("found %q, want web's own image line", got)
 	}
 }
+
+// --- ContainerIndex ---
+
+func TestContainerIndex(t *testing.T) {
+	root := t.TempDir()
+	file := filepath.Join(root, "docker-compose.yml")
+	writeFile(t, file, `
+services:
+  web:
+    image: nginx:1.25
+    container_name: my-web
+  db:
+    image: postgres:17
+    container_name: my-db
+`)
+
+	index, err := ContainerIndex(file)
+	if err != nil {
+		t.Fatalf("ContainerIndex: %v", err)
+	}
+	if len(index) != 2 {
+		t.Fatalf("got %d entries, want 2: %+v", len(index), index)
+	}
+	if got := index["my-web"]; got.Service != "web" || got.File != file {
+		t.Errorf("my-web = %+v, want web in %s", got, file)
+	}
+	if got := index["my-db"]; got.Service != "db" {
+		t.Errorf("my-db = %+v, want db", got)
+	}
+}
+
+// A service with no container_name is absent rather than guessed at: compose
+// derives a default from the project and an ordinal, and a table that was
+// right most of the time would be worse than one that admits what it does not
+// know.
+func TestContainerIndex_SkipsServicesWithoutAContainerName(t *testing.T) {
+	root := t.TempDir()
+	file := filepath.Join(root, "docker-compose.yml")
+	writeFile(t, file, `
+services:
+  named:
+    image: nginx
+    container_name: the-name
+  unnamed:
+    image: redis
+`)
+
+	index, err := ContainerIndex(file)
+	if err != nil {
+		t.Fatalf("ContainerIndex: %v", err)
+	}
+	if len(index) != 1 {
+		t.Errorf("got %d entries, want only the named one: %+v", len(index), index)
+	}
+	if _, ok := index["the-name"]; !ok {
+		t.Error("the named service is missing")
+	}
+}
+
+// include: is walked, and a row records the file the service is actually
+// declared in -- not the root, which is what the actor would need to rewrite.
+func TestContainerIndex_WalksIncludes(t *testing.T) {
+	root := t.TempDir()
+	inner := filepath.Join(root, "media", "docker-compose.yml")
+	writeFile(t, inner, `
+services:
+  radarr:
+    image: radarr:5
+    container_name: radarr
+`)
+	file := filepath.Join(root, "docker-compose.yml")
+	writeFile(t, file, `
+include:
+  - media/docker-compose.yml
+services:
+  caddy:
+    image: caddy:2
+    container_name: caddy
+`)
+
+	index, err := ContainerIndex(file)
+	if err != nil {
+		t.Fatalf("ContainerIndex: %v", err)
+	}
+	if len(index) != 2 {
+		t.Fatalf("got %d entries, want 2: %+v", len(index), index)
+	}
+	if got := index["radarr"]; got.File != inner {
+		t.Errorf("radarr declared in %q, want %q", got.File, inner)
+	}
+	if got := index["caddy"]; got.File != file {
+		t.Errorf("caddy declared in %q, want %q", got.File, file)
+	}
+}
+
+// Two services claiming one container name is a compose file that would not
+// come up. Picking one silently would decide an update against whichever
+// happened to parse last.
+func TestContainerIndex_RejectsDuplicateContainerNames(t *testing.T) {
+	root := t.TempDir()
+	inner := filepath.Join(root, "other.yml")
+	writeFile(t, inner, `
+services:
+  b:
+    image: redis
+    container_name: clash
+`)
+	file := filepath.Join(root, "docker-compose.yml")
+	writeFile(t, file, `
+include:
+  - other.yml
+services:
+  a:
+    image: nginx
+    container_name: clash
+`)
+
+	_, err := ContainerIndex(file)
+	if err == nil {
+		t.Fatal("want an error for a duplicated container_name")
+	}
+	if !strings.Contains(err.Error(), "clash") {
+		t.Errorf("the error should name the container, got %v", err)
+	}
+}
+
+func TestContainerIndex_MissingFile(t *testing.T) {
+	if _, err := ContainerIndex(filepath.Join(t.TempDir(), "nope.yml")); err == nil {
+		t.Fatal("want an error for a missing file")
+	}
+}
+
+// An empty file is not an error -- it is a project with nothing named yet.
+func TestContainerIndex_EmptyFile(t *testing.T) {
+	root := t.TempDir()
+	file := filepath.Join(root, "docker-compose.yml")
+	writeFile(t, file, "services: {}\n")
+
+	index, err := ContainerIndex(file)
+	if err != nil {
+		t.Fatalf("ContainerIndex: %v", err)
+	}
+	if len(index) != 0 {
+		t.Errorf("got %+v, want empty", index)
+	}
+}
