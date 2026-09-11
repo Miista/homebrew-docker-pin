@@ -26,6 +26,14 @@ import (
 	"strconv"
 	"syscall"
 	"time"
+	// The timezone database, embedded in the binary. Go reads TZ on its
+	// own, but resolves a name like Europe/Copenhagen against the host's
+	// /usr/share/zoneinfo -- which a scratch image does not carry, so TZ
+	// would be silently ignored and every timestamp would stay UTC:
+	// every line it streams is timestamped by the log, and an operator watching an apply wants their own clock.
+	_ "time/tzdata"
+
+	"github.com/rs/zerolog"
 
 	"github.com/Miista/homebrew-docker-pin/internal/actor"
 )
@@ -51,13 +59,14 @@ func main() {
 			os.Exit(1)
 		}
 	}
-	if err := run(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+	log := newLogger(os.Getenv("ACTOR_LOG_LEVEL"))
+	if err := run(log); err != nil {
+		log.Error().Msgf("%v", err)
 		os.Exit(1)
 	}
 }
 
-func run() error {
+func run(log zerolog.Logger) error {
 	// Before anything else: an actor that cannot write where the pins live
 	// would take work, do most of it, and fail at the step that matters. The
 	// same reasoning as duva's preflight -- discovering it later means
@@ -74,7 +83,7 @@ func run() error {
 		Handler: (&Server{
 			Token:   token,
 			Version: version,
-			Log:     logf,
+			Log:     log,
 			Apply: func(req actor.Request, step func(string, ...any)) (actor.Status, string) {
 				return transaction(req, step, realDocker, realGit, push)
 			},
@@ -86,22 +95,22 @@ func run() error {
 	defer stop()
 
 	go func() {
-		logf("applying on %s", addr)
+		log.Info().Msgf("ready to apply, serving on %s", addr)
 		if token == "" {
 			// Worth a line rather than silence: an open actor is a root
 			// shell on this host for anything that can reach the port.
-			logf("no ACTOR_TOKEN: this actor will accept work from any caller that can reach it")
+			log.Warn().Msg("no ACTOR_TOKEN: this actor will accept work from any caller that can reach it")
 		}
 		if !push {
-			logf("ACTOR_GIT_PUSH is off: commits stay local")
+			log.Info().Msg("ACTOR_GIT_PUSH is off: commits stay local")
 		}
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logf("stopped serving: %v", err)
+			log.Error().Msgf("stopped serving: %v", err)
 		}
 	}()
 
 	<-ctx.Done()
-	logf("shutting down")
+	log.Info().Msg("shutting down")
 	shutdown, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	return srv.Shutdown(shutdown)
@@ -146,8 +155,4 @@ func boolEnv(key string, fallback bool) bool {
 		os.Exit(1)
 	}
 	return v
-}
-
-func logf(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, time.Now().Format("15:04:05")+" "+format+"\n", args...)
 }

@@ -31,11 +31,19 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	// The timezone database, embedded in the binary. Go reads TZ on its
+	// own, but resolves a name like Europe/Copenhagen against the host's
+	// /usr/share/zoneinfo -- which a scratch image does not carry, so TZ
+	// would be silently ignored and every timestamp would stay UTC:
+	// the queue shows when an entry was first seen, and a log line with the wrong hour is worse than one with none.
+	_ "time/tzdata"
+
+	"github.com/rs/zerolog"
 
 	"github.com/Miista/homebrew-docker-pin/internal/actor"
 	"github.com/Miista/homebrew-docker-pin/internal/compose"
 	"github.com/Miista/homebrew-docker-pin/internal/decide"
-	"github.com/Miista/homebrew-docker-pin/internal/diun"
+	"github.com/Miista/homebrew-docker-pin/internal/detectevent"
 )
 
 var version = "dev"
@@ -66,13 +74,14 @@ func main() {
 			os.Exit(1)
 		}
 	}
-	if err := run(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+	log := newLogger(os.Getenv("DECIDER_LOG_LEVEL"))
+	if err := run(log); err != nil {
+		log.Error().Msgf("%v", err)
 		os.Exit(1)
 	}
 }
 
-func run() error {
+func run(log zerolog.Logger) error {
 	cfg := loadConfig()
 
 	root, err := projectFile(cfg.ComposeSubdir)
@@ -93,21 +102,21 @@ func run() error {
 		applier = newApplier(
 			&actor.Client{BaseURL: cfg.ActorURL, Token: cfg.ActorToken},
 			cfg.ApplyTimeout,
-			logf,
+			log,
 		)
-		logf("actor at %s", cfg.ActorURL)
+		log.Info().Msgf("applying through the actor at %s", cfg.ActorURL)
 	} else {
 		// Legitimate, not broken: a decider with no actor queues everything
 		// and applies nothing, which is what someone running it to watch
 		// rather than to act would want.
-		logf("no DECIDER_ACTOR_URL: everything will be queued and nothing applied")
+		log.Info().Msg("no DECIDER_ACTOR_URL: every decision will be queued and nothing applied")
 	}
 
 	handler := &decide.Handler{
 		Lookup:  decide.Lookup{Root: root},
 		Queue:   queue,
 		Applier: applier,
-		Log:     logf,
+		Log:     log,
 	}
 
 	srv := &http.Server{
@@ -118,7 +127,7 @@ func run() error {
 			Host:    cfg.Host,
 			Version: version,
 			Token:   cfg.Token,
-			Notify:  notifyHandler(handler),
+			Notify:  notifyHandler(handler, log),
 		}).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
@@ -127,17 +136,17 @@ func run() error {
 	defer stop()
 
 	go func() {
-		logf("deciding for %s, on %s", cfg.Host, addr)
+		log.Info().Msgf("deciding for %s, serving on %s", cfg.Host, addr)
 		if cfg.Token == "" {
-			logf("no DECIDER_TOKEN: anything that can reach this can approve an update")
+			log.Warn().Msg("no DECIDER_TOKEN: anything that can reach this can approve an update")
 		}
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logf("stopped serving: %v", err)
+			log.Error().Msgf("stopped serving: %v", err)
 		}
 	}()
 
 	<-ctx.Done()
-	logf("shutting down")
+	log.Info().Msg("shutting down")
 	shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	return srv.Shutdown(shutdown)
@@ -147,18 +156,17 @@ func run() error {
 //
 // The translation is the only part that knows which detector is in use, which
 // is why it is one function and not spread through the decider.
-func notifyHandler(h *decide.Handler) func([]byte) (int, string) {
+func notifyHandler(h *decide.Handler, log zerolog.Logger) func([]byte) (int, string) {
 	return func(body []byte) (int, string) {
-		p, err := diun.Parse(body)
+		e, err := detectevent.Parse(body)
 		if err != nil {
-			logf("unreadable notification: %v", err)
+			log.Warn().Msgf("a notification could not be read: %v", err)
 			return http.StatusBadRequest, err.Error()
 		}
-		n, why, ok := diun.Translate(p)
+		n, why, ok := detectevent.Translate(e)
 		if !ok {
-			// Not a signal is not a failure: a first sighting is the
-			// detector recording a baseline, and saying so is more useful
-			// than an error.
+			// Unusable is not a failure of the sender: saying what was
+			// missing is more useful than a status code.
 			return http.StatusOK, why
 		}
 		res := h.Handle(n)
@@ -222,8 +230,4 @@ func projectFile(sub string) (string, error) {
 		dir = joined
 	}
 	return compose.FindFile(dir)
-}
-
-func logf(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, time.Now().Format("15:04:05")+" "+format+"\n", args...)
 }

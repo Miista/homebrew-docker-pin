@@ -24,6 +24,12 @@ type hubTagsResponse struct {
 	Results []struct {
 		Name   string `json:"name"`
 		Digest string `json:"digest"`
+		// LastUpdated is when the tag was last pushed. Docker Hub returns it
+		// with the listing, so a caller that wants dates for many tags gets
+		// them for free rather than paying a request each -- which for a
+		// repository with hundreds of tags is the difference between one
+		// call and a minute of them.
+		LastUpdated time.Time `json:"tag_last_pushed"`
 	} `json:"results"`
 	Next string `json:"next"`
 }

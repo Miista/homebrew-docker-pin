@@ -137,10 +137,23 @@ func Decide(n Notice, svc Service, found bool) Verdict {
 		return Verdict{Outcome: Ignore, Why: "already on it"}
 	}
 
-	// Same tag, different digest: a moving tag moved. There is no version
-	// pair, so there is nothing to classify -- choosing `latest` is itself
-	// the decision to ride the edge.
 	if newTag == svc.Tag {
+		// A detector that reports the tag already pinned, without saying
+		// what it now points at, has said nothing: there is no candidate to
+		// move to. Treating an absent digest as a move would queue an update
+		// to nowhere -- and one that the actor would then try to pull.
+		//
+		// Not every detector resolves digests. One that only watches which
+		// tags exist has no reason to, and must not be punished for it.
+		if n.Digest == "" {
+			return Verdict{
+				Outcome: Ignore,
+				Why:     "the tag it already follows, with no new digest to move to",
+			}
+		}
+		// Same tag, different digest: a moving tag moved. There is no
+		// version pair, so there is nothing to classify -- choosing `latest`
+		// is itself the decision to ride the edge.
 		return digestMove(n, svc)
 	}
 

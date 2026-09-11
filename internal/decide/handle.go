@@ -3,6 +3,8 @@ package decide
 import (
 	"net/http"
 	"time"
+
+	"github.com/rs/zerolog"
 )
 
 // Handler turns a notice into what happens next.
@@ -21,8 +23,9 @@ type Handler struct {
 	Applier Applier
 	// Now is the clock, injected so a caller can pin it.
 	Now func() time.Time
-	// Log records what was decided. Nil discards.
-	Log func(format string, args ...any)
+	// Log records what was decided. The zero value discards, so a handler
+	// built without one is quiet rather than broken.
+	Log zerolog.Logger
 }
 
 // Result is what a handler did about one notice.
@@ -106,10 +109,11 @@ func (h *Handler) now() time.Time {
 	return time.Now()
 }
 
+// logf records at warn: everything the handler says is either a decision
+// waiting on someone or a reason it could not make one, and both are things
+// an operator reading `docker logs` is looking for.
 func (h *Handler) logf(format string, args ...any) {
-	if h.Log != nil {
-		h.Log(format, args...)
-	}
+	h.Log.Warn().Msgf(format, args...)
 }
 
 // digestFor is the digest to end up on, when it is known.

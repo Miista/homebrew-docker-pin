@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rs/zerolog"
+
 	"github.com/Miista/homebrew-docker-pin/internal/decide"
 )
 
@@ -128,12 +130,10 @@ func TestNotifyQueuesAnUpdate(t *testing.T) {
 		Lookup: decide.Lookup{Root: projectWith(t, oneService)},
 		Queue:  q,
 	}
-	notify := notifyHandler(h)
+	notify := notifyHandler(h, zerolog.Nop())
 
 	status, _ := notify([]byte(`{
-		"status":"update","provider":"docker",
-		"image":"example.com/app:1.1.0","digest":"sha256:new",
-		"metadata":{"ctn_names":"my-app"}}`))
+		"container":"my-app","image":"example.com/app","tag":"1.1.0"}`))
 
 	if status != http.StatusOK {
 		t.Errorf("status = %d, want 200", status)
@@ -147,29 +147,24 @@ func TestNotifyQueuesAnUpdate(t *testing.T) {
 	}
 }
 
-// A first sighting is the detector recording a baseline. Saying so is more
-// useful than an error, and queueing it would treat every newly-watched image
-// as an update to itself.
-func TestNotifyIgnoresAFirstSighting(t *testing.T) {
+// A detector that only watches which tags exist has no reason to resolve
+// digests. An event naming the tag already pinned therefore says nothing --
+// and must not be read as a move to nowhere.
+func TestNotifyIgnoresTheTagAlreadyFollowed(t *testing.T) {
 	q := decide.NewPending()
 	notify := notifyHandler(&decide.Handler{
 		Lookup: decide.Lookup{Root: projectWith(t, oneService)},
 		Queue:  q,
-	})
+	}, zerolog.Nop())
 
 	status, message := notify([]byte(`{
-		"status":"new","provider":"docker",
-		"image":"example.com/app:1.1.0","digest":"sha256:new",
-		"metadata":{"ctn_names":"my-app"}}`))
+		"container":"my-app","image":"example.com/app","tag":"1.0.0"}`))
 
 	if status != http.StatusOK {
 		t.Errorf("status = %d, want 200", status)
 	}
-	if !strings.Contains(message, "first sighting") {
-		t.Errorf("message = %q", message)
-	}
 	if q.Len() != 0 {
-		t.Error("a first sighting was queued")
+		t.Errorf("the tag already followed was queued: %s", message)
 	}
 }
 
@@ -177,7 +172,7 @@ func TestNotifyRejectsAnUnreadableBody(t *testing.T) {
 	notify := notifyHandler(&decide.Handler{
 		Lookup: decide.Lookup{Root: projectWith(t, oneService)},
 		Queue:  decide.NewPending(),
-	})
+	}, zerolog.Nop())
 	status, _ := notify([]byte("not json"))
 	if status != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", status)
@@ -189,11 +184,9 @@ func TestNotifyRejectsAnUnknownContainer(t *testing.T) {
 	notify := notifyHandler(&decide.Handler{
 		Lookup: decide.Lookup{Root: projectWith(t, oneService)},
 		Queue:  decide.NewPending(),
-	})
+	}, zerolog.Nop())
 	status, message := notify([]byte(`{
-		"status":"update","provider":"docker",
-		"image":"x:1","digest":"sha256:a",
-		"metadata":{"ctn_names":"ghost"}}`))
+		"container":"ghost","image":"x","tag":"1"}`))
 
 	if status != http.StatusUnprocessableEntity {
 		t.Errorf("status = %d, want 422", status)
@@ -215,13 +208,11 @@ func TestNotifyOverHTTP(t *testing.T) {
 		Queue:  q,
 		Host:   "testhost",
 		Token:  "s3cret",
-		Notify: notifyHandler(h),
+		Notify: notifyHandler(h, zerolog.Nop()),
 	}
 
 	rec := doRequest(t, srv.Handler(), http.MethodPost, "/v1/notify", "", `{
-		"status":"update","provider":"docker",
-		"image":"example.com/app:1.1.0","digest":"sha256:new",
-		"metadata":{"ctn_names":"my-app"}}`)
+		"container":"my-app","image":"example.com/app","tag":"1.1.0"}`)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body %s", rec.Code, rec.Body)

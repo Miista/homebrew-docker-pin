@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rs/zerolog"
+
 	"github.com/Miista/homebrew-docker-pin/internal/actor"
 	"github.com/Miista/homebrew-docker-pin/internal/decide"
 )
@@ -81,7 +83,8 @@ func (s *stubActor) server(t *testing.T) *httptest.Server {
 func newTestApplier(t *testing.T, s *stubActor) *applier {
 	t.Helper()
 	srv := s.server(t)
-	return newApplier(&actor.Client{BaseURL: srv.URL}, 10*time.Second, func(string, ...any) {})
+	// A logger writing nowhere: these tests assert on behaviour, not output.
+	return newApplier(&actor.Client{BaseURL: srv.URL}, 10*time.Second, zerolog.Nop())
 }
 
 func entryFor(service string) decide.Entry {

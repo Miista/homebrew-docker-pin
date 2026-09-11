@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rs/zerolog"
+
 	"github.com/Miista/homebrew-docker-pin/internal/actor"
 )
 
@@ -35,8 +37,8 @@ type Server struct {
 	// Version is the build.
 	Version string
 	// Log records what happened, for an operator reading the container's
-	// output rather than watching a stream.
-	Log func(string, ...any)
+	// output rather than watching a stream. The zero value discards.
+	Log zerolog.Logger
 
 	mu sync.Mutex
 	// running is the work in flight, keyed by service. One at a time per
@@ -203,7 +205,5 @@ func flush(w http.ResponseWriter) {
 }
 
 func (s *Server) logf(format string, args ...any) {
-	if s.Log != nil {
-		s.Log(format, args...)
-	}
+	s.Log.Info().Msgf(format, args...)
 }

@@ -339,3 +339,65 @@ func ociGetJSON(client *http.Client, url, accept string) ([]byte, error) {
 	}
 	return io.ReadAll(resp.Body)
 }
+
+// DatedTag is a tag and when it was published.
+type DatedTag struct {
+	Name      string
+	Published time.Time
+}
+
+// ListTagsWithDates returns every tag of an image, with its publish time
+// where the registry gives one cheaply.
+//
+// Docker Hub returns the date with the listing, so the whole answer costs one
+// request per page. Everywhere else it does not, and Published is left zero
+// -- the caller then decides whether to pay for a date per tag or do without.
+// That is deliberately the caller's choice: this package should not silently
+// turn one call into two hundred.
+func ListTagsWithDates(baseImage string) ([]DatedTag, error) {
+	if isDockerHub(baseImage) {
+		namespace, repo := splitDockerHubImage(baseImage)
+		url := fmt.Sprintf(
+			"https://hub.docker.com/v2/repositories/%s/%s/tags?page_size=100&ordering=last_updated",
+			namespace, repo,
+		)
+		return listDockerHubDatedTags(url)
+	}
+
+	// No cheap dates here: return the names and let the caller fetch what it
+	// needs.
+	names, err := ListTags(baseImage)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]DatedTag, 0, len(names))
+	for _, n := range names {
+		out = append(out, DatedTag{Name: n})
+	}
+	return out, nil
+}
+
+func listDockerHubDatedTags(url string) ([]DatedTag, error) {
+	client := &http.Client{Timeout: 15 * time.Second}
+	var tags []DatedTag
+	for page := 0; url != "" && page < hubMaxTagPages; page++ {
+		resp, err := getWithRetry(client, url)
+		if err != nil {
+			return nil, err
+		}
+		var data hubTagsResponse
+		err = json.NewDecoder(resp.Body).Decode(&data)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("docker hub API: HTTP %d", resp.StatusCode)
+		}
+		if err != nil {
+			return nil, err
+		}
+		for _, t := range data.Results {
+			tags = append(tags, DatedTag{Name: t.Name, Published: t.LastUpdated})
+		}
+		url = data.Next
+	}
+	return tags, nil
+}

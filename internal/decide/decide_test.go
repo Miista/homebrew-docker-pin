@@ -278,3 +278,27 @@ func TestTagOfDoesNotMistakeAPortForATag(t *testing.T) {
 		t.Errorf("tagOf = %q, want latest -- 5000 is a port", got)
 	}
 }
+
+// A detector that only watches which tags exist has no reason to resolve
+// digests, and must not be punished for it: reporting the tag already pinned
+// with no digest says nothing, and treating it as a move would queue an
+// update to nowhere -- which the actor would then try to pull.
+func TestTheCurrentTagWithNoDigestIsIgnored(t *testing.T) {
+	s := svc("latest", "sha256:old", AutoMajor)
+	v := Decide(Notice{Container: "app", Image: "example.com/app:latest"}, s, true)
+	if v.Outcome != Ignore {
+		t.Errorf("outcome = %q, want ignore (%s)", v.Outcome, v.Why)
+	}
+	if v.To != "" {
+		t.Errorf("it produced a candidate %q out of nothing", v.To)
+	}
+}
+
+// And the positive: a detector that does resolve one still gets a move.
+func TestTheCurrentTagWithANewDigestIsAMove(t *testing.T) {
+	s := svc("latest", "sha256:old", AutoMajor)
+	v := Decide(Notice{Container: "app", Image: "example.com/app:latest", Digest: "sha256:new"}, s, true)
+	if v.Outcome != Apply {
+		t.Errorf("outcome = %q, want apply", v.Outcome)
+	}
+}

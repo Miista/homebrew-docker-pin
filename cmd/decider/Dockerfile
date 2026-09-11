@@ -19,8 +19,17 @@ COPY . .
 ARG VERSION=dev
 RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /out/decider ./cmd/decider
 
-# Distroless static: the decider shells out to nothing, so there is nothing
-# for a shell to be useful for.
+# distroless-static, not scratch.
+#
+# The decider talks to no registry, so certificates look unnecessary -- but it
+# reaches the actor by container name, and resolving a name is the thing
+# scratch breaks. A CGO-disabled static binary always uses Go's own resolver,
+# which reads /etc/nsswitch.conf to decide resolution order; without it the
+# detector was found to hang indefinitely on its first lookup rather than
+# fail, and there is no reason to expect this to behave differently.
+#
+# So the base is the three things a networked static Go binary needs: the CA
+# bundle, /etc/passwd for a named user, and the resolver configuration.
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:6ec5aa99dc335666e79dc64e4a6c8b89c33a543a1967f20d360922a80dd21f02
 COPY --from=build /out/decider /decider
 

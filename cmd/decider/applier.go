@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rs/zerolog"
+
 	"github.com/Miista/homebrew-docker-pin/internal/actor"
 	"github.com/Miista/homebrew-docker-pin/internal/decide"
 )
@@ -22,7 +24,7 @@ import (
 type applier struct {
 	client  *actor.Client
 	timeout time.Duration
-	log     func(string, ...any)
+	log     zerolog.Logger
 
 	// mu serialises applies. Held for the whole transaction, not just the
 	// start: the point is that nothing else begins until this one is done.
@@ -42,7 +44,7 @@ type live struct {
 	lines []string // what has been said so far, for a watcher arriving late
 }
 
-func newApplier(c *actor.Client, timeout time.Duration, log func(string, ...any)) *applier {
+func newApplier(c *actor.Client, timeout time.Duration, log zerolog.Logger) *applier {
 	return &applier{
 		client:  c,
 		timeout: timeout,
@@ -95,7 +97,7 @@ func (a *applier) apply(e decide.Entry, l *live) {
 		Digest:  e.Digest,
 	})
 	if err != nil {
-		a.log("%s: the actor would not take it: %v", e.Service, err)
+		a.log.Error().Msgf("%s: the actor would not take it — %v", e.Service, err)
 		l.write(actor.Terminal(actor.Failed, err.Error()))
 		return
 	}
@@ -103,12 +105,12 @@ func (a *applier) apply(e decide.Entry, l *live) {
 	status, reason, err := a.client.Watch(ctx, acc.Stream, l)
 	switch {
 	case err != nil:
-		a.log("%s: lost the actor's stream: %v", e.Service, err)
+		a.log.Error().Msgf("%s: lost the actor's stream — %v", e.Service, err)
 		l.write(actor.Terminal(actor.Failed, err.Error()))
 	case status == actor.Completed:
-		a.log("%s: %s -> %s applied", e.Service, e.From, e.To)
+		a.log.Info().Msgf("%s: %s -> %s applied", e.Service, e.From, e.To)
 	default:
-		a.log("%s: failed: %s", e.Service, reason)
+		a.log.Error().Msgf("%s: failed — %s", e.Service, reason)
 	}
 }
 
