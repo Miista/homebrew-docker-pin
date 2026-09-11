@@ -145,8 +145,12 @@ push — including what a failure at each step means.
 
 ## The HTTP surfaces
 
-Each decider runs a small HTTP server. The UI is the only thing that reaches
-across hosts; everything else is same-network.
+**diun, decider and actor are all same-host.** They reach each other over that
+host's compose network by name. Only the UI crosses hosts, and it only ever
+talks to the decider.
+
+So there is **one published port per host** — the decider's. The actor is
+entirely internal: nothing outside its own compose network can reach it.
 
 **Decider**
 
@@ -155,16 +159,17 @@ across hosts; everything else is same-network.
 | `POST /v1/notify` | diun | none |
 | `GET /v1/snapshot` | UI | token |
 | `POST /v1/apply/{service}` | UI | token |
+| `GET /v1/progress/{service}` | UI | token |
 | `GET /healthz` | container runtime | none |
 
-Both the decider and the actor publish a port: the UI is central and they are
-per host, so it reaches them across hosts. That is what the registration model
-is for.
+`internal/agent/server.go` is already most of this: snapshot, apply, progress,
+healthz, bearer token on everything but health. What changes is that
+`/v1/refresh` goes away — the decider checks nothing, diun does — and
+`/v1/notify` arrives.
 
-`/v1/notify` is nonetheless unauthenticated, because diun reaches the decider
-over that host's own compose network by name and never uses the published
-address. It is still *exposed* on the published port, though, which is worth
-being honest about rather than pretending the network shape hides it.
+`/v1/notify` is unauthenticated because diun reaches the decider by container
+name on the local network. It is still exposed on the published port, which is
+worth being honest about rather than implying the network shape hides it.
 
 What an unauthenticated notify can do is bounded: it names a container and a
 digest, and the decider validates both against its own compose files. An
@@ -176,44 +181,28 @@ candidate appearing in the queue for a human to reject.
 That is a judgement about a LAN, not a principle. If it stops being one, the
 notify endpoint takes a token too, and diun's webhook notifier can send one.
 
-`internal/agent/server.go` is already most of this: snapshot, apply, healthz,
-bearer token on everything but health. What changes is that `/v1/refresh` goes
-away — the decider checks nothing, diun does — and `/v1/notify` arrives.
-
 **Actor**
 
-The decider talks to the actor over the same compose network, authenticated.
+Internal only. The decider calls it; nothing else can.
 
-`POST /v1/apply` returns a **URL to stream progress from**. The decider hands
-that URL back to the UI and stays out of the data path: no proxying, no
-buffering, no progress state kept anywhere.
+`POST /v1/apply` starts the transaction and returns a URL to stream progress
+from. **The decider proxies that stream** — a clean passthrough, copying bytes
+without interpreting them.
 
-That also means the actor owns the shape of its own progress. A different
-actor — one that opens a pull request, or defers to Ansible, which is what v3
-imagined the seam buying — returns whatever URL suits it, and the UI just
-follows it.
+The passthrough is what preserves the property worth having. The actor still
+owns the shape of its own progress: a different actor — one that opens a pull
+request, or defers to Ansible, which is what v3 imagined this seam buying —
+streams whatever it likes, and the decider relays it unchanged. The decider is
+a pipe, not a participant, and learns nothing about what an apply looks like.
 
-The stream endpoint is unauthenticated and returns nothing when no update is in
-progress. There is no session to guess at and nothing to leak: either work is
-happening, and its log is the same thing the UI would be shown anyway, or the
-response is empty.
+Proxying rather than redirecting also means the actor never needs to know its
+own externally-reachable address, which inside a container it cannot infer: it
+sees a compose-network address and its own container name, neither of which
+resolves from wherever the UI runs. Nothing has to be configured with a public
+base URL, because nothing outside the host ever addresses the actor.
 
-**The actor has to be told its own address.** Inside a container it sees a
-compose-network address and its own container name, neither of which resolves
-from wherever the UI runs. So the stream URL is built from configuration —
-`ACTOR_PUBLIC_URL` or equivalent — the same way the UI is configured with where
-its deciders are: told, not inferred.
-
-The alternative is the decider constructing the URL, since it necessarily knows
-an address that works for the UI. But that puts the decider back in the middle
-of the one thing it just got out of, and it breaks the property that makes this
-worth doing: an actor that opens a pull request instead of pulling an image has
-a progress URL that is not on its host at all, and only the actor knows that.
-
-Both publish a port, then. The decider's carries the UI's snapshot and apply,
-behind the token; the actor's carries an unauthenticated stream that is empty
-when idle. Neither is reachable from outside the LAN, on the same terms as the
-queue duva serves today.
+The stream is empty when no update is in progress, which is the whole of its
+error handling.
 
 ## Carried over from v3, unchanged
 
@@ -273,7 +262,7 @@ Mostly extraction, which is the argument for the shape being right:
 | UI transport | `internal/agent`, `internal/hub` — deciders replace agents |
 
 Genuinely new: a webhook receiver, the service-mapping rule, the lock, and
-the actor's own HTTP surface with its progress stream.
+the actor's internal HTTP surface with its progress stream.
 
 ## The webhook payload
 
