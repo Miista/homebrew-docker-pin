@@ -185,6 +185,43 @@ notify endpoint takes a token too, and diun's webhook notifier can send one.
 
 Internal only. The decider calls it; nothing else can.
 
+The contract is deliberately small, because **a different actor must be able
+to take its place**. The decider may know an endpoint, a payload — which
+service, in which file, from what, to what — and that the response carries a
+stream URL. It may not know that applying involves a registry, a container or
+git: an actor that opens a pull request touches none of them.
+
+That rules out something an earlier draft of this note assumed. "Re-notify
+until the compose file shows the target digest" is knowledge about *this*
+actor's idea of applying, and a pull-request actor never changes the compose
+file, so the decider would re-notify forever.
+
+Instead the actor reports its own completion, and the decider runs a timeout.
+**Completed means the actor did its job** — not that the host is running a new
+image. A pull request actor completes when the pull request exists. The
+timeout is what keeps an actor that died mid-apply from wedging the queue, and
+it is the only thing the decider needs to believe about work it did not do.
+
+Status comes through the **same stream** the UI watches rather than a second
+endpoint: there is one thing happening, so there is one place to read about
+it. The decider **tees** — one connection to the actor, relayed verbatim to
+the UI while it watches for the end.
+
+The end is a line with a known prefix:
+
+```
+pulling example.com/app:1.2.3
+recreating app
+status: completed
+```
+
+A prefix rather than a typed event or a separate result call, because the
+stream has two readers with different needs — the decider, which must
+recognise the end, and a person, who should see something readable. A status
+nobody defined is *not* terminal: treating an unrecognised one as the end
+would let a typo in an actor read as success, where leaving it as progress
+means the timeout catches it.
+
 `POST /v1/apply` starts the transaction and returns a URL to stream progress
 from. **The decider proxies that stream** — a clean passthrough, copying bytes
 without interpreting them.
