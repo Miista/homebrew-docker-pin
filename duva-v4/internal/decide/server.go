@@ -128,6 +128,16 @@ func (s *Server) apply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// No actor is a configuration, not a fault: a decider without one queues
+	// every decision and applies nothing, which is how this runs before an
+	// actor is trusted with the socket. Said plainly, and before the queue is
+	// touched -- an entry must not leave the queue for an apply that cannot
+	// happen.
+	if s.Applier == nil {
+		writeMessage(w, "no actor is configured, so nothing can be applied from here")
+		return
+	}
+
 	e, ok := s.Queue.Get(service)
 	if !ok {
 		writeMessage(w, "nothing is queued for "+service)
@@ -155,6 +165,11 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request) {
 	service := strings.TrimPrefix(r.URL.Path, "/v1/stream/")
 	if service == "" {
 		http.Error(w, "no service", http.StatusBadRequest)
+		return
+	}
+	if s.Applier == nil {
+		http.Error(w, "no actor is configured, so nothing is ever in flight",
+			http.StatusNotFound)
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
