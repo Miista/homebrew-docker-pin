@@ -18,6 +18,11 @@ import (
 //
 // The format is zerolog's ConsoleWriter, "TIME | LEVEL | message", matching
 // diun and the other tools this tends to run alongside.
+//
+// The timestamp carries the date. These processes are long-lived and check on
+// a daily schedule, so a bare clock time cannot tell yesterday's run from
+// today's -- and `docker logs` on a container up for a week is exactly where
+// that question gets asked.
 
 // newLogger builds the process-wide logger. Level comes from DUVA_LOG_LEVEL,
 // so verbosity can be turned up on a running host without a redeploy -- which
@@ -40,7 +45,7 @@ func newLogger(levelStr string) zerolog.Logger {
 
 	writer := zerolog.ConsoleWriter{
 		Out:        os.Stdout,
-		TimeFormat: "15:04:05",
+		TimeFormat: "2006-01-02 15:04:05",
 		// Colours are left on even though stdout in a container is a pipe
 		// rather than a terminal: `docker logs` and the viewers actually used
 		// against these stacks -- Dozzle, Portainer -- render ANSI fine.

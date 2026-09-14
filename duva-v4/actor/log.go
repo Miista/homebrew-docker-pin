@@ -13,6 +13,10 @@ import (
 //
 // The format is zerolog's ConsoleWriter, "TIME | LEVEL | message", matching
 // duva, diun and the other tools this runs alongside.
+//
+// The timestamp carries the date. This process is long-lived and acts rarely,
+// so a bare clock time cannot tell which day an update was applied -- and the
+// log of what this did to a host is the record that matters most here.
 
 // newLogger builds the process-wide logger. Level comes from
 // ACTOR_LOG_LEVEL, so verbosity can be turned up on a running host without
@@ -31,7 +35,7 @@ func newLogger(levelStr string) zerolog.Logger {
 
 	writer := zerolog.ConsoleWriter{
 		Out:        os.Stdout,
-		TimeFormat: "15:04:05",
+		TimeFormat: "2006-01-02 15:04:05",
 		// NoColor left false deliberately: stdout is a pipe in a container,
 		// but `docker logs` and the viewers used against this stack render
 		// ANSI colour fine.
