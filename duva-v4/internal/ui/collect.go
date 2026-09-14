@@ -117,6 +117,19 @@ func (c *Collector) Collect() {
 
 	c.mu.Lock()
 	for i, d := range c.Deciders {
+		// A failed collection keeps the last good queue rather than replacing
+		// it with nothing. What was waiting a minute ago is still waiting --
+		// the decider being unreachable is a fact about the decider, not
+		// about its queue -- and showing an empty page would say the opposite
+		// of the truth. The rows come back marked stale and unapplyable, so
+		// nothing acts on them while they cannot be confirmed.
+		if results[i].err != nil {
+			prev := c.cache[d.Host]
+			results[i].queue = prev.queue
+			// Never applyable while unreachable, whatever the last answer
+			// said: the route to the actor is through the decider.
+			results[i].canApply = false
+		}
 		c.cache[d.Host] = results[i]
 	}
 	c.collected = time.Now()
@@ -185,10 +198,13 @@ func (c *Collector) fresh() {
 // field only something else uses.
 type Hosted struct {
 	decide.Entry
+	// Stale marks a row from a decider that has since stopped answering: it
+	// is what was queued when it last did, which may no longer be true.
+	Stale bool
 	// CanApply is whether this row's decider has an actor. Per row, because
 	// one host can have an actor while another does not.
 	CanApply bool
-	Host string
+	Host     string
 }
 
 // Pending returns every decider's queue, labelled by host.
@@ -200,12 +216,19 @@ func (c *Collector) Pending() []Hosted {
 	var out []Hosted
 	for _, d := range c.Deciders {
 		s, ok := c.cache[d.Host]
-		if !ok || s.err != nil {
+		if !ok {
 			continue
 		}
 		for _, e := range s.queue {
 			// The configured host, not the reported one: see Decider.Host.
-			out = append(out, Hosted{Entry: e, Host: d.Host, CanApply: s.canApply})
+			out = append(out, Hosted{
+				Entry: e, Host: d.Host,
+				CanApply: s.canApply,
+				// Shown, but known to be from before the decider stopped
+				// answering. Rendering it as current would invite approving
+				// something that may already be gone.
+				Stale: s.err != nil,
+			})
 		}
 	}
 	// By host then service, so a row keeps its place between reloads however

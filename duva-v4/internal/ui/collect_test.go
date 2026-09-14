@@ -6,15 +6,17 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Miista/homebrew-docker-pin/duva-v4/internal/decide"
 )
 
 // fakeDecider stands up one decider's two endpoints.
 type fakeDecider struct {
-	queue   []decide.Entry
-	token   string
-	applied []string
+	queue    []decide.Entry
+	canApply bool
+	token    string
+	applied  []string
 	// refusal, when set, is what /v1/apply answers with: a 200 and a message,
 	// which is how a decider says "nothing is queued under that name".
 	refusal string
@@ -31,7 +33,7 @@ func (f *fakeDecider) serve(t *testing.T) *httptest.Server {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		json.NewEncoder(w).Encode(decide.Snapshot{Pending: f.queue})
+		json.NewEncoder(w).Encode(decide.Snapshot{Pending: f.queue, CanApply: f.canApply})
 	})
 	mux.HandleFunc("/v1/apply/", func(w http.ResponseWriter, r *http.Request) {
 		if !auth(r) {
@@ -176,5 +178,38 @@ func TestSplitKey(t *testing.T) {
 		if _, _, ok := SplitKey(bad); ok {
 			t.Errorf("SplitKey(%q) was accepted", bad)
 		}
+	}
+}
+
+// A decider that stops answering keeps its queue: what was waiting is still
+// waiting, and the decider being unreachable is a fact about the decider, not
+// about its queue. Dropping the rows would show an empty page, which says the
+// opposite of the truth.
+func TestAnUnreachableDeciderKeepsItsLastQueue(t *testing.T) {
+	d := &fakeDecider{queue: []decide.Entry{{Service: "gluetun"}}, canApply: true}
+	srv := d.serve(t)
+	c := NewCollector([]Decider{{Host: "optiplex", URL: srv.URL}})
+
+	if got := c.Pending(); len(got) != 1 || got[0].Stale {
+		t.Fatalf("first collection: %+v, want one fresh row", got)
+	}
+
+	// The decider goes away.
+	srv.Close()
+	c.MaxAge = time.Nanosecond // force a re-collect
+
+	got := c.Pending()
+	if len(got) != 1 {
+		t.Fatalf("after it went away: %d rows, want the 1 it had", len(got))
+	}
+	if !got[0].Stale {
+		t.Error("a row from an unreachable decider is not marked stale")
+	}
+	// And must not be applyable: the route to the actor is through the decider.
+	if got[0].CanApply {
+		t.Error("a row from an unreachable decider is still applyable")
+	}
+	if len(c.Unreachable()) != 1 {
+		t.Error("the decider is not reported unreachable")
 	}
 }

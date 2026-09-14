@@ -254,3 +254,43 @@ func TestWithAnActorTheButtonSubmits(t *testing.T) {
 		t.Error("the page claims there is no actor")
 	}
 }
+
+// The page refreshes itself: the queue changes without anyone touching it, so
+// one left open would otherwise show whatever was true when it was opened.
+func TestPageRefreshesItself(t *testing.T) {
+	s := &Server{Source: &fakeSource{}, Version: "v1"}
+	_, body := get(t, s, "/")
+	if !strings.Contains(body, `http-equiv="refresh"`) {
+		t.Error("the page does not refresh itself")
+	}
+	// Back to "/" explicitly: an apply result rides in the query string, and
+	// refreshing to the same URL would replay a stale message forever.
+	if !strings.Contains(body, `url=/`) {
+		t.Error("the refresh keeps the query string, so a stale message would replay")
+	}
+}
+
+// A row whose decider has stopped answering is shown but not applyable: it
+// was really queued, and may no longer be.
+func TestStaleRowIsShownButNotApplyable(t *testing.T) {
+	e := entry("gluetun", "1.0", "1.1", version.KindMinor)
+	e.Stale = true
+	s := &Server{
+		Source:   &fakeSource{pending: []Hosted{e}, unreachable: []Problem{{Host: "optiplex", Err: "refused"}}},
+		Approver: &fakeApprover{},
+		Version:  "v1",
+	}
+	_, body := get(t, s, "/")
+	if !strings.Contains(body, "gluetun") {
+		t.Error("a stale row is not shown at all")
+	}
+	if !strings.Contains(body, `class="stale"`) {
+		t.Error("a stale row is not marked as such")
+	}
+	if !strings.Contains(body, `<button class="apply" type="button" disabled`) {
+		t.Error("a stale row's button is not disabled")
+	}
+	if !strings.Contains(body, "not answering") {
+		t.Error("the disabled button does not say why")
+	}
+}

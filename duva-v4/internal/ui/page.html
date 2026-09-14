@@ -3,6 +3,19 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- The queue changes without anyone touching this page: a detector run adds
+     entries, a decider goes away, an actor is configured. A page left open
+     would otherwise show whatever was true when it was opened, which is worst
+     for the thing it exists to show -- a decision waiting on someone.
+
+     Meta refresh rather than script: this is plain HTML and stays that way.
+     30s because the collector caches for 5s, so this costs one fan-out per
+     refresh and no more.
+
+     The URL is given explicitly, without a query: an apply result rides in
+     the query string, and refreshing back to the same URL would replay a
+     stale message every 30s forever. -->
+<meta http-equiv="refresh" content="30; url=/">
 <link rel="icon" type="image/png" href="/favicon.png">
 <title>duva</title>
 <style>
@@ -120,6 +133,10 @@
                     color: var(--faint); font-weight: 400; cursor: not-allowed; }
   .apply:focus-visible { outline: 1px solid currentColor; outline-offset: 2px; }
 
+  /* A row from a decider that has stopped answering: shown, because it was
+     really queued, but faded because it cannot be confirmed. */
+  .rows li.stale { opacity: .55; }
+
   /* ---------- empty state: the common case ---------- */
   .empty { padding: 3rem 1rem 2.75rem; text-align: center; }
   .tick { width: 2.1rem; height: 2.1rem; margin: 0 auto .9rem;
@@ -193,7 +210,7 @@
     </div>
   <ul class="rows">
     {{range .Pending}}
-    <li>
+    <li{{if .Stale}} class="stale"{{end}}>
       <span class="svc">{{.Service}}{{if .Host}}<span class="on mono">{{.Host}}</span>{{end}}<span class="img mono">{{.Image}}</span></span>
       <span class="jump mono">{{if .Moved}}<span class="to">{{.Tag}}</span>{{else}}<span class="from">{{.CurrentTag}}</span><span class="arrow">&rarr;</span><span class="to">{{.Candidate}}</span>{{end}}</span>
       <span class="kind kind-{{.Kind}}"{{if eq .Kind "unknown"}} title="duva could not compare these tags — not a semantic version"{{end}}>{{.Kind}}</span>
@@ -205,7 +222,7 @@
       </form>
       {{else}}
       <button class="apply" type="button" disabled
-              title="{{.Host}} has no actor configured, so nothing can be applied">Update</button>
+              title="{{if .Stale}}{{.Host}} is not answering, so this cannot be confirmed or applied{{else}}{{.Host}} has no actor configured, so nothing can be applied{{end}}">Update</button>
       {{end}}
       {{end}}
     </li>

@@ -110,7 +110,9 @@ type row struct {
 	Tag string
 	// CanApply is whether this row's decider has an actor. Per row: one host
 	// can have an actor while another does not.
-	CanApply  bool
+	CanApply bool
+	// Stale marks a row whose decider has stopped answering.
+	Stale     bool
 	Kind      string
 	Why       string
 	FirstSeen string
@@ -139,7 +141,8 @@ func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 			// can act on. The tag alone is the whole of what changed.
 			Moved:     isDigestMove(e.Entry),
 			Tag:       e.Tag,
-			CanApply:  e.CanApply,
+			CanApply:  e.CanApply && !e.Stale,
+			Stale:     e.Stale,
 			Kind:      kindLabel(e.Entry),
 			Why:       e.Why,
 			FirstSeen: e.FirstSeen,
