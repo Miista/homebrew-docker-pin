@@ -7,7 +7,6 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
-	"time"
 )
 
 const ociMaxTagChecks = 20
@@ -37,7 +36,7 @@ func splitRegistryRepo(image string) (host, repo string) {
 // registry implementing the OCI Distribution Spec, with no pull and no tag
 // listing.
 func ociTagDigestFromBase(baseURL, repo, tag string) (string, error) {
-	client := &http.Client{Timeout: 15 * time.Second}
+	client := httpClient()
 	return ociManifestDigest(client, baseURL, repo, tag)
 }
 

@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
-	"time"
 )
 
 var (
@@ -89,7 +88,7 @@ func MovingPullTag(baseImage, currentTag string) (string, error) {
 // match, so the caller bails rather than guessing.
 func DiscoverMovingTag(baseImage, variant string) (string, bool, error) {
 	baseURL, repo := registryEndpoint(baseImage)
-	client := &http.Client{Timeout: 15 * time.Second}
+	client := httpClient()
 	return discoverMovingTagAt(client, baseURL, repo, variant)
 }
 

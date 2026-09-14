@@ -37,7 +37,7 @@ type hubTagsResponse struct {
 // dockerHubTagDigestFromURL fetches a single tag's digest via Docker Hub's
 // per-tag endpoint, with no pull and no listing/pagination.
 func dockerHubTagDigestFromURL(url string) (string, error) {
-	client := &http.Client{Timeout: 15 * time.Second}
+	client := httpClient()
 	resp, err := getWithRetry(client, url)
 	if err != nil {
 		return "", err

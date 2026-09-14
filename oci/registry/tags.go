@@ -17,7 +17,7 @@ import (
 // by registry the same way ResolveVersionTag does.
 func ListTags(baseImage string) ([]string, error) {
 	if strings.HasPrefix(baseImage, "ghcr.io/") {
-		client := &http.Client{Timeout: 15 * time.Second}
+		client := httpClient()
 		path := strings.TrimPrefix(baseImage, "ghcr.io/")
 		token, err := ghcrToken(client, path)
 		if err != nil {
@@ -39,7 +39,7 @@ func ListTags(baseImage string) ([]string, error) {
 	if host == "" {
 		return nil, fmt.Errorf("could not determine registry host from %q", baseImage)
 	}
-	client := &http.Client{Timeout: 15 * time.Second}
+	client := httpClient()
 	return ociListTags(client, "https://"+host, repo)
 }
 
@@ -81,7 +81,7 @@ func listDockerHubTags(url string) ([]string, error) {
 // package. include == nil disables the early exit (matches every tag), for
 // callers that want the unfiltered list regardless of current.
 func listDockerHubTagsMatching(url string, include, exclude *regexp.Regexp, current string) ([]string, error) {
-	client := &http.Client{Timeout: 15 * time.Second}
+	client := httpClient()
 	var tags []string
 	for page := 0; url != "" && page < hubMaxTagPages; page++ {
 		resp, err := getWithRetry(client, url)
@@ -155,14 +155,14 @@ func TagCreated(baseImage, tag string) (time.Time, error) {
 	if host == "" {
 		return time.Time{}, fmt.Errorf("could not determine registry host from %q", baseImage)
 	}
-	client := &http.Client{Timeout: 15 * time.Second}
+	client := httpClient()
 	return ociTagCreated(client, "https://"+host, repo, tag)
 }
 
 func dockerHubTagCreated(baseImage, tag string) (time.Time, error) {
 	namespace, repo := splitDockerHubImage(baseImage)
 	url := fmt.Sprintf("https://hub.docker.com/v2/repositories/%s/%s/tags/%s", namespace, repo, tag)
-	client := &http.Client{Timeout: 15 * time.Second}
+	client := httpClient()
 	resp, err := getWithRetry(client, url)
 	if err != nil {
 		return time.Time{}, err
@@ -298,7 +298,7 @@ func ListTagsWithDates(baseImage string) ([]DatedTag, error) {
 }
 
 func listDockerHubDatedTags(url string) ([]DatedTag, error) {
-	client := &http.Client{Timeout: 15 * time.Second}
+	client := httpClient()
 	var tags []DatedTag
 	for page := 0; url != "" && page < hubMaxTagPages; page++ {
 		resp, err := getWithRetry(client, url)
