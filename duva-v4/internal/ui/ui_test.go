@@ -185,19 +185,24 @@ func (e errString) Error() string { return string(e) }
 
 // A digest move has no version pair, so the Kind column must say "digest"
 // rather than leave a cell that reads as missing data.
-func TestDigestMoveIsLabelled(t *testing.T) {
+// A moving tag that moved shows the tag, not the digest. The tag did not
+// change, so there is no from/to to render, and the digest is 71 characters
+// that say nothing a person can act on.
+func TestDigestMoveShowsTheTagNotTheDigest(t *testing.T) {
 	const digest = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	s := &Server{
-		Source:  &fakeSource{pending: []Hosted{entry("caddy", "2.10", digest, "")}},
-		Version: "v1",
-	}
+	e := entry("caddy", digest, digest, "")
+	e.Tag = "latest"
+	s := &Server{Source: &fakeSource{pending: []Hosted{e}}, Version: "v1"}
+
 	_, body := get(t, s, "/")
 	if !strings.Contains(body, "digest") {
 		t.Error("a digest move is not labelled")
 	}
-	// And shortened: seventy-one characters of hex is nobody's idea of a
-	// table cell.
-	if strings.Contains(body, digest) {
-		t.Error("the full digest is rendered instead of a short one")
+	if !strings.Contains(body, "latest") {
+		t.Error("a digest move does not show the tag it follows")
+	}
+	// No hex at all: not the full digest, and not a shortened one either.
+	if strings.Contains(body, "sha256:") {
+		t.Errorf("a digest is rendered where the tag should be")
 	}
 }

@@ -87,10 +87,9 @@
          margin-top: -.15rem; overflow: hidden; text-overflow: ellipsis;
          white-space: nowrap; }
   .rows li:hover .img, .rows li:focus-within .img { opacity: 1; }
-  /* min-width: 0 lets the grid track's own fixed width (9.5rem) win over
-     this content's intrinsic size -- without it, a full-length digest
-     candidate does not reliably fit and overflows visually into the Kind
-     column next to it instead of clipping. */
+  /* min-width: 0 lets the grid track's width win over the content's
+     intrinsic size, so a long tag clips rather than overflowing into the
+     Kind column. */
   .jump { white-space: nowrap; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .jump .from { color: var(--faint); font-size: .8rem; }
   .jump .to { color: var(--fg); font-weight: 400; }
@@ -181,7 +180,7 @@
     {{range .Pending}}
     <li>
       <span class="svc">{{.Service}}{{if .Host}}<span class="on mono">{{.Host}}</span>{{end}}<span class="img mono">{{.Image}}</span></span>
-      <span class="jump mono"><span class="from">{{.CurrentTag}}</span><span class="arrow">&rarr;</span><span class="to">{{.Candidate}}</span></span>
+      <span class="jump mono">{{if .Moved}}<span class="to">{{.Tag}}</span>{{else}}<span class="from">{{.CurrentTag}}</span><span class="arrow">&rarr;</span><span class="to">{{.Candidate}}</span>{{end}}</span>
       <span class="kind kind-{{.Kind}}"{{if eq .Kind "unknown"}} title="duva could not compare these tags — not a semantic version"{{end}}>{{.Kind}}</span>
       {{if $.CanApply}}
       <form method="post" action="/apply">

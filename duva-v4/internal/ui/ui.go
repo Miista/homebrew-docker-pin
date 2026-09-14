@@ -100,7 +100,12 @@ type row struct {
 	Image      string
 	CurrentTag string
 	Candidate  string
-	Kind       string
+	// Moved marks a digest move, where the tag did not change and there is
+	// no from/to to render.
+	Moved bool
+	// Tag is what the service follows, shown instead of a digest pair.
+	Tag  string
+	Kind string
 	Why        string
 	FirstSeen  string
 	Auto       string
@@ -123,6 +128,11 @@ func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 			Image:      e.Image,
 			CurrentTag: e.From,
 			Candidate:  display(e.Entry),
+			// A moving tag that moved has no new tag to show: the tag is the
+			// same, and the digest is 71 characters that say nothing a person
+			// can act on. The tag alone is the whole of what changed.
+			Moved: isDigestMove(e.Entry),
+			Tag:   e.Tag,
 			Kind:       kindLabel(e.Entry),
 			Why:        e.Why,
 			FirstSeen:  e.FirstSeen,
@@ -180,10 +190,13 @@ func (s *Server) apply(w http.ResponseWriter, r *http.Request) {
 // A moved digest is seventy-one characters of hex nobody reads; the first
 // twelve identify it well enough to match against a log line or a commit.
 func display(e decide.Entry) string {
-	if strings.HasPrefix(e.To, "sha256:") && len(e.To) > 19 {
-		return e.To[:19]
-	}
 	return e.To
+}
+
+// isDigestMove reports whether an entry is a moving tag that moved, rather
+// than a change of tag.
+func isDigestMove(e decide.Entry) bool {
+	return strings.HasPrefix(e.To, "sha256:")
 }
 
 // kindLabel is what the Kind column says.
