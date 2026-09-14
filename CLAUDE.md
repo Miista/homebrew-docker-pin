@@ -190,7 +190,9 @@ See `docs/duva-v4-diun-decider-actor.md`.
   root-owned files in a bind-mounted repository, makes git report dubious
   ownership, and loses the commit identity `.git/config` already carries.
   See `duva-v4/README.md`.
-- **`internal/actor`** — the *contract*, and a client. What the decider may
+- **`internal/actor`** — the *contract*, and a client. Specified in
+  `docs/actor-contract.md`, so a different actor can be written without
+  reading this one's source. What the decider may
   know is an endpoint, a payload, and that the answer carries a stream URL; it
   may not know that applying involves a registry, a container or git, because
   an actor that opens a pull request touches none of them. Completed means the

@@ -207,6 +207,10 @@ notify endpoint takes a token too, and diun's webhook notifier can send one.
 
 Internal only. The decider calls it; nothing else can.
 
+**The contract is specified in `docs/actor-contract.md`** — endpoints, payloads,
+the terminal line format, and what a new actor has to get right. What follows
+here is why it is shaped that way.
+
 The contract is deliberately small, because **a different actor must be able
 to take its place**. The decider may know an endpoint, a payload — which
 service, in which file, from what, to what — and that the response carries a

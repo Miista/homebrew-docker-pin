@@ -100,6 +100,9 @@ duva-actor:
     - /var/run/docker.sock:/var/run/docker.sock
 ```
 
+A different actor can take its place: the contract is specified in
+`../docs/actor-contract.md`.
+
 The decider reaches it by name, with `DECIDER_ACTOR_URL: http://duva-actor:8080`
 and `DECIDER_ACTOR_TOKEN` matching `ACTOR_TOKEN`.
 
