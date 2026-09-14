@@ -13,12 +13,14 @@ import (
 
 // fakeSource is a queue without deciders behind it.
 type fakeSource struct {
+	noActor     []string
 	pending     []Hosted
 	unreachable []Problem
 }
 
 func (f *fakeSource) Pending() []Hosted      { return f.pending }
 func (f *fakeSource) Unreachable() []Problem { return f.unreachable }
+func (f *fakeSource) WithoutActor() []string { return f.noActor }
 
 type fakeApprover struct {
 	approved []string
@@ -32,6 +34,7 @@ func (f *fakeApprover) Approve(key string) error {
 
 func entry(service, from, to string, kind version.Kind) Hosted {
 	return Hosted{
+		CanApply: true,
 		Entry: decide.Entry{
 			Service: service,
 			Image:   "ghcr.io/example/" + service,
@@ -204,5 +207,50 @@ func TestDigestMoveShowsTheTagNotTheDigest(t *testing.T) {
 	// No hex at all: not the full digest, and not a shortened one either.
 	if strings.Contains(body, "sha256:") {
 		t.Errorf("a digest is rendered where the tag should be")
+	}
+}
+
+// No actor is a standing fact about the deployment, so the page says it once
+// and greys the buttons -- rather than letting someone find out by clicking
+// and getting an error that then persists across reloads.
+func TestNoActorSaysSoAndDisablesTheButtons(t *testing.T) {
+	e := entry("gluetun", "1.0", "1.1", version.KindMinor)
+	e.CanApply = false
+	s := &Server{
+		Source:   &fakeSource{pending: []Hosted{e}, noActor: []string{"optiplex"}},
+		Approver: &fakeApprover{},
+		Version:  "v1",
+	}
+
+	_, body := get(t, s, "/")
+	if !strings.Contains(body, "no actor") {
+		t.Error("the page does not say there is no actor")
+	}
+	if !strings.Contains(body, "<button class=\"apply\" type=\"button\" disabled") {
+		t.Error("the Update button is not disabled")
+	}
+	// The row is still there: it has a decision waiting, and hiding it would
+	// make it look like one that does not.
+	if !strings.Contains(body, "gluetun") {
+		t.Error("the row vanished along with its button")
+	}
+}
+
+// The positive: with an actor, the button is a live form.
+func TestWithAnActorTheButtonSubmits(t *testing.T) {
+	s := &Server{
+		Source:   &fakeSource{pending: []Hosted{entry("gluetun", "1.0", "1.1", version.KindMinor)}},
+		Approver: &fakeApprover{},
+		Version:  "v1",
+	}
+	_, body := get(t, s, "/")
+	if strings.Contains(body, "<button class=\"apply\" type=\"button\" disabled") {
+		t.Error("the button is disabled although the decider has an actor")
+	}
+	if !strings.Contains(body, `<button class="apply" type="submit">`) {
+		t.Error("no submitting Update button")
+	}
+	if strings.Contains(body, "no actor") {
+		t.Error("the page claims there is no actor")
 	}
 }

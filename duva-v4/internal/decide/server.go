@@ -100,14 +100,23 @@ type Snapshot struct {
 	Host    string  `json:"host"`
 	Version string  `json:"version"`
 	Pending []Entry `json:"pending"`
+	// CanApply is whether this decider has an actor to hand work to.
+	//
+	// Reported rather than left to be discovered by clicking: a decider
+	// without one queues every decision and applies nothing, which is a
+	// standing fact about the deployment and not a thing that goes wrong
+	// when a button is pressed. A UI that only found out on the click would
+	// offer an action it knew could not work.
+	CanApply bool `json:"can_apply"`
 }
 
 func (s *Server) snapshot(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(Snapshot{
-		Host:    s.Host,
-		Version: s.Version,
-		Pending: s.Queue.List(),
+		Host:     s.Host,
+		Version:  s.Version,
+		Pending:  s.Queue.List(),
+		CanApply: s.Applier != nil,
 	})
 }
 

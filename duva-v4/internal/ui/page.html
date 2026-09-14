@@ -54,6 +54,8 @@
             border-radius: 8px; }
   .banner-error { background: var(--major-bg); border-color: var(--major-line);
                   color: var(--major); }
+  /* A standing fact, not a failure: muted rather than red. */
+  .banner-note { color: var(--muted); }
   .banner .who { font-weight: 650; }
 
   /* ---------- section framing ---------- */
@@ -110,8 +112,12 @@
   .apply { font-size: .8rem; line-height: 1.25; padding: .15rem .6rem;
            border: 1px solid transparent; border-radius: 5px;
            background: var(--accent); color: var(--accent-fg); font-weight: 600; }
-  .apply:hover { filter: brightness(1.07); }
-  .apply:active { transform: translateY(1px); }
+  .apply:hover:not(:disabled) { filter: brightness(1.07); }
+  .apply:active:not(:disabled) { transform: translateY(1px); }
+  /* Greyed rather than hidden: the row still has a decision waiting, and
+     removing the button would make it look like one that does not. */
+  .apply:disabled { background: none; border-color: var(--line);
+                    color: var(--faint); font-weight: 400; cursor: not-allowed; }
   .apply:focus-visible { outline: 1px solid currentColor; outline-offset: 2px; }
 
   /* ---------- empty state: the common case ---------- */
@@ -156,6 +162,15 @@
     {{if .Pending}}<span class="count">{{len .Pending}} to decide</span>{{end}}
   </div>
 
+  {{if .WithoutActor}}
+  <div class="banner banner-note">
+    <span class="who">no actor</span> &mdash;
+    {{range .WithoutActor}}<span class="mono">{{.}}</span> {{end}}
+    {{if gt (len .WithoutActor) 1}}have{{else}}has{{end}} nothing to apply with,
+    so updates can be queued but not made.
+  </div>
+  {{end}}
+
   {{if .Unreachable}}
   <div class="banner banner-error">
     <span class="who">unreachable</span> &mdash;
@@ -183,10 +198,15 @@
       <span class="jump mono">{{if .Moved}}<span class="to">{{.Tag}}</span>{{else}}<span class="from">{{.CurrentTag}}</span><span class="arrow">&rarr;</span><span class="to">{{.Candidate}}</span>{{end}}</span>
       <span class="kind kind-{{.Kind}}"{{if eq .Kind "unknown"}} title="duva could not compare these tags — not a semantic version"{{end}}>{{.Kind}}</span>
       {{if $.CanApply}}
+      {{if .CanApply}}
       <form method="post" action="/apply">
         <input type="hidden" name="service" value="{{.Key}}">
         <button class="apply" type="submit">Update</button>
       </form>
+      {{else}}
+      <button class="apply" type="button" disabled
+              title="{{.Host}} has no actor configured, so nothing can be applied">Update</button>
+      {{end}}
       {{end}}
     </li>
     {{end}}

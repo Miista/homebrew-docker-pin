@@ -75,6 +75,9 @@ const defaultMaxAge = 5 * time.Second
 // snapshot is one decider's last answer, with whether it could be reached.
 type snapshot struct {
 	queue []decide.Entry
+	// canApply is whether this decider has an actor. Per decider, not per
+	// collector: one host can have an actor while another does not.
+	canApply bool
 	// err is the transport failure, when the decider could not be asked.
 	//
 	// Kept rather than dropped because an unreachable decider must render as
@@ -106,8 +109,8 @@ func (c *Collector) Collect() {
 		wg.Add(1)
 		go func(i int, d Decider) {
 			defer wg.Done()
-			q, err := c.fetch(d)
-			results[i] = snapshot{queue: q, err: err}
+			snap, err := c.fetch(d)
+			results[i] = snapshot{queue: snap.Pending, canApply: snap.CanApply, err: err}
 		}(i, d)
 	}
 	wg.Wait()
@@ -131,29 +134,29 @@ func (c *Collector) Collect() {
 }
 
 // fetch reads one decider's queue.
-func (c *Collector) fetch(d Decider) ([]decide.Entry, error) {
+func (c *Collector) fetch(d Decider) (decide.Snapshot, error) {
 	req, err := http.NewRequest(http.MethodGet, strings.TrimSuffix(d.URL, "/")+"/v1/snapshot", nil)
 	if err != nil {
-		return nil, err
+		return decide.Snapshot{}, err
 	}
 	if d.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+d.Token)
 	}
 	resp, err := c.client().Do(req)
 	if err != nil {
-		return nil, err
+		return decide.Snapshot{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return nil, fmt.Errorf("%s: %s", resp.Status, strings.TrimSpace(string(body)))
+		return decide.Snapshot{}, fmt.Errorf("%s: %s", resp.Status, strings.TrimSpace(string(body)))
 	}
 
 	var snap decide.Snapshot
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 8<<20)).Decode(&snap); err != nil {
-		return nil, fmt.Errorf("reading its queue: %w", err)
+		return decide.Snapshot{}, fmt.Errorf("reading its queue: %w", err)
 	}
-	return snap.Pending, nil
+	return snap, nil
 }
 
 // fresh collects if the cache is older than MaxAge. Called by every read, so
@@ -182,6 +185,9 @@ func (c *Collector) fresh() {
 // field only something else uses.
 type Hosted struct {
 	decide.Entry
+	// CanApply is whether this row's decider has an actor. Per row, because
+	// one host can have an actor while another does not.
+	CanApply bool
 	Host string
 }
 
@@ -199,7 +205,7 @@ func (c *Collector) Pending() []Hosted {
 		}
 		for _, e := range s.queue {
 			// The configured host, not the reported one: see Decider.Host.
-			out = append(out, Hosted{Entry: e, Host: d.Host})
+			out = append(out, Hosted{Entry: e, Host: d.Host, CanApply: s.canApply})
 		}
 	}
 	// By host then service, so a row keeps its place between reloads however
@@ -293,4 +299,31 @@ func SplitKey(key string) (host, service string, ok bool) {
 		return "", "", false
 	}
 	return key[:i], key[i+1:], true
+}
+
+// WithoutActor names the deciders that have no actor, so the page can say so
+// once rather than per row.
+//
+// A standing fact about the deployment, not an error: a decider without an
+// actor queues every decision and applies nothing, which is how this runs
+// before an actor is trusted with the docker socket. Reported so the page can
+// say it plainly and disable the buttons, rather than letting someone find
+// out by clicking.
+//
+// Unreachable deciders are not included. Nothing is known about them, and
+// listing one here would claim it has no actor when the truth is that it was
+// not asked.
+func (c *Collector) WithoutActor() []string {
+	c.fresh()
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	var out []string
+	for _, d := range c.Deciders {
+		if s, ok := c.cache[d.Host]; ok && s.err == nil && !s.canApply {
+			out = append(out, d.Host)
+		}
+	}
+	sort.Strings(out)
+	return out
 }

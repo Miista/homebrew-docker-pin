@@ -37,6 +37,9 @@ var page = template.Must(template.New("page").Parse(pageHTML))
 type Source interface {
 	// Pending returns what is waiting, labelled by host and sorted.
 	Pending() []Hosted
+	// WithoutActor names deciders that have no actor, so the page can say
+	// so once and disable the buttons those rows would otherwise offer.
+	WithoutActor() []string
 	// Unreachable lists deciders that could not be asked. Rendered rather
 	// than logged: a queue missing a host looks exactly like that host
 	// having nothing to do.
@@ -104,11 +107,14 @@ type row struct {
 	// no from/to to render.
 	Moved bool
 	// Tag is what the service follows, shown instead of a digest pair.
-	Tag  string
-	Kind string
-	Why        string
-	FirstSeen  string
-	Auto       string
+	Tag string
+	// CanApply is whether this row's decider has an actor. Per row: one host
+	// can have an actor while another does not.
+	CanApply  bool
+	Kind      string
+	Why       string
+	FirstSeen string
+	Auto      string
 }
 
 func (s *Server) index(w http.ResponseWriter, r *http.Request) {
@@ -131,33 +137,43 @@ func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 			// A moving tag that moved has no new tag to show: the tag is the
 			// same, and the digest is 71 characters that say nothing a person
 			// can act on. The tag alone is the whole of what changed.
-			Moved: isDigestMove(e.Entry),
-			Tag:   e.Tag,
-			Kind:       kindLabel(e.Entry),
-			Why:        e.Why,
-			FirstSeen:  e.FirstSeen,
-			Auto:       string(e.Auto),
+			Moved:     isDigestMove(e.Entry),
+			Tag:       e.Tag,
+			CanApply:  e.CanApply,
+			Kind:      kindLabel(e.Entry),
+			Why:       e.Why,
+			FirstSeen: e.FirstSeen,
+			Auto:      string(e.Auto),
 		})
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	page.Execute(w, struct {
-		Pending     []row
-		Unreachable []Problem
-		Version     string
-		CanApply    bool
-		Service     string
-		Level       string
-		Message     string
+	// Execute's error is checked rather than dropped. A template naming a
+	// field the data does not carry fails mid-render, after a 200 and a half
+	// a page have already gone out -- which reads as a blank page with no
+	// explanation anywhere. Logging it is the difference between a minute and
+	// an hour.
+	if err := page.Execute(w, struct {
+		Pending      []row
+		Unreachable  []Problem
+		WithoutActor []string
+		Version      string
+		CanApply     bool
+		Service      string
+		Level        string
+		Message      string
 	}{
-		Pending:     rows,
-		Unreachable: s.Source.Unreachable(),
-		Version:     s.Version,
-		CanApply:    s.Approver != nil,
-		Service:     r.URL.Query().Get("service"),
-		Level:       r.URL.Query().Get("level"),
-		Message:     r.URL.Query().Get("message"),
-	})
+		Pending:      rows,
+		Unreachable:  s.Source.Unreachable(),
+		WithoutActor: s.Source.WithoutActor(),
+		Version:      s.Version,
+		CanApply:     s.Approver != nil,
+		Service:      r.URL.Query().Get("service"),
+		Level:        r.URL.Query().Get("level"),
+		Message:      r.URL.Query().Get("message"),
+	}); err != nil {
+		fmt.Fprintf(w, "\n<!-- the page failed to render: %s -->\n", err)
+	}
 }
 
 // apply approves one queued entry and redirects back to the page carrying
