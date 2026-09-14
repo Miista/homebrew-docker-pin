@@ -57,5 +57,21 @@ COPY --from=build /out/detector /detector
 COPY --from=build --chown=nonroot:nonroot /out/data /data
 
 VOLUME ["/compose", "/data"]
+
+# The detector serves no HTTP, so health is the binary answering about itself
+# rather than a port something polls. Exec form with no shell, because this
+# image has none.
+#
+# What it reports is whether the webhook can be reached: between daily runs
+# that is the one thing both outside this process and fatal to its purpose,
+# since a detector that cannot publish does all the work and drops the result.
+# With no webhook configured it is healthy -- findings going only to the log is
+# a real way to run this.
+#
+# Only meaningful in serve mode. A one-shot `run` exits, and Docker does not
+# health-check a container that is not running.
+HEALTHCHECK --interval=5m --timeout=10s --start-period=10s --retries=2 \
+  CMD ["/detector", "health"]
+
 USER nonroot:nonroot
 ENTRYPOINT ["/detector"]

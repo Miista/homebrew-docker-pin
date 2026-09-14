@@ -102,8 +102,20 @@ func main() {
 			return
 		case "run", "serve":
 			mode = os.Args[1]
+		case "health":
+			// For HEALTHCHECK. The detector serves no HTTP of its own, so
+			// health is a subcommand the image can exec rather than a port
+			// something can poll -- which also means it needs no shell and no
+			// curl, neither of which a distroless image carries.
+			//
+			// What it reports is whether the webhook can be reached, because
+			// that is the one thing that is both outside this process and
+			// fatal to its purpose: a detector that cannot publish is doing
+			// all the work and dropping the result. Between daily runs there
+			// is nothing else to be wrong.
+			os.Exit(health())
 		default:
-			fmt.Fprintln(os.Stderr, "Usage: detector [run|serve|version]")
+			fmt.Fprintln(os.Stderr, "Usage: detector [run|serve|health|version]")
 			os.Exit(1)
 		}
 	}
@@ -128,6 +140,24 @@ func main() {
 // scheduled check and a manual one do exactly the same thing. A separate
 // scheduled path would be a second implementation to keep in agreement with
 // the first.
+// health is the exit code for the health subcommand: 0 healthy, 1 not.
+//
+// A detector with no webhook configured is healthy. That is a real way to run
+// it -- findings go to the log and nowhere else -- and reporting a deliberate
+// configuration as unhealthy would make the signal useless for everyone who
+// runs it that way.
+func health() int {
+	url := os.Getenv("DETECTOR_WEBHOOK_URL")
+	if url == "" {
+		return 0
+	}
+	if err := dialWebhook(url); err != nil {
+		fmt.Fprintf(os.Stderr, "the webhook at %s cannot be reached: %v\n", url, err)
+		return 1
+	}
+	return 0
+}
+
 func serve(log zerolog.Logger) error {
 	expr := scheduleFromEnv()
 	// Validated before the first check rather than at the first tick: a

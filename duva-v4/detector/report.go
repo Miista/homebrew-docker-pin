@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	neturl "net/url"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -51,6 +52,10 @@ type reporter struct {
 	// the end rather than either lying about publishing or printing hundreds
 	// of identical errors.
 	skipped int
+	// refused counts findings the webhook answered but would not accept.
+	// Separate from skipped, because a consumer that is there and saying no
+	// is a different problem from one that is not there at all.
+	refused int
 	// failed counts every finding that did not land, whatever the reason --
 	// refused, unreachable, or skipped after the webhook was written off.
 	//
@@ -71,12 +76,57 @@ func newReporter(url, host string, log zerolog.Logger) *reporter {
 		// a real project without wiring anything to it.
 		log.Info().Msg("no DETECTOR_WEBHOOK_URL: findings will be logged and not published anywhere")
 	}
-	return &reporter{
+	r := &reporter{
 		url:  url,
 		host: host,
 		log:  log,
 		http: &http.Client{Timeout: 15 * time.Second},
 	}
+	if url != "" {
+		if err := dialWebhook(url); err != nil {
+			// Said once, here, and not again per finding. Not a refusal to
+			// start: a detector whose webhook is down still logs what it
+			// found, which is how you point it at a project before wiring a
+			// consumer to it.
+			//
+			// Not marked unreachable either -- that is this run's business,
+			// and a webhook that is down now may be up by the time the first
+			// finding is ready. The per-finding path writes it off on a real
+			// failure; this only tells the operator.
+			log.Warn().Msgf("the webhook at %s cannot be reached right now (%v)", url, err)
+		}
+	}
+	return r
+}
+
+// dialWebhook opens a TCP connection to a webhook URL and closes it.
+//
+// Only the dial, not a request: whether the thing at the other end accepts a
+// finding is its business and varies per finding. Whether the name resolves
+// and the port answers is a fact about the deployment, and it is the one that
+// produces hundreds of identical errors when it is wrong.
+//
+// Shared by startup and the health subcommand, so "reachable" means the same
+// thing in the log and in `docker ps`.
+func dialWebhook(rawURL string) error {
+	u, err := neturl.Parse(rawURL)
+	if err != nil {
+		return err
+	}
+	host := u.Host
+	if u.Port() == "" {
+		// Dial needs a port even where a URL does not.
+		if u.Scheme == "https" {
+			host = net.JoinHostPort(u.Hostname(), "443")
+		} else {
+			host = net.JoinHostPort(u.Hostname(), "80")
+		}
+	}
+	conn, err := net.DialTimeout("tcp", host, 5*time.Second)
+	if err != nil {
+		return err
+	}
+	return conn.Close()
 }
 
 // Event is what the detector publishes: one tag, and when it appeared.
@@ -144,15 +194,25 @@ func (r *reporter) report(f detect.Finding) {
 
 	resp, err := r.http.Post(r.url, "application/json", bytes.NewReader(body))
 	if err != nil {
-		r.log.Error().Msgf("%s: could not publish %s — %v", f.Service, f.Tag, err)
 		r.failed++
 		// Could not resolve or dial it at all: that is a fact about the
 		// webhook, not about this finding, and it will be just as true for
 		// the next several hundred. Stop for the rest of the run.
+		//
+		// Said once, at WARN, and only if startup did not already say it --
+		// a webhook that went down mid-run is news, one that was down before
+		// the first finding is not. Everything after is counted and reported
+		// by summarise, because several hundred identical lines is not more
+		// informative than one.
 		if isUnreachable(err) {
 			r.unreachable = true
-			r.log.Warn().Msg("the webhook cannot be reached, so the rest of this run's findings will not be published")
+			r.log.Warn().Msg("the webhook stopped answering, so the rest of this run's findings will not be published")
+			return
 		}
+		// Something else went wrong with this one request. Debug rather than
+		// error: the run's own summary is where an operator learns how many
+		// findings did not land, and one line per finding buries it.
+		r.log.Debug().Msgf("%s: could not publish %s — %v", f.Service, f.Tag, err)
 		return
 	}
 	// Drained before closing, or the connection is not returned to the pool
@@ -166,8 +226,16 @@ func (r *reporter) report(f detect.Finding) {
 		// What is at the other end refused it. Said plainly rather than
 		// interpreted: this tool does not know what a 422 means to whatever
 		// is subscribed, only that it did not accept the finding.
-		r.log.Error().Msgf("%s: the webhook refused %s with %s", f.Service, f.Tag, resp.Status)
+		//
+		// The first refusal is worth a line -- it carries the status, which
+		// is the thing that explains the rest. After that they are counted:
+		// a consumer refusing everything produces one refusal per finding,
+		// and the hundredth says nothing the first did not.
 		r.failed++
+		r.refused++
+		if r.refused == 1 {
+			r.log.Warn().Msgf("the webhook refused %s for %s with %s", f.Tag, f.Service, resp.Status)
+		}
 		return
 	}
 	r.log.Debug().Msgf("%s: published %s", f.Service, f.Tag)
@@ -200,8 +268,13 @@ func isUnreachable(err error) bool {
 //
 // One line rather than one per finding: several hundred identical errors is
 // not more information than the fact, and it buries the findings themselves.
+// summarise says once, at the end, what the per-finding path stayed quiet
+// about. This is where an operator learns how much did not land.
 func (r *reporter) summarise() {
 	if r.skipped > 0 {
-		r.log.Warn().Msgf("%d further findings were not published, because the webhook could not be reached", r.skipped)
+		r.log.Warn().Msgf("%d finding(s) were not published, because the webhook could not be reached", r.skipped)
+	}
+	if r.refused > 1 {
+		r.log.Warn().Msgf("%d finding(s) were refused by the webhook", r.refused)
 	}
 }
