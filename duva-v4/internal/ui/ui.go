@@ -47,9 +47,9 @@ var page = template.Must(template.New("page").Delims("[[", "]]").Parse(pageHTML)
 type Source interface {
 	// Pending returns what is waiting, labelled by host and sorted.
 	Pending() []Hosted
-	// WithoutActor names deciders that have no actor, so the page can say
-	// so once and disable the buttons those rows would otherwise offer.
-	WithoutActor() []string
+	// Blocked names deciders that cannot apply right now, with why, so the
+	// page can say it once and disable the buttons those rows offer.
+	Blocked() []Blocked
 	// Unreachable lists deciders that could not be asked. Rendered rather
 	// than logged: a queue missing a host looks exactly like that host
 	// having nothing to do.
@@ -183,11 +183,11 @@ func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 // after it are describing the same thing. Two shapes would be two chances to
 // disagree about what a queue is.
 type state struct {
-	Rows         []row     `json:"rows"`
-	Unreachable  []Problem `json:"unreachable"`
-	WithoutActor []string  `json:"without_actor"`
-	CanApply     bool      `json:"can_apply"`
-	Version      string    `json:"version"`
+	Rows        []row     `json:"rows"`
+	Unreachable []Problem `json:"unreachable"`
+	Blocked     []Blocked `json:"blocked"`
+	CanApply    bool      `json:"can_apply"`
+	Version     string    `json:"version"`
 }
 
 func (s *Server) snapshot() state {
@@ -202,16 +202,16 @@ func (s *Server) snapshot() state {
 	if unreachable == nil {
 		unreachable = []Problem{}
 	}
-	withoutActor := s.Source.WithoutActor()
-	if withoutActor == nil {
-		withoutActor = []string{}
+	blocked := s.Source.Blocked()
+	if blocked == nil {
+		blocked = []Blocked{}
 	}
 	return state{
-		Rows:         rows,
-		Unreachable:  unreachable,
-		WithoutActor: withoutActor,
-		CanApply:     s.Approver != nil,
-		Version:      s.Version,
+		Rows:        rows,
+		Unreachable: unreachable,
+		Blocked:     blocked,
+		CanApply:    s.Approver != nil,
+		Version:     s.Version,
 	}
 }
 

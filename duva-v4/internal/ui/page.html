@@ -198,11 +198,8 @@
     <span class="count" v-if="rows.length">{{ rows.length }} to decide</span>
   </div>
 
-  <div class="banner banner-note" v-if="withoutActor.length">
-    <span class="who">no actor</span> &mdash;
-    <span class="mono" v-for="h in withoutActor">{{ h }} </span>
-    {{ withoutActor.length > 1 ? "have" : "has" }} nothing to apply with,
-    so updates can be queued but not made.
+  <div class="banner banner-note" v-for="b in blocked">
+    <span class="who">{{ b.host }}</span> &mdash; {{ b.reason }}
   </div>
 
   <div class="banner banner-error" v-if="unreachable.length">
@@ -273,7 +270,7 @@ createApp({
     return {
       rows: initial.rows || [],
       unreachable: initial.unreachable || [],
-      withoutActor: initial.without_actor || [],
+      blocked: initial.blocked || [],
       canApply: initial.can_apply,
       version: initial.version,
       steps: {},        // key -> lines so far
@@ -295,7 +292,7 @@ createApp({
           const s = await (await fetch("/api/state")).json()
           this.rows = s.rows || []
           this.unreachable = s.unreachable || []
-          this.withoutActor = s.without_actor || []
+          this.blocked = s.blocked || []
           this.canApply = s.can_apply
         } catch (e) {
           // A failed poll is not worth reporting: the next one is 15s away,
@@ -306,8 +303,12 @@ createApp({
 
       buttonReason(r) {
         if (r.stale) return r.host + " is not answering, so this cannot be confirmed or applied"
-        if (!r.can_apply) return r.host + " has no actor configured, so nothing can be applied"
-        return ""
+        if (r.can_apply) return ""
+        // The decider's own words, relayed: why an actor would refuse is its
+        // business, and a sentence composed here would be one this page had
+        // to keep in agreement with an actor it knows nothing about.
+        const b = this.blocked.find(b => b.host === r.host)
+        return b && b.reason ? r.host + " — " + b.reason : r.host + " cannot apply right now"
       },
 
       async apply(r) {

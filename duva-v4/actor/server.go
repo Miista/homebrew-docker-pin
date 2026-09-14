@@ -32,6 +32,13 @@ type Server struct {
 	// A function rather than a method so the transaction can be swapped for
 	// a fake in tests without faking the daemon and a git repository.
 	Apply func(r actor.Request, step func(string, ...any)) (actor.Status, string)
+	// Ready reports whether work offered now would be attempted, and why not.
+	//
+	// Injected like Apply, and for the same reason: what makes this actor
+	// ready is a git working tree, which a test should not have to build to
+	// exercise the endpoint. Nil means always ready -- an actor that cannot
+	// tell should not claim to be broken.
+	Ready func() actor.Readiness
 	// Token, when set, is required on /v1/apply.
 	Token string
 	// Version is the build.
@@ -56,6 +63,7 @@ func (s *Server) Handler() http.Handler {
 		w.Write([]byte("ok\n"))
 	})
 	mux.HandleFunc("/v1/apply", s.guard(s.apply))
+	mux.HandleFunc("/v1/ready", s.ready)
 	// Deliberately unguarded: it returns nothing when no work is running, so
 	// there is no session to guess at and nothing to leak. Guarding it would
 	// mean a token for reading a log that is about to be shown to whoever
@@ -206,4 +214,20 @@ func flush(w http.ResponseWriter) {
 
 func (s *Server) logf(format string, args ...any) {
 	s.Log.Info().Msgf(format, args...)
+}
+
+// ready reports whether work offered now would be attempted.
+//
+// Unguarded, like /healthz and for the same reason: the caller is a decider
+// asking a yes-or-no question about itself, and the answer names no service
+// and carries no secret. A token here would mean the UI could not show why a
+// button is grey without holding one.
+func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
+	out := actor.Readiness{Ready: true}
+	if s.Ready != nil {
+		out = s.Ready()
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	json.NewEncoder(w).Encode(out)
 }

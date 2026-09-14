@@ -36,3 +36,54 @@ func TestApplyWithNoActorSaysSo(t *testing.T) {
 		t.Error("the entry left the queue for an apply that never happened")
 	}
 }
+
+// fakeApplier is an Applier that can report readiness.
+
+// An actor that is there but would refuse must reach the page as not-applyable,
+// with its own words. The reference actor refuses on an uncommitted
+// repository, because applying commits -- and a button that looks live until
+// clicked is the failure this reporting exists to prevent.
+func TestSnapshotRelaysWhyAnActorWouldRefuse(t *testing.T) {
+	const reason = "the repository has uncommitted changes, and applying commits"
+	s := &Server{
+		Queue:   NewPending(),
+		Applier: &fakeApplier{ready: boolPtr(false), reason: reason},
+		Host:    "optiplex",
+	}
+
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/snapshot", nil))
+
+	var snap Snapshot
+	if err := json.NewDecoder(rec.Body).Decode(&snap); err != nil {
+		t.Fatalf("decoding: %v", err)
+	}
+	if snap.CanApply {
+		t.Error("an actor that would refuse is reported as able to apply")
+	}
+	if snap.WhyNot != reason {
+		t.Errorf("why_not = %q, want the actor's own words", snap.WhyNot)
+	}
+}
+
+// The positive: a ready actor reports applyable with nothing to explain.
+func TestSnapshotSaysApplyableWhenTheActorIsReady(t *testing.T) {
+	s := &Server{
+		Queue:   NewPending(),
+		Applier: &fakeApplier{ready: boolPtr(true)},
+		Host:    "optiplex",
+	}
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/snapshot", nil))
+
+	var snap Snapshot
+	json.NewDecoder(rec.Body).Decode(&snap)
+	if !snap.CanApply {
+		t.Error("a ready actor is reported as unable to apply")
+	}
+	if snap.WhyNot != "" {
+		t.Errorf("why_not = %q, want empty when ready", snap.WhyNot)
+	}
+}
+
+func boolPtr(b bool) *bool { return &b }

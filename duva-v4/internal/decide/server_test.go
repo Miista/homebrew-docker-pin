@@ -13,6 +13,10 @@ type fakeApplier struct {
 	started []Entry
 	err     error
 	lines   []string
+	// ready and reason make this a ReadinessReporter. Unset means ready,
+	// which is what an Applier that cannot answer is treated as.
+	ready  *bool
+	reason string
 }
 
 func (f *fakeApplier) Start(e Entry) error {
@@ -297,4 +301,14 @@ func TestARefusedStartLeavesItQueued(t *testing.T) {
 	if q.Len() != 1 {
 		t.Error("a refused start dropped the entry")
 	}
+}
+
+// Ready makes fakeApplier a ReadinessReporter. A nil `ready` means the fake
+// does not implement readiness meaningfully and reports ready, matching what
+// the decider assumes of an Applier that cannot answer.
+func (f *fakeApplier) Ready() (bool, string) {
+	if f.ready == nil {
+		return true, ""
+	}
+	return *f.ready, f.reason
 }

@@ -151,3 +151,31 @@ func (c *Client) absolute(loc string) string {
 	}
 	return strings.TrimSuffix(c.BaseURL, "/") + "/" + strings.TrimPrefix(loc, "/")
 }
+
+// Ready asks whether the actor would take work right now.
+//
+// A short timeout of its own, whatever the client carries: this is called to
+// render a page, and an actor that has stopped answering must grey a button
+// in a moment rather than hang the queue. Unreachable reads as not ready,
+// with the transport error as the reason -- which is true, and is what an
+// operator needs to see.
+func (c *Client) Ready(ctx context.Context) Readiness {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/v1/ready", nil)
+	if err != nil {
+		return Readiness{Reason: err.Error()}
+	}
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return Readiness{Reason: "the actor cannot be reached: " + err.Error()}
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return Readiness{Reason: "the actor answered " + resp.Status}
+	}
+	var out Readiness
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&out); err != nil {
+		return Readiness{Reason: "the actor's answer could not be read: " + err.Error()}
+	}
+	return out
+}

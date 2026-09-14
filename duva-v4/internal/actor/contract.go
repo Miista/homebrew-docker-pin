@@ -135,3 +135,22 @@ func ParseTerminal(line string) (s Status, reason string, ok bool) {
 		return "", "", false
 	}
 }
+
+// Readiness is whether an actor would accept work right now, and why not.
+//
+// Part of the contract because a UI that offers a button for work the actor
+// would refuse is worse than one that greys it: the person has already
+// decided by the time they find out. The same reasoning as reporting whether
+// a decider has an actor at all.
+//
+// Deliberately not "is the repository clean". That is *this* actor's reason,
+// and the contract must not learn it -- an actor that opens a pull request
+// has no working tree to be dirty, and one that writes to a config service
+// has neither. What every actor can answer is whether it would take work, and
+// a sentence a person can read when it would not.
+type Readiness struct {
+	// Ready is whether work offered now would be attempted.
+	Ready bool `json:"ready"`
+	// Reason is why not, in words meant for a person. Empty when ready.
+	Reason string `json:"reason,omitempty"`
+}

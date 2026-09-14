@@ -241,3 +241,16 @@ func trimCR(b []byte) []byte {
 }
 
 var _ io.Writer = (*live)(nil)
+
+// Ready asks the actor whether work offered now would be attempted.
+//
+// Asked per snapshot rather than cached: what makes this actor unready is a
+// dirty working tree, which becomes clean the moment someone commits, and a
+// cached answer would leave the button grey after the thing that greyed it
+// was fixed. It is one local request against a container on the same host.
+func (a *applier) Ready() (bool, string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	r := a.client.Ready(ctx)
+	return r.Ready, r.Reason
+}

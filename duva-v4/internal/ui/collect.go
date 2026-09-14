@@ -78,6 +78,8 @@ type snapshot struct {
 	// canApply is whether this decider has an actor. Per decider, not per
 	// collector: one host can have an actor while another does not.
 	canApply bool
+	// whyNot is the decider's reason, relayed to the page unchanged.
+	whyNot string
 	// err is the transport failure, when the decider could not be asked.
 	//
 	// Kept rather than dropped because an unreachable decider must render as
@@ -110,7 +112,7 @@ func (c *Collector) Collect() {
 		go func(i int, d Decider) {
 			defer wg.Done()
 			snap, err := c.fetch(d)
-			results[i] = snapshot{queue: snap.Pending, canApply: snap.CanApply, err: err}
+			results[i] = snapshot{queue: snap.Pending, canApply: snap.CanApply, whyNot: snap.WhyNot, err: err}
 		}(i, d)
 	}
 	wg.Wait()
@@ -324,30 +326,34 @@ func SplitKey(key string) (host, service string, ok bool) {
 	return key[:i], key[i+1:], true
 }
 
-// WithoutActor names the deciders that have no actor, so the page can say so
-// once rather than per row.
+// Blocked names the deciders that cannot apply right now, with why.
 //
-// A standing fact about the deployment, not an error: a decider without an
-// actor queues every decision and applies nothing, which is how this runs
-// before an actor is trusted with the docker socket. Reported so the page can
-// say it plainly and disable the buttons, rather than letting someone find
-// out by clicking.
+// Not only "has no actor": an actor that is there and would refuse -- the
+// reference one refuses on an uncommitted repository, because applying
+// commits -- blocks a click just as completely. The reason comes from the
+// decider, which got it from the actor, and is relayed unchanged: a UI that
+// composed this sentence would be one that had learned what applying means.
 //
 // Unreachable deciders are not included. Nothing is known about them, and
-// listing one here would claim it has no actor when the truth is that it was
-// not asked.
-func (c *Collector) WithoutActor() []string {
+// listing one here would claim a reason where the truth is that it was not
+// asked -- which Unreachable already says.
+type Blocked struct {
+	Host   string `json:"host"`
+	Reason string `json:"reason"`
+}
+
+func (c *Collector) Blocked() []Blocked {
 	c.fresh()
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	var out []string
+	var out []Blocked
 	for _, d := range c.Deciders {
 		if s, ok := c.cache[d.Host]; ok && s.err == nil && !s.canApply {
-			out = append(out, d.Host)
+			out = append(out, Blocked{Host: d.Host, Reason: s.whyNot})
 		}
 	}
-	sort.Strings(out)
+	sort.Slice(out, func(i, j int) bool { return out[i].Host < out[j].Host })
 	return out
 }
 

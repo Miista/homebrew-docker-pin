@@ -14,14 +14,14 @@ import (
 
 // fakeSource is a queue without deciders behind it.
 type fakeSource struct {
-	noActor     []string
+	blocked     []Blocked
 	pending     []Hosted
 	unreachable []Problem
 }
 
 func (f *fakeSource) Pending() []Hosted      { return f.pending }
 func (f *fakeSource) Unreachable() []Problem { return f.unreachable }
-func (f *fakeSource) WithoutActor() []string { return f.noActor }
+func (f *fakeSource) Blocked() []Blocked     { return f.blocked }
 
 type fakeApprover struct {
 	approved []string
@@ -181,7 +181,7 @@ func TestStateNeverSendsNullSlices(t *testing.T) {
 	rec := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/state", nil))
 	body := rec.Body.String()
-	for _, field := range []string{`"rows":null`, `"unreachable":null`, `"without_actor":null`} {
+	for _, field := range []string{`"rows":null`, `"unreachable":null`, `"blocked":null`} {
 		if strings.Contains(body, field) {
 			t.Errorf("%s would throw in the browser: %s", field, body)
 		}
@@ -219,7 +219,7 @@ func TestStateMarksRowsThatCannotBeApplied(t *testing.T) {
 	stale.Stale = true
 
 	s := &Server{
-		Source:   &fakeSource{pending: []Hosted{noActor, stale}, noActor: []string{"optiplex"}},
+		Source:   &fakeSource{pending: []Hosted{noActor, stale}, blocked: []Blocked{{Host: "optiplex", Reason: "no actor is configured"}}},
 		Approver: &fakeApprover{}, Version: "v1",
 	}
 
@@ -237,7 +237,7 @@ func TestStateMarksRowsThatCannotBeApplied(t *testing.T) {
 	if second, _ := rows[1].(map[string]any); second["stale"] != true {
 		t.Error("a row from an unreachable decider is not marked stale")
 	}
-	if wa, _ := got["without_actor"].([]any); len(wa) != 1 {
+	if wa, _ := got["blocked"].([]any); len(wa) != 1 {
 		t.Error("the host with no actor is not named")
 	}
 }

@@ -100,23 +100,31 @@ type Snapshot struct {
 	Host    string  `json:"host"`
 	Version string  `json:"version"`
 	Pending []Entry `json:"pending"`
-	// CanApply is whether this decider has an actor to hand work to.
+	// CanApply is whether an update approved now would actually be attempted.
 	//
-	// Reported rather than left to be discovered by clicking: a decider
-	// without one queues every decision and applies nothing, which is a
-	// standing fact about the deployment and not a thing that goes wrong
-	// when a button is pressed. A UI that only found out on the click would
-	// offer an action it knew could not work.
+	// Not merely "an actor is configured". An actor that is there and would
+	// refuse the work -- this one refuses on an uncommitted repository,
+	// because applying commits -- is the same to a person clicking the
+	// button: they have already decided by the time they find out. Reported
+	// so a UI can grey it beforehand.
 	CanApply bool `json:"can_apply"`
+	// WhyNot is what to say when CanApply is false, in the actor's own words.
+	//
+	// Relayed, not composed: why an actor would refuse is its business, and
+	// a decider that wrote this sentence itself would be a decider that had
+	// learned what applying involves.
+	WhyNot string `json:"why_not,omitempty"`
 }
 
 func (s *Server) snapshot(w http.ResponseWriter, r *http.Request) {
+	canApply, whyNot := s.actorReadiness()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(Snapshot{
 		Host:     s.Host,
 		Version:  s.Version,
 		Pending:  s.Queue.List(),
-		CanApply: s.Applier != nil,
+		CanApply: canApply,
+		WhyNot:   whyNot,
 	})
 }
 
@@ -199,4 +207,29 @@ func writeMessage(w http.ResponseWriter, message string) {
 func readBody(r *http.Request) ([]byte, error) {
 	defer r.Body.Close()
 	return io.ReadAll(io.LimitReader(r.Body, 64<<10))
+}
+
+// ReadinessReporter is an Applier that can say whether it would take work.
+//
+// Separate from Applier because not every one can answer -- and an Applier
+// that cannot must stay usable rather than be excluded by the interface. The
+// decider reports what it is told and adds nothing: why an actor is not ready
+// is the actor's business, and the decider knowing would mean learning what
+// applying involves.
+type ReadinessReporter interface {
+	Ready() (ready bool, reason string)
+}
+
+// actorReadiness asks the applier, when it can answer.
+//
+// No actor at all is not-ready with the reason already used elsewhere, so a
+// page has one thing to render rather than two shapes of the same fact.
+func (s *Server) actorReadiness() (bool, string) {
+	if s.Applier == nil {
+		return false, "no actor is configured, so nothing can be applied from here"
+	}
+	if rr, ok := s.Applier.(ReadinessReporter); ok {
+		return rr.Ready()
+	}
+	return true, ""
 }

@@ -19,6 +19,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -84,6 +85,7 @@ func run(log zerolog.Logger) error {
 			Token:   token,
 			Version: version,
 			Log:     log,
+			Ready:   readiness,
 			Apply: func(req actor.Request, step func(string, ...any)) (actor.Status, string) {
 				return transaction(req, step, realDocker, realGit, push)
 			},
@@ -155,4 +157,34 @@ func boolEnv(key string, fallback bool) bool {
 		os.Exit(1)
 	}
 	return v
+}
+
+// readiness reports whether this actor would take work right now.
+//
+// It asks the same realGit.IsClean the transaction asks, so the answer a UI
+// greys a button on and the answer that refuses the work cannot disagree.
+// Anything else would be a second implementation of the precondition, which
+// is the way a button ends up enabled for work that is then refused.
+//
+// A busy repository reads as ready: someone is mid-commit, it will be quiet
+// in a moment, and greying every button for that would be noise. The
+// transaction retries it by design.
+func readiness() actor.Readiness {
+	clean, err := realGit.IsClean(composeDir)
+	switch {
+	case errors.Is(err, errRepoBusy):
+		return actor.Readiness{Ready: true}
+	case err != nil:
+		return actor.Readiness{
+			Ready:  false,
+			Reason: fmt.Sprintf("the repository at %s cannot be read: %v", composeDir, err),
+		}
+	case !clean:
+		return actor.Readiness{
+			Ready: false,
+			Reason: "the repository has uncommitted changes, and applying commits — " +
+				"commit or stash them and this clears on its own",
+		}
+	}
+	return actor.Readiness{Ready: true}
 }
