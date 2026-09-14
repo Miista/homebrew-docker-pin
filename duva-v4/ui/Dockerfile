@@ -11,7 +11,7 @@
 # Base images are pinned by digest, the same way this tool asks a compose file
 # to pin its own: the tag says which stream to follow, the digest records what
 # was actually built.
-FROM golang:1.26-alpine@sha256:28d89ee9cc0ff9fec75c82ca201e6bf7fdf9a679d4b7b24dfa04f2bb766bb468 AS build
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine@sha256:28d89ee9cc0ff9fec75c82ca201e6bf7fdf9a679d4b7b24dfa04f2bb766bb468 AS build
 WORKDIR /src
 
 # The context is the repository root, not duva-v4: this module replaces four
@@ -27,7 +27,12 @@ RUN cd duva-v4 && go mod download
 
 COPY . .
 ARG VERSION=dev
-RUN cd duva-v4 && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /out/ui ./ui
+# Set by buildx from the target platform. The build stage runs natively (see
+# --platform above) and Go cross-compiles, which is both far faster than
+# emulation and actually reliable: the Go toolchain under QEMU dies with
+# "sync: inconsistent mutex state" on this repo.
+ARG TARGETARCH
+RUN cd duva-v4 && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /out/ui ./ui
 
 # distroless-static, not scratch.
 #
@@ -41,5 +46,17 @@ FROM gcr.io/distroless/static-debian12:nonroot@sha256:6ec5aa99dc335666e79dc64e4a
 COPY --from=build /out/ui /ui
 
 EXPOSE 8080
+
+# Health is "is it serving", asked over the loopback port it serves on. A
+# subcommand rather than a port something polls, because this image carries
+# neither a shell nor curl; exec form for the same reason.
+#
+# Deliberately not a check on the deciders. An unreachable decider is this
+# page's subject matter -- it renders as unreachable, which is the whole point
+# of it -- and marking the UI unhealthy would take down the one thing that can
+# tell you a decider is down.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+  CMD ["/ui", "health"]
+
 USER nonroot:nonroot
 ENTRYPOINT ["/ui"]

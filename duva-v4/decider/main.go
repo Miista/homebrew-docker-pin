@@ -69,8 +69,13 @@ func main() {
 		case "version", "--version", "-v":
 			fmt.Println("decider", version)
 			return
+		case "health":
+			// For HEALTHCHECK. A subcommand rather than a port something
+			// polls, because this image carries neither a shell nor curl to
+			// poll it with.
+			os.Exit(health())
 		default:
-			fmt.Fprintln(os.Stderr, "Usage: decider [version]")
+			fmt.Fprintln(os.Stderr, "Usage: decider [health|version]")
 			os.Exit(1)
 		}
 	}
@@ -79,6 +84,31 @@ func main() {
 		log.Error().Msgf("%v", err)
 		os.Exit(1)
 	}
+}
+
+// health is the exit code for the health subcommand: 0 healthy, 1 not.
+//
+// It asks the running process, over the loopback port it serves on, rather
+// than re-deriving anything itself. A health check that re-reads the compose
+// file in a second process would report on the file, not on the server: the
+// server could be wedged, or dead, and the file would still parse.
+//
+// What it does not check is the actor. A decider with no actor is a decider
+// that queues everything and applies nothing, which is a legitimate way to
+// run it -- and the only way it runs today.
+func health() int {
+	c := &http.Client{Timeout: 5 * time.Second}
+	resp, err := c.Get("http://127.0.0.1" + addr + "/healthz")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "not serving: %v\n", err)
+		return 1
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		fmt.Fprintf(os.Stderr, "serving, but /healthz answered %s\n", resp.Status)
+		return 1
+	}
+	return 0
 }
 
 func run(log zerolog.Logger) error {

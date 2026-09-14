@@ -11,7 +11,7 @@
 # Base images are pinned by digest, the same way this tool asks a compose file
 # to pin its own: the tag says which stream to follow, the digest records what
 # was actually built.
-FROM golang:1.26-alpine@sha256:28d89ee9cc0ff9fec75c82ca201e6bf7fdf9a679d4b7b24dfa04f2bb766bb468 AS build
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine@sha256:28d89ee9cc0ff9fec75c82ca201e6bf7fdf9a679d4b7b24dfa04f2bb766bb468 AS build
 WORKDIR /src
 
 # The context is the repository root, not duva-v4: this module replaces four
@@ -27,7 +27,12 @@ RUN cd duva-v4 && go mod download
 
 COPY . .
 ARG VERSION=dev
-RUN cd duva-v4 && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /out/decider ./decider
+# Set by buildx from the target platform. The build stage runs natively (see
+# --platform above) and Go cross-compiles, which is both far faster than
+# emulation and actually reliable: the Go toolchain under QEMU dies with
+# "sync: inconsistent mutex state" on this repo.
+ARG TARGETARCH
+RUN cd duva-v4 && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /out/decider ./decider
 
 # distroless-static, not scratch.
 #
@@ -48,5 +53,18 @@ COPY --from=build /out/decider /decider
 # the split a convention rather than a constraint.
 VOLUME ["/compose"]
 EXPOSE 8080
+
+# Health is "is it serving", asked over the loopback port it serves on. A
+# subcommand rather than a port something polls, because this image carries
+# neither a shell nor curl; exec form for the same reason.
+#
+# The compose file is not re-checked here. It is validated at startup and a
+# decider that cannot read it refuses to start, so a process alive to answer
+# this has already proved it. Re-reading in a second process would report on
+# the file rather than on the server, which could be wedged while the file
+# still parses perfectly.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+  CMD ["/decider", "health"]
+
 USER nonroot:nonroot
 ENTRYPOINT ["/decider"]
