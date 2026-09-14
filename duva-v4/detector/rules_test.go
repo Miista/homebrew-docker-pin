@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -17,8 +18,8 @@ import (
 // The rules the detector exists to keep, tested as behaviour rather than as
 // units: a check runs against a registry that behaves however the test says,
 // and the assertion is on what the cutoff does afterwards. Whether
-// mayAdvance(0) returns true is a tautology; whether a failed run leaves the
-// cutoff alone is the thing that matters.
+// a rule holding in isolation is a tautology; whether one service's failure
+// leaves another's line alone is the thing that matters.
 
 // fakeReg is a registry that answers from a table and can be made to fail for
 // particular images.
@@ -50,37 +51,62 @@ func service(name, image, tag string) detect.Service {
 	return detect.Service{Name: name, Container: name, Image: image, Tag: tag}
 }
 
-// check runs one whole cycle the way the binary does: load the cutoff, check
-// everything, then advance or not. Returns what the cutoff is afterwards.
-func check(t *testing.T, services []detect.Service, reg detect.Registry) (before, after time.Time, found, failed int) {
+// check runs one whole cycle and reports what each service's line did.
+//
+// Per service now, because the rule is: one service's failure must not move
+// or hold another's line.
+func check(t *testing.T, services []detect.Service, reg detect.Registry) (before, after map[string]time.Time, found, failed int) {
 	return checkPublishing(t, services, reg, "")
 }
 
-// checkPublishing is check with a webhook. An empty url means findings are
-// not published at all, which is the case every other test here runs under.
-func checkPublishing(t *testing.T, services []detect.Service, reg detect.Registry, url string) (before, after time.Time, found, failed int) {
+// checkPublishing is check with a webhook. An empty url means there is nowhere
+// to publish, which is the case every other test here runs under -- and which
+// now means findings are *held* rather than dropped.
+func checkPublishing(t *testing.T, services []detect.Service, reg detect.Registry, url string) (before, after map[string]time.Time, found, failed int) {
 	t.Helper()
 
-	before, _, err := loadCutoff(zerolog.Nop())
+	mem, err := loadMemory(zerolog.Nop())
 	if err != nil {
-		t.Fatalf("loadCutoff: %v", err)
+		t.Fatalf("loadMemory: %v", err)
 	}
+	before = lines(mem, services)
 
-	startedAt := time.Now()
 	reporter := newReporter(url, "testhost", zerolog.Nop())
-	found, failed = checkAll(services, before, reg, reporter.report, zerolog.Nop())
-
-	if mayAdvance(failed, reporter.unpublished()) {
-		if err := saveCutoff(startedAt); err != nil {
-			t.Fatalf("saveCutoff: %v", err)
-		}
+	handHeld(mem, reporter.report, zerolog.Nop())
+	found, failed = checkAll(services, mem, reg, reporter.report, zerolog.Nop())
+	if err := mem.save(); err != nil {
+		t.Fatalf("save: %v", err)
 	}
 
-	after, _, err = loadCutoff(zerolog.Nop())
+	reloaded, err := loadMemory(zerolog.Nop())
 	if err != nil {
-		t.Fatalf("loadCutoff after: %v", err)
+		t.Fatalf("loadMemory after: %v", err)
 	}
-	return before, after, found, failed
+	return before, lines(reloaded, services), found, failed
+}
+
+// lines is each service's cutoff, read back through the same accessor the
+// detector uses -- so a test cannot pass by reading state a run never would.
+func lines(mem *memory, services []detect.Service) map[string]time.Time {
+	out := map[string]time.Time{}
+	for _, svc := range services {
+		out[svc.Name] = mem.Cutoff(svc.Name)
+	}
+	return out
+}
+
+// held is what is waiting to be handed on, by service.
+func held(t *testing.T) map[string]int {
+	t.Helper()
+	mem, err := loadMemory(zerolog.Nop())
+	if err != nil {
+		t.Fatalf("loadMemory: %v", err)
+	}
+	out := map[string]int{}
+	for _, f := range mem.Held() {
+		out[f.Service]++
+	}
+	return out
 }
 
 // --- the rule that matters ---------------------------------------------------
@@ -91,9 +117,7 @@ func TestACompleteRunAdvancesTheCutoff(t *testing.T) {
 	// Seed a cutoff, so "advanced" means something rather than "a first run
 	// wrote one".
 	seeded := time.Now().Add(-48 * time.Hour)
-	if err := saveCutoff(seeded); err != nil {
-		t.Fatal(err)
-	}
+	seedCutoff(t, seeded, "app", "ok", "down", "a", "b")
 
 	reg := fakeReg{
 		tags:  map[string][]string{"example.com/app": {"1.0.0", "1.1.0"}},
@@ -108,8 +132,8 @@ func TestACompleteRunAdvancesTheCutoff(t *testing.T) {
 	if found != 1 {
 		t.Errorf("found = %d, want the one new tag", found)
 	}
-	if !after.After(before) {
-		t.Errorf("the cutoff did not move: %v -> %v", before, after)
+	if !after["app"].After(before["app"]) {
+		t.Errorf("app's line did not move: %v -> %v", before["app"], after["app"])
 	}
 }
 
@@ -119,9 +143,7 @@ func TestACompleteRunAdvancesTheCutoff(t *testing.T) {
 func TestAFailedServiceLeavesTheCutoffAlone(t *testing.T) {
 	useTempState(t)
 	seeded := time.Now().Add(-48 * time.Hour)
-	if err := saveCutoff(seeded); err != nil {
-		t.Fatal(err)
-	}
+	seedCutoff(t, seeded, "app", "ok", "down", "a", "b")
 
 	reg := fakeReg{
 		tags:   map[string][]string{"example.com/ok": {"1.1.0"}},
@@ -136,37 +158,55 @@ func TestAFailedServiceLeavesTheCutoffAlone(t *testing.T) {
 	if failed != 1 {
 		t.Fatalf("failed = %d, want the one unreachable service counted", failed)
 	}
-	if !after.Equal(before) {
-		t.Errorf("the cutoff moved despite a service that could not be checked: %v -> %v", before, after)
+	// The broken one is pinned; the healthy one is not. That is the whole
+	// change: one failure no longer costs every other service its line.
+	if !after["down"].Equal(before["down"]) {
+		t.Errorf("down's line moved despite being unreachable: %v -> %v", before["down"], after["down"])
+	}
+	if !after["ok"].After(before["ok"]) {
+		t.Errorf("ok's line was held by another service's failure: %v -> %v", before["ok"], after["ok"])
 	}
 }
 
-// And the consequence: because the cutoff stayed, the next run reports the
-// same tag again rather than skipping it. Noisy is the correct failure mode.
-func TestAfterAFailureTheNextRunStillSeesTheTag(t *testing.T) {
+// And the consequence, for the service that failed: its line never moved, so
+// once its registry comes back the tag it published in the meantime is still
+// seen. Noisy is the correct failure mode; silently skipped is not.
+//
+// Scoped to that service. Under the old whole-run rule this test asserted
+// that a *healthy* service re-reported too, because one failure pinned the
+// single line for everything -- which is exactly the behaviour being removed.
+func TestAfterAFailureTheNextRunStillSeesTheFailedServicesTag(t *testing.T) {
 	useTempState(t)
-	if err := saveCutoff(time.Now().Add(-48 * time.Hour)); err != nil {
-		t.Fatal(err)
-	}
+	seedCutoff(t, time.Now().Add(-48*time.Hour), "ok", "down")
 
 	ok := service("ok", "example.com/ok", "1.0.0")
 	down := service("down", "example.com/down", "1.0.0")
 	reg := fakeReg{
-		tags:   map[string][]string{"example.com/ok": {"1.1.0"}},
-		dates:  map[string]time.Time{"1.1.0": time.Now().Add(-time.Hour)},
+		tags: map[string][]string{
+			"example.com/ok":   {"1.1.0"},
+			"example.com/down": {"2.1.0"},
+		},
+		dates: map[string]time.Time{
+			"1.1.0": time.Now().Add(-time.Hour),
+			"2.1.0": time.Now().Add(-time.Hour),
+		},
 		broken: map[string]bool{"example.com/down": true},
 	}
 
-	_, _, firstFound, _ := check(t, []detect.Service{ok, down}, reg.registry())
-	if firstFound != 1 {
-		t.Fatalf("first run found %d, want 1", firstFound)
+	// First run: ok's tag is found, down cannot be reached at all.
+	_, _, firstFound, firstFailed := check(t, []detect.Service{ok, down}, reg.registry())
+	if firstFound != 1 || firstFailed != 1 {
+		t.Fatalf("first run found=%d failed=%d, want 1 and 1", firstFound, firstFailed)
 	}
 
-	// Same registry, same everything: the tag must still be visible, because
-	// the cutoff never moved past it.
+	// down's registry comes back. Its tag must still be visible, because its
+	// line never moved past it -- and ok's must not be reported again,
+	// because its line did move.
+	reg.broken = nil
 	_, _, secondFound, _ := check(t, []detect.Service{ok, down}, reg.registry())
 	if secondFound != 1 {
-		t.Errorf("second run found %d, want the tag reported again -- the cutoff should not have passed it", secondFound)
+		t.Errorf("second run found %d, want only down's tag: its line should not have passed it, "+
+			"and ok's should have", secondFound)
 	}
 }
 
@@ -175,9 +215,7 @@ func TestAfterAFailureTheNextRunStillSeesTheTag(t *testing.T) {
 // advanced at all.
 func TestAfterACleanRunTheSameTagIsNotReportedAgain(t *testing.T) {
 	useTempState(t)
-	if err := saveCutoff(time.Now().Add(-48 * time.Hour)); err != nil {
-		t.Fatal(err)
-	}
+	seedCutoff(t, time.Now().Add(-48*time.Hour), "app", "ok", "down", "a", "b")
 
 	svc := service("app", "example.com/app", "1.0.0")
 	reg := fakeReg{
@@ -200,9 +238,7 @@ func TestAfterACleanRunTheSameTagIsNotReportedAgain(t *testing.T) {
 // would skip everything at once.
 func TestEveryServiceFailingLeavesTheCutoffAlone(t *testing.T) {
 	useTempState(t)
-	if err := saveCutoff(time.Now().Add(-48 * time.Hour)); err != nil {
-		t.Fatal(err)
-	}
+	seedCutoff(t, time.Now().Add(-48*time.Hour), "app", "ok", "down", "a", "b")
 
 	reg := fakeReg{broken: map[string]bool{
 		"example.com/a": true,
@@ -216,8 +252,10 @@ func TestEveryServiceFailingLeavesTheCutoffAlone(t *testing.T) {
 	if failed != 2 {
 		t.Fatalf("failed = %d, want both counted", failed)
 	}
-	if !after.Equal(before) {
-		t.Errorf("the cutoff moved despite every service failing: %v -> %v", before, after)
+	for _, name := range []string{"a", "b"} {
+		if !after[name].Equal(before[name]) {
+			t.Errorf("%s moved despite failing: %v -> %v", name, before[name], after[name])
+		}
 	}
 }
 
@@ -226,9 +264,7 @@ func TestEveryServiceFailingLeavesTheCutoffAlone(t *testing.T) {
 // quiet stack.
 func TestACleanRunWithNoFindingsStillAdvances(t *testing.T) {
 	useTempState(t)
-	if err := saveCutoff(time.Now().Add(-48 * time.Hour)); err != nil {
-		t.Fatal(err)
-	}
+	seedCutoff(t, time.Now().Add(-48*time.Hour), "app", "ok", "down", "a", "b")
 
 	reg := fakeReg{
 		tags:  map[string][]string{"example.com/app": {"1.0.0"}},
@@ -240,8 +276,8 @@ func TestACleanRunWithNoFindingsStillAdvances(t *testing.T) {
 	if found != 0 || failed != 0 {
 		t.Fatalf("found=%d failed=%d, want a clean and empty run", found, failed)
 	}
-	if !after.After(before) {
-		t.Errorf("a clean run that found nothing did not advance: %v -> %v", before, after)
+	if !after["app"].After(before["app"]) {
+		t.Errorf("a clean run that found nothing did not advance: %v -> %v", before["app"], after["app"])
 	}
 }
 
@@ -343,5 +379,92 @@ func TestARefusalDoesNotWriteOffTheWebhook(t *testing.T) {
 	}
 	if r.unpublished() != 5 {
 		t.Errorf("unpublished = %d, want 5", r.unpublished())
+	}
+}
+
+// seedCutoff gives every named service a starting line, so "advanced" means
+// something rather than "a first run wrote one".
+func seedCutoff(t *testing.T, at time.Time, services ...string) {
+	t.Helper()
+	mem, err := loadMemory(zerolog.Nop())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range services {
+		mem.Checked(s, at)
+	}
+	if err := mem.save(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// --- what is held, and when it is handed on ----------------------------------
+
+// No webhook configured is a legitimate way to run: findings go to the log and
+// wait. The moment there is somewhere to send them, they are sent.
+func TestFindingsHeldWithNoWebhookAreSentWhenOneAppears(t *testing.T) {
+	useTempState(t)
+	seedCutoff(t, time.Now().Add(-48*time.Hour), "app")
+
+	svc := service("app", "example.com/app", "1.0.0")
+	reg := fakeReg{
+		tags:  map[string][]string{"example.com/app": {"1.1.0"}},
+		dates: map[string]time.Time{"1.1.0": time.Now().Add(-time.Hour)},
+	}
+
+	// Run with nowhere to publish.
+	_, _, found, _ := check(t, []detect.Service{svc}, reg.registry())
+	if found != 1 {
+		t.Fatalf("found %d, want the one new tag", found)
+	}
+	if h := held(t)["app"]; h != 1 {
+		t.Fatalf("held %d findings, want the one that could not be published", h)
+	}
+
+	// A webhook appears. The backlog goes first, and the tag is not found
+	// again -- the line moved when it was *checked*, not when it was sent.
+	var got []Event
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var e Event
+		json.NewDecoder(r.Body).Decode(&e)
+		got = append(got, e)
+	}))
+	defer srv.Close()
+
+	_, _, secondFound, _ := checkPublishing(t, []detect.Service{svc}, reg.registry(), srv.URL)
+	if secondFound != 0 {
+		t.Errorf("the second run found %d, want 0: the line advanced when it was checked", secondFound)
+	}
+	if len(got) != 1 || got[0].Tag != "1.1.0" {
+		t.Fatalf("the webhook received %+v, want the held 1.1.0", got)
+	}
+	if h := held(t)["app"]; h != 0 {
+		t.Errorf("%d findings are still held after being handed on", h)
+	}
+}
+
+// The line moves when a service is checked, not when its findings land. That
+// separation is what stops an unreachable webhook costing a weekly re-scan.
+func TestAnUnpublishableFindingStillAdvancesTheLine(t *testing.T) {
+	useTempState(t)
+	seedCutoff(t, time.Now().Add(-48*time.Hour), "app")
+
+	reg := fakeReg{
+		tags:  map[string][]string{"example.com/app": {"1.1.0"}},
+		dates: map[string]time.Time{"1.1.0": time.Now().Add(-time.Hour)},
+	}
+	// Port 9 is discard: nothing listens, so the webhook is unreachable.
+	before, after, found, failed := checkPublishing(t,
+		[]detect.Service{service("app", "example.com/app", "1.0.0")},
+		reg.registry(), "http://127.0.0.1:9/notify")
+
+	if found != 1 || failed != 0 {
+		t.Fatalf("found=%d failed=%d, want the tag found and the check clean", found, failed)
+	}
+	if !after["app"].After(before["app"]) {
+		t.Error("the line did not move: looking is not publishing, and the check succeeded")
+	}
+	if h := held(t)["app"]; h != 1 {
+		t.Errorf("held %d, want the unpublishable finding kept for the next run", h)
 	}
 }

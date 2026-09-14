@@ -165,15 +165,18 @@ type Event struct {
 	ObservedAt string `json:"observed_at"`
 }
 
-// report publishes one finding.
+// report hands one finding on, returning whether it landed.
 //
-// Failures are logged and not retried. The detector is stateless and runs
-// again on a schedule, so a finding that did not land this time lands next
-// time -- retry is a property of running repeatedly rather than something
-// either side implements.
-func (r *reporter) report(f detect.Finding) {
+// The bool is the whole of the retry policy: a caller holds what did not
+// land and offers it again next run.
+//
+// No webhook configured is a failure to hand on, not a success. A detector
+// pointed at a project before its consumer exists is a legitimate way to run,
+// and the findings it makes in the meantime are real -- they wait, and the
+// first run that has somewhere to send them sends them.
+func (r *reporter) report(f detect.Finding) bool {
 	if r.url == "" {
-		return
+		return false
 	}
 	// The webhook was already found unreachable this run. Every further
 	// attempt would be another DNS lookup for a name that does not resolve,
@@ -181,7 +184,7 @@ func (r *reporter) report(f detect.Finding) {
 	if r.unreachable {
 		r.skipped++
 		r.failed++
-		return
+		return false
 	}
 
 	body, err := json.Marshal(Event{
@@ -198,7 +201,7 @@ func (r *reporter) report(f detect.Finding) {
 	if err != nil {
 		r.log.Error().Msgf("%s: could not encode the finding — %v", f.Service, err)
 		r.failed++
-		return
+		return false
 	}
 
 	resp, err := r.http.Post(r.url, "application/json", bytes.NewReader(body))
@@ -216,13 +219,13 @@ func (r *reporter) report(f detect.Finding) {
 		if isUnreachable(err) {
 			r.unreachable = true
 			r.log.Warn().Msg("the webhook stopped answering, so the rest of this run's findings will not be published")
-			return
+			return false
 		}
 		// Something else went wrong with this one request. Debug rather than
 		// error: the run's own summary is where an operator learns how many
 		// findings did not land, and one line per finding buries it.
 		r.log.Debug().Msgf("%s: could not publish %s — %v", f.Service, f.Tag, err)
-		return
+		return false
 	}
 	// Drained before closing, or the connection is not returned to the pool
 	// and every finding costs a fresh dial -- the same reuse problem, on the
@@ -245,9 +248,10 @@ func (r *reporter) report(f detect.Finding) {
 		if r.refused == 1 {
 			r.log.Warn().Msgf("the webhook refused %s for %s with %s", f.Tag, f.Service, resp.Status)
 		}
-		return
+		return false
 	}
 	r.log.Debug().Msgf("%s: published %s", f.Service, f.Tag)
+	return true
 }
 
 // isUnreachable says whether an error means the webhook's host cannot be

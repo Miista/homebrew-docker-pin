@@ -12,12 +12,13 @@
 // notifier, a script that appends to a file -- it publishes what it observed
 // in its own shape, and what that means is the subscriber's business.
 //
-// It holds no docker socket, writes nothing, and its only state is one
-// timestamp. Losing that costs a noisy run, not a rebuild -- which is the
-// whole reason it is one timestamp rather than a per-service baseline.
-//
+// It holds no docker socket. Its state is two things per service: how far
+// back to look, and what it found and has not handed on yet. Losing that
+// costs a noisy run, not a rebuild -- which is why it is a cutoff and an
+// outbox rather than a baseline of what each image pointed at.
+
 //	/compose   the compose project directory, read-only
-//	/data      one timestamp, so a restart does not re-report everything
+//	/data      per-service cutoffs, and findings not yet handed on
 //
 // Configuration:
 //
@@ -222,12 +223,11 @@ func run(log zerolog.Logger) error {
 		return err
 	}
 
-	cutoff, source, err := loadCutoff(log)
+	mem, err := loadMemory(log)
 	if err != nil {
 		return err
 	}
-	log.Info().Msgf("looking for tags published since %s (%s)",
-		cutoff.Local().Format("2006-01-02 15:04:05 MST"), source)
+	log.Info().Msgf("looking for tags published since each service's last check (%s)", mem.why)
 
 	services, err := readServices(root, log)
 	if err != nil {
@@ -256,57 +256,31 @@ func run(log zerolog.Logger) error {
 		TagDigest: registry.RemoteDigest,
 	}
 
-	// startedAt, not time.Now() at the end: anything published while the
-	// check was running would otherwise fall in the gap between the cutoff
-	// it was compared against and the cutoff recorded afterwards, and never
-	// be reported at all.
-	startedAt := time.Now()
-
 	reporter := newReporter(os.Getenv("DETECTOR_WEBHOOK_URL"), host, log)
-	found, failed := checkAll(services, cutoff, reg, reporter.report, log)
+
+	// The backlog first: a webhook that has come back should hear what earlier
+	// runs could not hand on before it hears anything new.
+	handHeld(mem, reporter.report, log)
+
+	found, failed := checkAll(services, mem, reg, reporter.report, log)
 
 	log.Info().Msgf("check complete: %d new tag(s) across %d service(s), %d could not be checked",
 		found, len(services), failed)
 	reporter.summarise()
 
-	if !mayAdvance(failed, reporter.unpublished()) {
-		if failed > 0 {
-			log.Warn().Msgf("not advancing the cutoff: %d service(s) could not be checked, "+
-				"so moving it would silently skip anything they published", failed)
-		} else {
-			log.Warn().Msg("not advancing the cutoff: findings were detected but could not be " +
-				"published, so moving it would mean nothing ever hears about them")
-		}
-		return nil
+	// Saved whatever happened. Each service's cutoff moved only if that
+	// service was checked, and anything that could not be handed on is held --
+	// so there is no run whose result is not worth recording. That is the
+	// whole of the change from a single line that a lone failure could pin in
+	// the past forever.
+	if err := mem.save(); err != nil {
+		return fmt.Errorf("recording what this check learned: %w", err)
 	}
-	if err := saveCutoff(startedAt); err != nil {
-		return fmt.Errorf("recording when this check ran: %w", err)
+	if held := len(mem.Held()); held > 0 {
+		log.Warn().Msgf("%d finding(s) are held for the next run that can hand them on", held)
 	}
-	log.Info().Msgf("cutoff advanced to %s", startedAt.Local().Format("2006-01-02 15:04:05 MST"))
 	return nil
 }
-
-// mayAdvance says whether a run earned the right to move the cutoff forward.
-//
-// Only a complete one does. A run with holes in it must not move the line,
-// or whatever was published by the services it could not reach falls between
-// the old cutoff and the new one and is never reported -- silently, and
-// forever. That is the one thing a detector must never do, which is why the
-// rule is a named function rather than an `if` buried in a loop: it is the
-// most important sentence in this program and deserves somewhere to be
-// tested.
-//
-// A hole comes in two kinds, and for a while this only knew the first. A
-// service that could not be checked is one; a finding that was detected but
-// could not be published is the other, and it is worse, because the detector
-// saw it and still left no trace anywhere. Advancing past it means the
-// finding is now older than the cutoff and will never be reported again.
-// Both are the same failure -- something this run learned that nothing else
-// will ever hear -- so both hold the line.
-//
-// The cost of being wrong the other way is one noisy run. The asymmetry is
-// the whole argument.
-func mayAdvance(failed, unpublished int) bool { return failed == 0 && unpublished == 0 }
 
 // readServices turns the compose project into what the detector looks at.
 //

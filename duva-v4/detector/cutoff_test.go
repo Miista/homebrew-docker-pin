@@ -3,10 +3,13 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/rs/zerolog"
+
+	"github.com/Miista/homebrew-docker-pin/duva-v4/internal/detect"
 )
 
 func useTempState(t *testing.T) {
@@ -16,135 +19,251 @@ func useTempState(t *testing.T) {
 	t.Cleanup(func() { stateFile = old })
 }
 
-// A first run looks back a window rather than to the beginning of time: a
-// detector with no memory reporting every tag ever published would bury the
-// run in noise nobody would read.
-func TestFirstRunLooksBackAWindow(t *testing.T) {
-	useTempState(t)
-	cutoff, source, err := loadCutoff(zerolog.Nop())
+func loadOrFail(t *testing.T) *memory {
+	t.Helper()
+	mem, err := loadMemory(zerolog.Nop())
 	if err != nil {
-		t.Fatalf("loadCutoff: %v", err)
+		t.Fatalf("loadMemory: %v", err)
 	}
-	if time.Since(cutoff) > defaultWindow+time.Minute {
-		t.Errorf("cutoff is %v ago, want about %v", time.Since(cutoff), defaultWindow)
+	return mem
+}
+
+// A service never checked looks back a window rather than to the beginning of
+// time: a detector with no memory reporting every tag ever published would
+// bury the run in noise nobody would read.
+func TestAnUncheckedServiceLooksBackAWindow(t *testing.T) {
+	useTempState(t)
+	mem := loadOrFail(t)
+
+	got := mem.Cutoff("never-seen")
+	if time.Since(got) > defaultWindow+time.Minute {
+		t.Errorf("cutoff is %v ago, want about %v", time.Since(got), defaultWindow)
 	}
-	if source == "" {
-		t.Error("the source should say where the cutoff came from, for the log")
+	if mem.why == "" {
+		t.Error("the memory should say where its cutoffs came from, for the log")
 	}
 }
 
-func TestASavedCutoffIsUsed(t *testing.T) {
+func TestARecordedCutoffIsUsed(t *testing.T) {
 	useTempState(t)
 	want := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
-	if err := saveCutoff(want); err != nil {
-		t.Fatalf("saveCutoff: %v", err)
+
+	mem := loadOrFail(t)
+	mem.Checked("app", want)
+	if err := mem.save(); err != nil {
+		t.Fatalf("save: %v", err)
 	}
-	got, _, err := loadCutoff(zerolog.Nop())
-	if err != nil {
-		t.Fatalf("loadCutoff: %v", err)
-	}
-	if !got.Equal(want) {
+
+	if got := loadOrFail(t).Cutoff("app"); !got.Equal(want) {
 		t.Errorf("cutoff = %v, want %v", got, want)
 	}
 }
 
+// The rule the whole split exists for: one service's line is its own.
+func TestOneServicesLineDoesNotAffectAnothers(t *testing.T) {
+	useTempState(t)
+	recorded := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+
+	mem := loadOrFail(t)
+	mem.Checked("checked", recorded)
+	if err := mem.save(); err != nil {
+		t.Fatal(err)
+	}
+
+	reloaded := loadOrFail(t)
+	if got := reloaded.Cutoff("checked"); !got.Equal(recorded) {
+		t.Errorf("the checked service = %v, want %v", got, recorded)
+	}
+	// The other one still looks back a window, rather than inheriting a line
+	// it never earned.
+	if got := reloaded.Cutoff("untouched"); time.Since(got) > defaultWindow+time.Minute {
+		t.Errorf("an unchecked service inherited %v; it should look back a window", got)
+	}
+}
+
+// An older state file, from when one line covered every service, still means
+// something: it seeds anything without a line of its own, so upgrading does
+// not re-report a week.
+func TestAnOldWholeRunCutoffSeedsEveryService(t *testing.T) {
+	useTempState(t)
+	old := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	if err := os.WriteFile(stateFile,
+		[]byte(`{"last_check":"`+old.Format(time.RFC3339)+`"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := loadOrFail(t).Cutoff("anything"); !got.Equal(old) {
+		t.Errorf("cutoff = %v, want the old whole-run line %v", got, old)
+	}
+}
+
 // The override is how you ask "what appeared in the last week" without
-// disturbing the recorded cutoff.
+// disturbing what is recorded.
 func TestSinceOverrideAcceptsADuration(t *testing.T) {
 	useTempState(t)
 	t.Setenv("DETECTOR_SINCE", "24h")
-	cutoff, source, err := loadCutoff(zerolog.Nop())
-	if err != nil {
-		t.Fatalf("loadCutoff: %v", err)
-	}
-	if d := time.Since(cutoff); d < 23*time.Hour || d > 25*time.Hour {
+
+	mem := loadOrFail(t)
+	got := mem.Cutoff("app")
+	if d := time.Since(got); d < 23*time.Hour || d > 25*time.Hour {
 		t.Errorf("cutoff is %v ago, want about 24h", d)
 	}
-	if source == "" {
-		t.Error("the source should name the override")
+	if !strings.Contains(mem.why, "DETECTOR_SINCE") {
+		t.Errorf("why = %q, want it to name the override", mem.why)
 	}
 }
 
 func TestSinceOverrideAcceptsATimestamp(t *testing.T) {
 	useTempState(t)
-	t.Setenv("DETECTOR_SINCE", "2026-09-01T00:00:00Z")
-	cutoff, _, err := loadCutoff(zerolog.Nop())
-	if err != nil {
-		t.Fatalf("loadCutoff: %v", err)
-	}
-	if !cutoff.Equal(time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)) {
-		t.Errorf("cutoff = %v", cutoff)
+	want := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	t.Setenv("DETECTOR_SINCE", want.Format(time.RFC3339))
+
+	if got := loadOrFail(t).Cutoff("app"); !got.Equal(want) {
+		t.Errorf("cutoff = %v, want %v", got, want)
 	}
 }
 
-// A malformed override is an error, not a silent fallback: falling back would
-// mean checking a different window than was asked for, and nobody would know.
+// An override asks a question; it must not answer for the detector's memory.
+func TestAnOverrideRecordsNothing(t *testing.T) {
+	useTempState(t)
+	recorded := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+
+	mem := loadOrFail(t)
+	mem.Checked("app", recorded)
+	if err := mem.save(); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("DETECTOR_SINCE", "1h")
+	overridden := loadOrFail(t)
+	overridden.Checked("app", time.Now())
+	if err := overridden.save(); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("DETECTOR_SINCE", "")
+	if got := loadOrFail(t).Cutoff("app"); !got.Equal(recorded) {
+		t.Errorf("an override overwrote the recorded line: %v, want %v", got, recorded)
+	}
+}
+
 func TestAMalformedSinceIsAnError(t *testing.T) {
 	useTempState(t)
-	t.Setenv("DETECTOR_SINCE", "last tuesday")
-	if _, _, err := loadCutoff(zerolog.Nop()); err == nil {
-		t.Fatal("want an error for an unparseable DETECTOR_SINCE")
+	t.Setenv("DETECTOR_SINCE", "yesterday-ish")
+
+	if _, err := loadMemory(zerolog.Nop()); err == nil {
+		t.Error("a malformed DETECTOR_SINCE was accepted")
 	}
 }
 
-// An unreadable state file falls back to the window rather than to the zero
-// time: the zero time would report every tag ever published.
 func TestAnUnreadableStateFileFallsBackToTheWindow(t *testing.T) {
 	useTempState(t)
-	if err := os.WriteFile(stateFile, []byte("not json"), 0o644); err != nil {
+	if err := os.WriteFile(stateFile, []byte("{not json"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	cutoff, _, err := loadCutoff(zerolog.Nop())
-	if err != nil {
-		t.Fatalf("loadCutoff: %v", err)
-	}
-	if time.Since(cutoff) > defaultWindow+time.Minute {
-		t.Errorf("cutoff is %v ago, want the window", time.Since(cutoff))
+
+	got := loadOrFail(t).Cutoff("app")
+	if time.Since(got) > defaultWindow+time.Minute {
+		t.Errorf("cutoff is %v ago, want about %v", time.Since(got), defaultWindow)
 	}
 }
 
-// A zero timestamp in an otherwise valid file is the same case.
-func TestAZeroCutoffFallsBackToTheWindow(t *testing.T) {
+// --- what is held ------------------------------------------------------------
+
+// A finding that could not be handed on waits, and survives a restart. This
+// is what makes running with no webhook configured a way to defer publishing
+// rather than a way to lose findings.
+func TestHeldFindingsSurviveARestart(t *testing.T) {
 	useTempState(t)
-	if err := os.WriteFile(stateFile, []byte(`{"last_check":"0001-01-01T00:00:00Z"}`), 0o644); err != nil {
+
+	mem := loadOrFail(t)
+	mem.Hold(detect.Finding{Service: "app", Tag: "1.1.0", Image: "example.com/app"})
+	if err := mem.save(); err != nil {
 		t.Fatal(err)
 	}
-	cutoff, _, err := loadCutoff(zerolog.Nop())
-	if err != nil {
-		t.Fatalf("loadCutoff: %v", err)
+
+	held := loadOrFail(t).Held()
+	if len(held) != 1 {
+		t.Fatalf("held %d findings after a reload, want 1", len(held))
 	}
-	if time.Since(cutoff) > defaultWindow+time.Minute {
-		t.Errorf("cutoff is %v ago, want the window", time.Since(cutoff))
+	if held[0].Service != "app" || held[0].Tag != "1.1.0" {
+		t.Errorf("held = %+v, want app 1.1.0", held[0])
 	}
 }
 
-// Saving creates its directory: a fresh /data volume has nothing in it.
+// Handing one on drops it, so it is not sent twice.
+func TestAHandedFindingIsNoLongerHeld(t *testing.T) {
+	useTempState(t)
+	f := detect.Finding{Service: "app", Tag: "1.1.0"}
+
+	mem := loadOrFail(t)
+	mem.Hold(f)
+	mem.Handed(f)
+	if err := mem.save(); err != nil {
+		t.Fatal(err)
+	}
+
+	if held := loadOrFail(t).Held(); len(held) != 0 {
+		t.Errorf("held %d findings, want none after it was handed on", len(held))
+	}
+}
+
+// A moving tag that moves repeatedly during an outage leaves one entry, not
+// one per move -- the gate's queue is keyed by service and would discard all
+// but the last anyway.
+func TestHoldingTheSameTagTwiceKeepsOne(t *testing.T) {
+	useTempState(t)
+
+	mem := loadOrFail(t)
+	mem.Hold(detect.Finding{Service: "app", Tag: "latest", Digest: "sha256:aaa"})
+	mem.Hold(detect.Finding{Service: "app", Tag: "latest", Digest: "sha256:bbb"})
+
+	held := mem.Held()
+	if len(held) != 1 {
+		t.Fatalf("held %d, want 1 -- the same tag twice is one finding", len(held))
+	}
+	if held[0].Digest != "sha256:bbb" {
+		t.Errorf("held the older digest %q; the newer one supersedes it", held[0].Digest)
+	}
+}
+
+// --- writing ------------------------------------------------------------------
+
 func TestSaveCreatesItsDirectory(t *testing.T) {
+	dir := t.TempDir()
 	old := stateFile
-	stateFile = filepath.Join(t.TempDir(), "nested", "detector.json")
+	stateFile = filepath.Join(dir, "nested", "detector.json")
 	t.Cleanup(func() { stateFile = old })
 
-	if err := saveCutoff(time.Now()); err != nil {
-		t.Fatalf("saveCutoff: %v", err)
+	mem := loadOrFail(t)
+	mem.Checked("app", time.Now())
+	if err := mem.save(); err != nil {
+		t.Fatalf("save: %v", err)
 	}
 	if _, err := os.Stat(stateFile); err != nil {
 		t.Errorf("the state file was not written: %v", err)
 	}
 }
 
-// Saving leaves nothing behind: the atomic write uses a temp file in the same
-// directory, and a stray one per run would accumulate on the volume.
+// The write is atomic through a temp file and a rename, so a crash mid-write
+// cannot leave a truncated file. The temp must not survive a success.
 func TestSaveLeavesNoTempFiles(t *testing.T) {
 	useTempState(t)
-	if err := saveCutoff(time.Now()); err != nil {
+
+	mem := loadOrFail(t)
+	mem.Checked("app", time.Now())
+	if err := mem.save(); err != nil {
 		t.Fatal(err)
 	}
+
 	entries, err := os.ReadDir(filepath.Dir(stateFile))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 1 {
-		t.Errorf("got %d files, want only the state file: %v", len(entries), entries)
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".detector-") {
+			t.Errorf("a temp file survived the save: %s", e.Name())
+		}
 	}
 }
 
