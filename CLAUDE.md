@@ -73,6 +73,17 @@ registry — discovering bearer auth from the `WWW-Authenticate` challenge.
   two tags cannot be compared — which duva treats as major, since a change it
   cannot measure is not one to make unattended.
 
+Every call site shares **one** `http.Client` (`client.go`). A Client holds a
+Transport and a Transport holds the connection pool, so a client per call
+means no reuse: one connection, and therefore one DNS lookup, per registry
+operation. A check across ~45 services is several hundred operations against
+three or four hosts, which is what makes a scheduled run look like a flood to
+a resolver — diun, which does exactly this, exhausts Pi-hole's default
+1000-queries-a-minute allowance in 40 seconds and fails ~140 jobs with
+"server misbehaving" (Go's rendering of a REFUSED reply, which reads like the
+registry's fault and is not). `MaxIdleConnsPerHost` is raised from the default
+2 for the same reason. Held by `TestConnectionsAreReusedAcrossCalls`.
+
 Until 2026-08 this package also resolved a digest back to a version tag, so a
 pin could be labelled with the version it matched. That is gone: see "The tag
 is the tag to follow".
