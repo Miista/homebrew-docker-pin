@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -54,9 +55,14 @@ func get(t *testing.T, s *Server, path string) (int, string) {
 	return rec.Code, rec.Body.String()
 }
 
-// The page must render. Every field the template names has to exist on what
-// the handler passes it -- html/template reports a missing field only when it
-// executes, so nothing but executing it catches a rename.
+// The page must render, and must carry its own first-paint data.
+//
+// Two things at once, because they fail the same way. A template naming a
+// field the data does not carry fails mid-render, after a 200 and half a page
+// have gone out -- so the status proves nothing and only executing it catches
+// a rename. And the values below are found in the embedded state, not in
+// markup: the rows are client-rendered now, so what this proves is that the
+// page arrives knowing what to draw rather than having to ask first.
 func TestPageRenders(t *testing.T) {
 	s := &Server{
 		Source: &fakeSource{pending: []Hosted{
@@ -79,61 +85,6 @@ func TestPageRenders(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("the page does not mention %q", want)
 		}
-	}
-}
-
-// The negative of the above: with nothing queued the page must say so rather
-// than render an empty table.
-func TestEmptyQueueSaysSo(t *testing.T) {
-	s := &Server{Source: &fakeSource{}, Version: "v1"}
-	code, body := get(t, s, "/")
-	if code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", code)
-	}
-	if !strings.Contains(body, "Nothing waiting for approval") {
-		t.Errorf("an empty queue does not say it is empty: %s", body)
-	}
-}
-
-// The one thing this page exists to prevent: a decider that could not be
-// reached must be visible, because a queue missing a host reads exactly like
-// that host having nothing to do.
-func TestUnreachableDeciderIsShown(t *testing.T) {
-	s := &Server{
-		Source: &fakeSource{unreachable: []Problem{
-			{Host: "pi", Err: "connection refused"},
-		}},
-		Version: "v1",
-	}
-	_, body := get(t, s, "/")
-	if !strings.Contains(body, "pi") || !strings.Contains(body, "connection refused") {
-		t.Fatalf("an unreachable decider is not shown: %s", body)
-	}
-	// And the reassurance must not be printed beside it.
-	if strings.Contains(body, "Every container duva watches is where you left it") {
-		t.Error("the page reassures while a decider is unreachable")
-	}
-}
-
-// Without an Approver the endpoint must be absent, not merely refusing: a UI
-// meant only to report should carry no route that triggers updates.
-func TestReadOnlyHasNoApplyRoute(t *testing.T) {
-	s := &Server{Source: &fakeSource{
-		pending: []Hosted{entry("authelia", "1.0.0", "1.0.1", version.KindPatch)},
-	}}
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/apply",
-		strings.NewReader("service=optiplex/authelia"))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	s.Handler().ServeHTTP(rec, req)
-	// It falls through to the index handler, which 404s anything but "/".
-	if rec.Code == http.StatusSeeOther {
-		t.Fatalf("a read-only page applied an update")
-	}
-
-	if _, body := get(t, s, "/"); strings.Contains(body, "<button class=\"apply\"") {
-		t.Error("a read-only page renders the Update button")
 	}
 }
 
@@ -186,130 +137,127 @@ type errString string
 
 func (e errString) Error() string { return string(e) }
 
-// A digest move has no version pair, so the Kind column must say "digest"
-// rather than leave a cell that reads as missing data.
-// A moving tag that moved shows the tag, not the digest. The tag did not
-// change, so there is no from/to to render, and the digest is 71 characters
-// that say nothing a person can act on.
-func TestDigestMoveShowsTheTagNotTheDigest(t *testing.T) {
+// --- the JSON the page actually renders from ---------------------------------
+//
+// The page is markup plus directives now, so asserting on rendered HTML would
+// be asserting on what the browser does. These check the contract the page is
+// given instead, which is the thing this process is responsible for.
+func stateOf(t *testing.T, s *Server) map[string]any {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/state", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/api/state = %d, want 200", rec.Code)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decoding /api/state: %v", err)
+	}
+	return out
+}
+
+// An unreachable decider must reach the page: a queue missing a host reads
+// exactly like that host having nothing to do.
+func TestStateReportsUnreachable(t *testing.T) {
+	s := &Server{Source: &fakeSource{
+		unreachable: []Problem{{Host: "pi", Err: "connection refused"}},
+	}, Version: "v1"}
+
+	got := stateOf(t, s)
+	un, _ := got["unreachable"].([]any)
+	if len(un) != 1 {
+		t.Fatalf("unreachable = %v, want one entry", got["unreachable"])
+	}
+	first, _ := un[0].(map[string]any)
+	if first["Host"] != "pi" || first["Err"] != "connection refused" {
+		t.Errorf("unreachable[0] = %v, want pi and its reason", first)
+	}
+}
+
+// Empty means empty, not null: Go encodes a nil slice as JSON null, and a
+// page reading .length off it throws before rendering anything at all.
+func TestStateNeverSendsNullSlices(t *testing.T) {
+	s := &Server{Source: &fakeSource{}, Version: "v1"}
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/state", nil))
+	body := rec.Body.String()
+	for _, field := range []string{`"rows":null`, `"unreachable":null`, `"without_actor":null`} {
+		if strings.Contains(body, field) {
+			t.Errorf("%s would throw in the browser: %s", field, body)
+		}
+	}
+}
+
+// Without an Approver the apply routes must be absent, not merely refusing.
+func TestReadOnlyRegistersNoApplyRoutes(t *testing.T) {
+	s := &Server{Source: &fakeSource{
+		pending: []Hosted{entry("authelia", "1.0.0", "1.0.1", version.KindPatch)},
+	}}
+
+	for _, path := range []string{"/apply", "/api/apply/optiplex/authelia"} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, path,
+			strings.NewReader("service=optiplex/authelia"))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		s.Handler().ServeHTTP(rec, req)
+		if rec.Code == http.StatusSeeOther || rec.Code == http.StatusOK {
+			t.Errorf("%s answered %d on a read-only UI", path, rec.Code)
+		}
+	}
+	// And the page is told, so it renders no buttons at all.
+	if stateOf(t, s)["can_apply"] != false {
+		t.Error("a read-only UI reports can_apply true")
+	}
+}
+
+// A row whose decider has no actor, or has stopped answering, must reach the
+// page marked so -- the page greys the button, but only if it is told.
+func TestStateMarksRowsThatCannotBeApplied(t *testing.T) {
+	noActor := entry("gluetun", "1.0", "1.1", version.KindMinor)
+	noActor.CanApply = false
+	stale := entry("prowlarr", "1.0", "1.1", version.KindMinor)
+	stale.Stale = true
+
+	s := &Server{
+		Source:   &fakeSource{pending: []Hosted{noActor, stale}, noActor: []string{"optiplex"}},
+		Approver: &fakeApprover{}, Version: "v1",
+	}
+
+	got := stateOf(t, s)
+	rows, _ := got["rows"].([]any)
+	if len(rows) != 2 {
+		t.Fatalf("got %d rows, want 2", len(rows))
+	}
+	for _, r := range rows {
+		m, _ := r.(map[string]any)
+		if m["can_apply"] != false {
+			t.Errorf("%v is applyable although it should not be", m["service"])
+		}
+	}
+	if second, _ := rows[1].(map[string]any); second["stale"] != true {
+		t.Error("a row from an unreachable decider is not marked stale")
+	}
+	if wa, _ := got["without_actor"].([]any); len(wa) != 1 {
+		t.Error("the host with no actor is not named")
+	}
+}
+
+// A digest move sends the tag, not 71 characters of hex.
+func TestStateSendsTheTagForADigestMove(t *testing.T) {
 	const digest = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	e := entry("caddy", digest, digest, "")
 	e.Tag = "latest"
 	s := &Server{Source: &fakeSource{pending: []Hosted{e}}, Version: "v1"}
 
-	_, body := get(t, s, "/")
-	if !strings.Contains(body, "digest") {
-		t.Error("a digest move is not labelled")
+	rows, _ := stateOf(t, s)["rows"].([]any)
+	first, _ := rows[0].(map[string]any)
+	if first["moved"] != true {
+		t.Error("a digest move is not marked moved")
 	}
-	if !strings.Contains(body, "latest") {
-		t.Error("a digest move does not show the tag it follows")
+	if first["tag"] != "latest" {
+		t.Errorf("tag = %v, want latest", first["tag"])
 	}
-	// No hex at all: not the full digest, and not a shortened one either.
-	if strings.Contains(body, "sha256:") {
-		t.Errorf("a digest is rendered where the tag should be")
-	}
-}
-
-// No actor is a standing fact about the deployment, so the page says it once
-// and greys the buttons -- rather than letting someone find out by clicking
-// and getting an error that then persists across reloads.
-func TestNoActorSaysSoAndDisablesTheButtons(t *testing.T) {
-	e := entry("gluetun", "1.0", "1.1", version.KindMinor)
-	e.CanApply = false
-	s := &Server{
-		Source:   &fakeSource{pending: []Hosted{e}, noActor: []string{"optiplex"}},
-		Approver: &fakeApprover{},
-		Version:  "v1",
-	}
-
-	_, body := get(t, s, "/")
-	if !strings.Contains(body, "no actor") {
-		t.Error("the page does not say there is no actor")
-	}
-	if !strings.Contains(body, "<button class=\"apply\" type=\"button\" disabled") {
-		t.Error("the Update button is not disabled")
-	}
-	// The row is still there: it has a decision waiting, and hiding it would
-	// make it look like one that does not.
-	if !strings.Contains(body, "gluetun") {
-		t.Error("the row vanished along with its button")
-	}
-}
-
-// The positive: with an actor, the button is a live form.
-func TestWithAnActorTheButtonSubmits(t *testing.T) {
-	s := &Server{
-		Source:   &fakeSource{pending: []Hosted{entry("gluetun", "1.0", "1.1", version.KindMinor)}},
-		Approver: &fakeApprover{},
-		Version:  "v1",
-	}
-	_, body := get(t, s, "/")
-	if strings.Contains(body, "<button class=\"apply\" type=\"button\" disabled") {
-		t.Error("the button is disabled although the decider has an actor")
-	}
-	if !strings.Contains(body, `<button class="apply" type="submit">`) {
-		t.Error("no submitting Update button")
-	}
-	if strings.Contains(body, "no actor") {
-		t.Error("the page claims there is no actor")
-	}
-}
-
-// The page refreshes itself: the queue changes without anyone touching it, so
-// one left open would otherwise show whatever was true when it was opened.
-func TestPageRefreshesItself(t *testing.T) {
-	s := &Server{Source: &fakeSource{}, Version: "v1"}
-	_, body := get(t, s, "/")
-	if !strings.Contains(body, `http-equiv="refresh"`) {
-		t.Error("the page does not refresh itself")
-	}
-	// Back to "/" explicitly: an apply result rides in the query string, and
-	// refreshing to the same URL would replay a stale message forever.
-	if !strings.Contains(body, `url=/`) {
-		t.Error("the refresh keeps the query string, so a stale message would replay")
-	}
-}
-
-// A row whose decider has stopped answering is shown but not applyable: it
-// was really queued, and may no longer be.
-func TestStaleRowIsShownButNotApplyable(t *testing.T) {
-	e := entry("gluetun", "1.0", "1.1", version.KindMinor)
-	e.Stale = true
-	s := &Server{
-		Source:   &fakeSource{pending: []Hosted{e}, unreachable: []Problem{{Host: "optiplex", Err: "refused"}}},
-		Approver: &fakeApprover{},
-		Version:  "v1",
-	}
-	_, body := get(t, s, "/")
-	if !strings.Contains(body, "gluetun") {
-		t.Error("a stale row is not shown at all")
-	}
-	if !strings.Contains(body, `class="stale"`) {
-		t.Error("a stale row is not marked as such")
-	}
-	if !strings.Contains(body, `<button class="apply" type="button" disabled`) {
-		t.Error("a stale row's button is not disabled")
-	}
-	if !strings.Contains(body, "not answering") {
-		t.Error("the disabled button does not say why")
-	}
-}
-
-// The script must fetch "/" without a query, or a stale apply message would
-// be re-rendered on every poll forever.
-func TestReactiveScriptFetchesTheBareURL(t *testing.T) {
-	s := &Server{Source: &fakeSource{}, Version: "v1"}
-	_, body := get(t, s, "/")
-	if !strings.Contains(body, `fetch("/"`) {
-		t.Error("the poller does not fetch the bare URL")
-	}
-	// And the meta refresh stays in the markup as the no-script fallback.
-	if !strings.Contains(body, `http-equiv="refresh"`) {
-		t.Error("the no-script fallback is gone")
-	}
-	// Belt and braces: the script removes that tag at runtime, so both do not
-	// run at once.
-	if !strings.Contains(body, `meta[http-equiv="refresh"]`) {
-		t.Error("the script does not cancel the meta refresh")
+	if first["kind"] != "digest" {
+		t.Errorf("kind = %v, want digest", first["kind"])
 	}
 }

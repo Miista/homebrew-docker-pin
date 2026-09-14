@@ -9,6 +9,7 @@ package ui
 
 import (
 	_ "embed"
+	"encoding/json"
 	"fmt"
 	"html/template"
 	"net/http"
@@ -24,10 +25,19 @@ var pageHTML string
 //go:embed assets/logo.png
 var logoPNG []byte
 
+//go:embed assets/petite-vue.js
+var petiteVue []byte
+
 //go:embed assets/favicon.png
 var faviconPNG []byte
 
-var page = template.Must(template.New("page").Parse(pageHTML))
+// The Go template's delimiters are moved out of petite-vue's way.
+//
+// Both use {{ }} by default, and the page is markup petite-vue reads at
+// runtime -- so anything Go interpolated would have to be something petite-vue
+// never sees, and vice versa. Rather than police that by hand, Go uses [[ ]]
+// and leaves {{ }} entirely to the page.
+var page = template.Must(template.New("page").Delims("[[", "]]").Parse(pageHTML))
 
 // Source supplies what the page renders.
 //
@@ -72,8 +82,12 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.HandleFunc("/logo.png", servePNG(logoPNG))
 	mux.HandleFunc("/favicon.png", servePNG(faviconPNG))
+	mux.HandleFunc("/petite-vue.js", serveJS(petiteVue))
+	mux.HandleFunc("/api/state", s.stateJSON)
+	mux.HandleFunc("/api/stream/", s.stream)
 	if s.Approver != nil {
 		mux.HandleFunc("/apply", s.apply)
+		mux.HandleFunc("/api/apply/", s.applyJSON)
 	}
 	mux.HandleFunc("/", s.index)
 	return mux
@@ -91,32 +105,35 @@ func servePNG(b []byte) http.HandlerFunc {
 }
 
 // row is one line of the table.
+//
+// Rendered by the Go template for first paint and serialised to the page's
+// poller, from one toRow -- so the two cannot describe a row differently.
 type row struct {
-	Service string
+	Service string `json:"service"`
 	// Host is the decider it came from, shown so two services of the same
 	// name on different hosts are tellable apart.
-	Host string
-	// Key is what the form posts back: "host/service". The row carries it
+	Host string `json:"host"`
+	// Key is what a click posts back: "host/service". The row carries it
 	// rather than the page rebuilding it, so there is one definition of what
 	// identifies a row.
-	Key        string
-	Image      string
-	CurrentTag string
-	Candidate  string
+	Key        string `json:"key"`
+	Image      string `json:"image"`
+	CurrentTag string `json:"current_tag"`
+	Candidate  string `json:"candidate"`
 	// Moved marks a digest move, where the tag did not change and there is
 	// no from/to to render.
-	Moved bool
+	Moved bool `json:"moved"`
 	// Tag is what the service follows, shown instead of a digest pair.
-	Tag string
+	Tag string `json:"tag"`
 	// CanApply is whether this row's decider has an actor. Per row: one host
 	// can have an actor while another does not.
-	CanApply bool
+	CanApply bool `json:"can_apply"`
 	// Stale marks a row whose decider has stopped answering.
-	Stale     bool
-	Kind      string
-	Why       string
-	FirstSeen string
-	Auto      string
+	Stale     bool   `json:"stale"`
+	Kind      string `json:"kind"`
+	Why       string `json:"why"`
+	FirstSeen string `json:"first_seen"`
+	Auto      string `json:"auto"`
 }
 
 func (s *Server) index(w http.ResponseWriter, r *http.Request) {
@@ -126,28 +143,12 @@ func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pending := s.Source.Pending()
-	rows := make([]row, 0, len(pending))
-	for _, e := range pending {
-		rows = append(rows, row{
-			Service:    e.Service,
-			Host:       e.Host,
-			Key:        Key(e.Host, e.Service),
-			Image:      e.Image,
-			CurrentTag: e.From,
-			Candidate:  display(e.Entry),
-			// A moving tag that moved has no new tag to show: the tag is the
-			// same, and the digest is 71 characters that say nothing a person
-			// can act on. The tag alone is the whole of what changed.
-			Moved:     isDigestMove(e.Entry),
-			Tag:       e.Tag,
-			CanApply:  e.CanApply && !e.Stale,
-			Stale:     e.Stale,
-			Kind:      kindLabel(e.Entry),
-			Why:       e.Why,
-			FirstSeen: e.FirstSeen,
-			Auto:      string(e.Auto),
-		})
+	st := s.snapshot()
+	initial, err := json.Marshal(st)
+	if err != nil {
+		// Cannot happen with these types, but a page whose script found no
+		// data would render empty and say nothing about why.
+		initial = []byte("{}")
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -157,25 +158,60 @@ func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 	// explanation anywhere. Logging it is the difference between a minute and
 	// an hour.
 	if err := page.Execute(w, struct {
-		Pending      []row
-		Unreachable  []Problem
-		WithoutActor []string
-		Version      string
-		CanApply     bool
-		Service      string
-		Level        string
-		Message      string
+		state
+		// InitialJSON is the same state again, for the page's script to start
+		// from. Rendered rather than fetched so the first paint is already
+		// correct and the no-JavaScript case is whole.
+		InitialJSON template.JS
+		Service     string
+		Level       string
+		Message     string
 	}{
-		Pending:      rows,
-		Unreachable:  s.Source.Unreachable(),
-		WithoutActor: s.Source.WithoutActor(),
-		Version:      s.Version,
-		CanApply:     s.Approver != nil,
-		Service:      r.URL.Query().Get("service"),
-		Level:        r.URL.Query().Get("level"),
-		Message:      r.URL.Query().Get("message"),
+		state:       st,
+		InitialJSON: template.JS(initial),
+		Service:     r.URL.Query().Get("service"),
+		Level:       r.URL.Query().Get("level"),
+		Message:     r.URL.Query().Get("message"),
 	}); err != nil {
 		fmt.Fprintf(w, "\n<!-- the page failed to render: %s -->\n", err)
+	}
+}
+
+// state is everything the page renders from, in one shape.
+//
+// One struct for the template and the JSON, so the first paint and every poll
+// after it are describing the same thing. Two shapes would be two chances to
+// disagree about what a queue is.
+type state struct {
+	Rows         []row     `json:"rows"`
+	Unreachable  []Problem `json:"unreachable"`
+	WithoutActor []string  `json:"without_actor"`
+	CanApply     bool      `json:"can_apply"`
+	Version      string    `json:"version"`
+}
+
+func (s *Server) snapshot() state {
+	pending := s.Source.Pending()
+	rows := make([]row, 0, len(pending))
+	for _, e := range pending {
+		rows = append(rows, toRow(e))
+	}
+	// Initialised rather than left nil: Go encodes a nil slice as JSON null,
+	// and a page reading .length off it throws before rendering anything.
+	unreachable := s.Source.Unreachable()
+	if unreachable == nil {
+		unreachable = []Problem{}
+	}
+	withoutActor := s.Source.WithoutActor()
+	if withoutActor == nil {
+		withoutActor = []string{}
+	}
+	return state{
+		Rows:         rows,
+		Unreachable:  unreachable,
+		WithoutActor: withoutActor,
+		CanApply:     s.Approver != nil,
+		Version:      s.Version,
 	}
 }
 
@@ -230,4 +266,105 @@ func kindLabel(e decide.Entry) string {
 		return "unknown"
 	}
 	return string(e.Kind)
+}
+
+// stateJSON is the page data for the poller, from the same snapshot the
+// template renders -- so a poll and a first paint cannot disagree.
+func (s *Server) stateJSON(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	json.NewEncoder(w).Encode(s.snapshot())
+}
+
+// stream relays one in-flight apply's progress to the page.
+//
+// Relayed rather than letting the browser talk to the decider directly: the
+// token that reaches a decider is this process's, and putting it in a page
+// would hand the authority to replace containers to every browser that loads
+// the queue.
+func (s *Server) stream(w http.ResponseWriter, r *http.Request) {
+	key := strings.TrimPrefix(r.URL.Path, "/api/stream/")
+	if key == "" {
+		http.Error(w, "no service", http.StatusBadRequest)
+		return
+	}
+	streamer, ok := s.Source.(Streamer)
+	if !ok {
+		http.Error(w, "this source cannot stream", http.StatusNotImplemented)
+		return
+	}
+	if err := streamer.Stream(key, w, r); err != nil {
+		// Headers may already be out by the time this fails, so this is
+		// best-effort: the page treats a stream that ends without a terminal
+		// line as finished and re-polls, which is the honest answer anyway.
+		http.Error(w, err.Error(), http.StatusBadGateway)
+	}
+}
+
+// Streamer is a Source that can relay an apply's progress.
+//
+// Separate from Source because a Source that only ever renders a queue is
+// still useful -- and because the page degrades to polling when there is
+// nothing to stream from.
+type Streamer interface {
+	Stream(key string, w http.ResponseWriter, r *http.Request) error
+}
+
+// toRow is the one place a Hosted becomes a row, shared by the template and
+// the JSON so the two cannot drift.
+func toRow(e Hosted) row {
+	return row{
+		Service:    e.Service,
+		Host:       e.Host,
+		Key:        Key(e.Host, e.Service),
+		Image:      e.Image,
+		CurrentTag: e.From,
+		Candidate:  display(e.Entry),
+		Moved:      isDigestMove(e.Entry),
+		Tag:        e.Tag,
+		CanApply:   e.CanApply && !e.Stale,
+		Stale:      e.Stale,
+		Kind:       kindLabel(e.Entry),
+		Why:        e.Why,
+		FirstSeen:  e.FirstSeen,
+		Auto:       string(e.Auto),
+	}
+}
+
+// serveJS returns a handler for the vendored script.
+//
+// Vendored rather than fetched from a CDN: this page approves container
+// replacements, and a script pulled from someone else's server at render time
+// is a supply chain for that. It also has to work on a LAN with no internet.
+func serveJS(b []byte) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		w.Write(b)
+	}
+}
+
+// applyJSON approves an entry for the page's script.
+//
+// Beside /apply rather than replacing it: /apply is a form POST that
+// redirects, which is what makes the page work with JavaScript disabled. This
+// one answers with a message and no navigation, because the page renders the
+// result itself.
+func (s *Server) applyJSON(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	key := strings.TrimPrefix(r.URL.Path, "/api/apply/")
+	if key == "" {
+		http.Error(w, "no service", http.StatusBadRequest)
+		return
+	}
+
+	message := ""
+	if err := s.Approver.Approve(key); err != nil {
+		message = err.Error()
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	json.NewEncoder(w).Encode(map[string]string{"message": message})
 }

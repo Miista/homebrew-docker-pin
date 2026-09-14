@@ -3,19 +3,6 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<!-- The queue changes without anyone touching this page: a detector run adds
-     entries, a decider goes away, an actor is configured. A page left open
-     would otherwise show whatever was true when it was opened, which is worst
-     for the thing it exists to show -- a decision waiting on someone.
-
-     Meta refresh rather than script: this is plain HTML and stays that way.
-     30s because the collector caches for 5s, so this costs one fan-out per
-     refresh and no more.
-
-     The URL is given explicitly, without a query: an apply result rides in
-     the query string, and refreshing back to the same URL would replay a
-     stale message every 30s forever. -->
-<meta http-equiv="refresh" content="30; url=/">
 <link rel="icon" type="image/png" href="/favicon.png">
 <title>duva</title>
 <style>
@@ -137,6 +124,17 @@
      really queued, but faded because it cannot be confirmed. */
   .rows li.stale { opacity: .55; }
 
+  /* ---------- an apply, as it happens ---------- */
+  .steps { grid-column: 1 / -1; margin: .1rem 0 .35rem; padding: .45rem .65rem;
+           background: var(--tint); border-radius: 6px; font-size: .78rem;
+           color: var(--muted); }
+  .steps div { padding: .05rem 0; }
+  .steps div::before { content: "\2026  "; color: var(--faint); }
+  .steps .ok { color: var(--ok); font-weight: 600; }
+  .steps .ok::before { content: "\2713  "; }
+  .steps .bad { color: var(--major); font-weight: 600; }
+  .steps .bad::before { content: "\2717  "; }
+
   /* ---------- empty state: the common case ---------- */
   .empty { padding: 3rem 1rem 2.75rem; text-align: center; }
   .tick { width: 2.1rem; height: 2.1rem; margin: 0 auto .9rem;
@@ -172,130 +170,192 @@
 </style>
 </head>
 <body>
-<main>
+<!-- One description of a row, not two.
+
+     The Go template renders the markup below with petite-vue's directives
+     still in it, and the initial state as JSON at the bottom. Without
+     JavaScript nothing renders at all -- see the note below.
+     server-side and the page is complete and correct. With it, petite-vue
+     mounts over the same markup and takes over -- the queue polls, and an
+     apply's steps stream into the row that started it.
+
+     This is what makes the two update channels one thing. A poll writes to
+     `state`, a stream writes to `steps`, and the DOM follows from both
+     without either knowing the other exists. -->
+<noscript>
+  <div class="banner banner-error" style="max-width:66rem;margin:1.75rem auto;">
+    <span class="who">JavaScript is off</span> — this page is markup the browser
+    fills in, so with it disabled there is nothing here. The queue itself is
+    still readable as JSON at <code>/api/state</code>, and a decider will
+    answer <code>/v1/snapshot</code> directly given its token.
+  </div>
+</noscript>
+
+<main v-scope="Queue()" @vue:mounted="start()">
   <div class="top">
     <img class="logo" src="/logo.png" alt="" width="24" height="24">
     <span class="mark">duva</span>
-    {{if .Pending}}<span class="count">{{len .Pending}} to decide</span>{{end}}
+    <span class="count" v-if="rows.length">{{ rows.length }} to decide</span>
   </div>
 
-  {{if .WithoutActor}}
-  <div class="banner banner-note">
+  <div class="banner banner-note" v-if="withoutActor.length">
     <span class="who">no actor</span> &mdash;
-    {{range .WithoutActor}}<span class="mono">{{.}}</span> {{end}}
-    {{if gt (len .WithoutActor) 1}}have{{else}}has{{end}} nothing to apply with,
+    <span class="mono" v-for="h in withoutActor">{{ h }} </span>
+    {{ withoutActor.length > 1 ? "have" : "has" }} nothing to apply with,
     so updates can be queued but not made.
   </div>
-  {{end}}
 
-  {{if .Unreachable}}
-  <div class="banner banner-error">
+  <div class="banner banner-error" v-if="unreachable.length">
     <span class="who">unreachable</span> &mdash;
-    {{range .Unreachable}}<span class="mono">{{.Host}}</span> ({{.Err}}) {{end}}
+    <span v-for="u in unreachable"><span class="mono">{{ u.Host }}</span> ({{ u.Err }}) </span>
     <br>What they last reported is shown below, faded, and cannot be approved until they answer again.
   </div>
-  {{end}}
 
-  {{if .Message}}
-  <div class="banner{{if eq .Level "error"}} banner-error{{end}}">
-    <span class="who">{{.Service}}</span> — {{.Message}}
+  <div class="banner" :class="result.level === 'error' ? 'banner-error' : ''" v-if="result.message">
+    <span class="who">{{ result.service }}</span> — {{ result.message }}
   </div>
-  {{end}}
 
-  {{if .Pending}}
+  <template v-if="rows.length">
   <h1>Waiting on you</h1>
   <p class="sub">duva will not touch these until you say so.</p>
-    <div class="head" aria-hidden="true">
-      <span>Service</span><span>Change</span><span>Kind</span><span></span>
-    </div>
+  <div class="head" aria-hidden="true">
+    <span>Service</span><span>Change</span><span>Kind</span><span></span>
+  </div>
   <ul class="rows">
-    {{range .Pending}}
-    <li{{if .Stale}} class="stale"{{end}}>
-      <span class="svc">{{.Service}}{{if .Host}}<span class="on mono">{{.Host}}</span>{{end}}<span class="img mono">{{.Image}}</span></span>
-      <span class="jump mono">{{if .Moved}}<span class="to">{{.Tag}}</span>{{else}}<span class="from">{{.CurrentTag}}</span><span class="arrow">&rarr;</span><span class="to">{{.Candidate}}</span>{{end}}</span>
-      <span class="kind kind-{{.Kind}}"{{if eq .Kind "unknown"}} title="duva could not compare these tags — not a semantic version"{{end}}>{{.Kind}}</span>
-      {{if $.CanApply}}
-      {{if .CanApply}}
-      <form method="post" action="/apply">
-        <input type="hidden" name="service" value="{{.Key}}">
-        <button class="apply" type="submit">Update</button>
-      </form>
-      {{else}}
-      <button class="apply" type="button" disabled
-              title="{{if .Stale}}{{.Host}} is not answering, so this cannot be confirmed or applied{{else}}{{.Host}} has no actor configured, so nothing can be applied{{end}}">Update</button>
-      {{end}}
-      {{end}}
+    <li v-for="r in rows" :key="r.key" :class="r.stale ? 'stale' : ''">
+      <span class="svc">{{ r.service }}<span class="on mono" v-if="r.host">{{ r.host }}</span><span class="img mono">{{ r.image }}</span></span>
+
+      <span class="jump mono" v-if="r.moved"><span class="to">{{ r.tag }}</span></span>
+      <span class="jump mono" v-else><span class="from">{{ r.current_tag }}</span><span class="arrow">&rarr;</span><span class="to">{{ r.candidate }}</span></span>
+
+      <span class="kind" :class="'kind-' + r.kind"
+            :title="r.kind === 'unknown' ? 'duva could not compare these tags — not a semantic version' : ''">{{ r.kind }}</span>
+
+      <button class="apply" v-if="canApply"
+              :disabled="!r.can_apply || !!steps[r.key]"
+              :title="buttonReason(r)"
+              @click="apply(r)">{{ steps[r.key] ? "Updating…" : "Update" }}</button>
+
+      <div class="steps" v-if="steps[r.key] || finished[r.key]">
+        <div v-for="line in (steps[r.key] || [])">{{ line }}</div>
+        <div :class="finished[r.key] && finished[r.key].startsWith('failed') ? 'bad' : 'ok'"
+             v-if="finished[r.key]">{{ finished[r.key] }}</div>
+      </div>
     </li>
-    {{end}}
   </ul>
-  {{else}}
-  <div class="empty">
+  </template>
+
+  <div class="empty" v-else>
     <div class="tick" aria-hidden="true"></div>
     <h1>Nothing waiting for approval</h1>
-    {{if .Unreachable}}
-    <p>Nothing from the deciders that answered. The ones above did not, so this is not the whole picture.</p>
-    {{else}}
-    <p>Every container duva watches is where you left it. Nothing will change without your say.</p>
-    {{end}}
+    <p v-if="unreachable.length">Nothing from the deciders that answered. The ones above did not, so this is not the whole picture.</p>
+    <p v-else>Every container duva watches is where you left it. Nothing will change without your say.</p>
   </div>
-  {{end}}
 
   <footer>
-    <span>duva {{.Version}}</span>
+    <span>duva {{ version }}</span>
     <span class="checked">the detector decides when to look; this shows what it found</span>
   </footer>
 </main>
-<script>
-// Re-render by fetching the page this server already produces and swapping
-// <main>. The Go template stays the only thing that knows how a row looks:
-// a JSON endpoint and a second renderer here would be two descriptions of
-// the same thing, kept in agreement by hand.
-//
-// It replaces the <meta refresh> above for anyone with script enabled --
-// that tag stays as the fallback, so the page is never stale either way.
-(function () {
-  "use strict";
 
-  var PERIOD = 15000;
+<!-- The first paint's data, so the page is correct before any request is
+     made. Written by the template rather than fetched, which is what keeps
+     the no-JavaScript case whole. -->
+<script type="application/json" id="initial">[[ .InitialJSON ]]</script>
 
-  function swap() {
-    // "/" without a query: an apply result rides in the query string, and
-    // re-fetching it would replay a stale message forever.
-    fetch("/", { headers: { "Accept": "text/html" } })
-      .then(function (r) { return r.ok ? r.text() : Promise.reject(r.status); })
-      .then(function (html) {
-        var next = new DOMParser().parseFromString(html, "text/html")
-          .querySelector("main");
-        var now = document.querySelector("main");
-        // Nothing changed: leave the DOM alone entirely, so a focused button
-        // stays focused and a hovered row keeps its image shown.
-        if (!next || !now || next.innerHTML === now.innerHTML) return;
-        now.replaceWith(next);
-      })
-      .catch(function () {
-        // A failed poll is not worth reporting: the next one is 15s away,
-        // and the server being unreachable is not something this page can
-        // say anything useful about from inside itself.
-      });
-  }
+<script type="module">
+import { createApp } from "/petite-vue.js"
 
-  // Cancel the meta refresh: with script running, swapping is strictly
-  // better, and leaving both would reload the page mid-swap every 30s.
-  var meta = document.querySelector('meta[http-equiv="refresh"]');
-  if (meta) meta.remove();
+const initial = JSON.parse(document.getElementById("initial").textContent)
 
-  // A tab nobody is looking at does not need polling: this page is left open
-  // in a background tab for days, and a decider answering a request every 15s
-  // for nobody is the kind of thing that is only noticed in a log months
-  // later.
-  setInterval(function () { if (!document.hidden) swap(); }, PERIOD);
+createApp({
+  Queue() {
+    return {
+      rows: initial.rows || [],
+      unreachable: initial.unreachable || [],
+      withoutActor: initial.without_actor || [],
+      canApply: initial.can_apply,
+      version: initial.version,
+      steps: {},        // key -> lines so far
+      finished: {},     // key -> terminal status
+      result: {},       // the last apply's answer, when it refused
 
-  // Returning to the tab wants the current state now, not up to PERIOD from
-  // now -- which is exactly when someone is about to act on what they see.
-  document.addEventListener("visibilitychange", function () {
-    if (!document.hidden) swap();
-  });
-})();
+      start() {
+        // A hidden tab does not poll: this page is left open for days, and a
+        // decider answering for nobody every 15s is the sort of thing noticed
+        // in a log months later.
+        setInterval(() => { if (!document.hidden) this.poll() }, 15000)
+        document.addEventListener("visibilitychange", () => {
+          if (!document.hidden) this.poll()
+        })
+      },
+
+      async poll() {
+        try {
+          const s = await (await fetch("/api/state")).json()
+          this.rows = s.rows || []
+          this.unreachable = s.unreachable || []
+          this.withoutActor = s.without_actor || []
+          this.canApply = s.can_apply
+        } catch (e) {
+          // A failed poll is not worth reporting: the next one is 15s away,
+          // and a UI that cannot reach itself has nothing useful to say from
+          // inside itself.
+        }
+      },
+
+      buttonReason(r) {
+        if (r.stale) return r.host + " is not answering, so this cannot be confirmed or applied"
+        if (!r.can_apply) return r.host + " has no actor configured, so nothing can be applied"
+        return ""
+      },
+
+      async apply(r) {
+        this.result = {}
+        this.steps = { ...this.steps, [r.key]: [] }
+        const res = await (await fetch("/api/apply/" + r.key, { method: "POST" })).json()
+        if (res.message) {
+          // Refused before anything started: drop the panel and say why.
+          const { [r.key]: _, ...rest } = this.steps
+          this.steps = rest
+          this.result = { service: r.service, level: "error", message: res.message }
+          return
+        }
+        this.watch(r.key)
+      },
+
+      // Reading the actor's steps as they arrive. Lines go into `steps`, and
+      // the DOM follows -- there is no "find the panel and append to it".
+      async watch(key) {
+        try {
+          const res = await fetch("/api/stream/" + key)
+          const reader = res.body.getReader()
+          const dec = new TextDecoder()
+          let buf = ""
+          for (;;) {
+            const { done, value } = await reader.read()
+            if (done) break
+            buf += dec.decode(value, { stream: true })
+            const lines = buf.split("\n")
+            buf = lines.pop()
+            for (const line of lines) {
+              if (!line) continue
+              if (line.startsWith("status: ")) {
+                this.finished = { ...this.finished, [key]: line.slice(8) }
+              } else {
+                this.steps = { ...this.steps, [key]: [...(this.steps[key] || []), line] }
+              }
+            }
+          }
+        } catch (e) {
+          this.finished = { ...this.finished, [key]: "failed: lost the connection while it ran" }
+        }
+        // The queue has changed underneath: an applied entry has left it.
+        this.poll()
+      },
+    }
+  },
+}).mount()
 </script>
 </body>
 </html>

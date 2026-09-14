@@ -350,3 +350,63 @@ func (c *Collector) WithoutActor() []string {
 	sort.Strings(out)
 	return out
 }
+
+// Stream relays one in-flight apply's progress from the decider that owns it.
+//
+// A relay rather than pointing the browser at the decider: the token that
+// reaches a decider is the UI's, held server-side. Handing it to a page would
+// put the authority to replace containers in every browser that loads the
+// queue.
+//
+// Lines are copied through and flushed as they arrive, because that is the
+// whole value of a stream -- buffering it would turn four steps arriving over
+// a minute into one silent minute and then four lines at once.
+func (c *Collector) Stream(key string, w http.ResponseWriter, r *http.Request) error {
+	host, service, ok := SplitKey(key)
+	if !ok {
+		return fmt.Errorf("%q is not a host/service key", key)
+	}
+	for _, d := range c.Deciders {
+		if d.Host != host {
+			continue
+		}
+		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet,
+			strings.TrimSuffix(d.URL, "/")+"/v1/stream/"+url.PathEscape(service), nil)
+		if err != nil {
+			return err
+		}
+		if d.Token != "" {
+			req.Header.Set("Authorization", "Bearer "+d.Token)
+		}
+		// No timeout on this client: a stream is long-lived by design, and
+		// the default 10s would cut every apply off mid-pull.
+		resp, err := (&http.Client{}).Do(req)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("%s", resp.Status)
+		}
+
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		flusher, _ := w.(http.Flusher)
+		buf := make([]byte, 4<<10)
+		for {
+			n, err := resp.Body.Read(buf)
+			if n > 0 {
+				if _, werr := w.Write(buf[:n]); werr != nil {
+					return nil // the browser went away, which is not an error
+				}
+				if flusher != nil {
+					flusher.Flush()
+				}
+			}
+			if err != nil {
+				return nil // including io.EOF: the stream ended, as it should
+			}
+		}
+	}
+	return fmt.Errorf("no decider named %q", host)
+}
