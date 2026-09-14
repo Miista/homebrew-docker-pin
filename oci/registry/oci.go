@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"time"
 )
 
 const ociMaxTagChecks = 20
@@ -41,6 +42,12 @@ func ociTagDigestFromBase(baseURL, repo, tag string) (string, error) {
 }
 
 // ociDo performs req, transparently handling a single bearer-auth challenge.
+//
+// A caller that already holds a token sets it on the request and skips the
+// challenge entirely -- see pullToken, which mints one up front because a pull
+// scope is predictable. This remains the fallback for a registry this package
+// has not been taught about, and for a pre-minted token the registry rejects:
+// a 401 still earns one retry with a freshly discovered token.
 func ociDo(client *http.Client, req *http.Request, accept string) (*http.Response, error) {
 	if accept != "" {
 		req.Header.Set("Accept", accept)
@@ -84,7 +91,17 @@ func ociDo(client *http.Client, req *http.Request, accept string) (*http.Respons
 	return doWithRetry(func() (*http.Response, error) { return client.Do(req2) })
 }
 
+// ociFetchToken returns a bearer token for the realm/service/scope, reusing a
+// cached one where it is still valid.
+//
+// The cache is what keeps a registry that challenges every request from
+// costing three requests per operation -- see token_cache.go.
 func ociFetchToken(client *http.Client, realm, service, scope string) (string, error) {
+	key := realm + "|" + service + "|" + scope
+	if t, ok := tokens.get(key); ok {
+		return t, nil
+	}
+
 	u, err := url.Parse(realm)
 	if err != nil {
 		return "", fmt.Errorf("invalid auth realm %q: %w", realm, err)
@@ -109,17 +126,23 @@ func ociFetchToken(client *http.Client, realm, service, scope string) (string, e
 	var data struct {
 		Token       string `json:"token"`
 		AccessToken string `json:"access_token"`
+		// ExpiresIn is the token's lifetime in seconds. Honoured rather than
+		// assumed, so a registry that mints short-lived tokens is not handed
+		// one that expired mid-run.
+		ExpiresIn int `json:"expires_in"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
 		return "", err
 	}
-	if data.Token != "" {
-		return data.Token, nil
+	token := data.Token
+	if token == "" {
+		token = data.AccessToken
 	}
-	if data.AccessToken != "" {
-		return data.AccessToken, nil
+	if token == "" {
+		return "", fmt.Errorf("auth token endpoint returned no token")
 	}
-	return "", fmt.Errorf("auth token endpoint returned no token")
+	tokens.put(key, token, time.Duration(data.ExpiresIn)*time.Second)
+	return token, nil
 }
 
 // ociListTags walks every page of the tags/list endpoint via the Link

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 )
 
 const ghcrMaxTagChecks = 20
@@ -24,8 +25,15 @@ func ghcrToken(client *http.Client, path string) (string, error) {
 	return ghcrTokenFromBase(client, path, "https://ghcr.io")
 }
 
+// ghcrTokenFromBase returns a pull token for one repository, reusing a cached
+// one where it is still valid. See token_cache.go for why that matters: GHCR
+// challenges every request, and a check across many services asked for a
+// fresh token on each one.
 func ghcrTokenFromBase(client *http.Client, path, baseURL string) (string, error) {
 	url := fmt.Sprintf("%s/token?scope=repository:%s:pull&service=ghcr.io", baseURL, path)
+	if t, ok := tokens.get(url); ok {
+		return t, nil
+	}
 	resp, err := getWithRetry(client, url)
 	if err != nil {
 		return "", err
@@ -35,7 +43,8 @@ func ghcrTokenFromBase(client *http.Client, path, baseURL string) (string, error
 		return "", fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 	var data struct {
-		Token string `json:"token"`
+		Token     string `json:"token"`
+		ExpiresIn int    `json:"expires_in"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
 		return "", err
@@ -43,6 +52,7 @@ func ghcrTokenFromBase(client *http.Client, path, baseURL string) (string, error
 	if data.Token == "" {
 		return "", fmt.Errorf("empty token")
 	}
+	tokens.put(url, data.Token, time.Duration(data.ExpiresIn)*time.Second)
 	return data.Token, nil
 }
 

@@ -185,8 +185,16 @@ func dockerHubTagCreated(baseImage, tag string) (time.Time, error) {
 
 // ociTagCreated walks manifest (or index -> first sub-manifest) -> config
 // blob -> "created" for any OCI Distribution registry, including GHCR.
+//
+// It authenticates once, up front, and carries that token through all three
+// fetches. A pull scope is predictable, so waiting to be challenged on each
+// one turned three requests into nine -- which is what made a tag-heavy
+// service take a minute and a half to check, and made a scheduled run look
+// like a flood to the resolver.
 func ociTagCreated(client *http.Client, baseURL, repo, tag string) (time.Time, error) {
-	manifest, err := ociGetJSON(client, fmt.Sprintf("%s/v2/%s/manifests/%s", baseURL, repo, tag), manifestAccept)
+	token, _ := pullToken(client, baseURL, repo)
+
+	manifest, err := ociGetJSONAuth(client, fmt.Sprintf("%s/v2/%s/manifests/%s", baseURL, repo, tag), manifestAccept, token)
 	if err != nil {
 		return time.Time{}, err
 	}
@@ -217,7 +225,7 @@ func ociTagCreated(client *http.Client, baseURL, repo, tag string) (time.Time, e
 		if sub == "" {
 			return time.Time{}, fmt.Errorf("manifest for %s has no config and no sub-manifests", tag)
 		}
-		manifest, err = ociGetJSON(client, fmt.Sprintf("%s/v2/%s/manifests/%s", baseURL, repo, sub), manifestAccept)
+		manifest, err = ociGetJSONAuth(client, fmt.Sprintf("%s/v2/%s/manifests/%s", baseURL, repo, sub), manifestAccept, token)
 		if err != nil {
 			return time.Time{}, err
 		}
@@ -228,7 +236,7 @@ func ociTagCreated(client *http.Client, baseURL, repo, tag string) (time.Time, e
 			return time.Time{}, fmt.Errorf("sub-manifest for %s has no config", tag)
 		}
 	}
-	blob, err := ociGetJSON(client, fmt.Sprintf("%s/v2/%s/blobs/%s", baseURL, repo, m.Config.Digest), "")
+	blob, err := ociGetJSONAuth(client, fmt.Sprintf("%s/v2/%s/blobs/%s", baseURL, repo, m.Config.Digest), "", token)
 	if err != nil {
 		return time.Time{}, err
 	}
@@ -245,9 +253,21 @@ func ociTagCreated(client *http.Client, baseURL, repo, tag string) (time.Time, e
 }
 
 func ociGetJSON(client *http.Client, url, accept string) ([]byte, error) {
+	return ociGetJSONAuth(client, url, accept, "")
+}
+
+// ociGetJSONAuth is ociGetJSON with a token the caller already holds.
+//
+// An empty token means "discover it", which is ociDo's challenge path and the
+// correct behaviour for a registry this package has not been taught about. A
+// non-empty one skips the 401 entirely.
+func ociGetJSONAuth(client *http.Client, url, accept, token string) ([]byte, error) {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, err
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	resp, err := ociDo(client, req, accept)
 	if err != nil {
