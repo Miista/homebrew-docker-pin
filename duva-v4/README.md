@@ -89,7 +89,14 @@ duva-actor:
     ACTOR_GIT_PUSH: "false"
   volumes:
     # Read-write, unlike the decider's: rewriting the pin is the whole point.
+    # The actor refuses to start against a :ro mount.
     - ..:/compose
+    # Not :ro. That flag applies to the socket *file*, not to the API served
+    # over it -- the daemon never sees it, and a container with a :ro socket
+    # can still create and delete containers. Measured, not assumed:
+    # POST /containers/create through a :ro mount answers 404 (no such image),
+    # not 403. Anything holding this socket has root on the host, which is
+    # why only the actor holds it.
     - /var/run/docker.sock:/var/run/docker.sock
 ```
 
