@@ -108,6 +108,14 @@ type Snapshot struct {
 	// button: they have already decided by the time they find out. Reported
 	// so a UI can grey it beforehand.
 	CanApply bool `json:"can_apply"`
+	// Blocker says which kind of thing is in the way. Empty when CanApply.
+	//
+	// The two are mutually exclusive, so this carries no information the
+	// reason does not -- it exists so a page can *style* them apart without
+	// matching on prose the actor is free to reword. They read differently
+	// enough to be worth it: one says nothing will change until somebody
+	// configures something, the other says wait a moment.
+	Blocker Blocker `json:"blocker,omitempty"`
 	// WhyNot is what to say when CanApply is false, in the actor's own words.
 	//
 	// Relayed, not composed: why an actor would refuse is its business, and
@@ -116,14 +124,30 @@ type Snapshot struct {
 	WhyNot string `json:"why_not,omitempty"`
 }
 
+// Blocker is which kind of thing stops an approval landing.
+//
+// Two, and they differ in what a person should do about them. No actor is a
+// standing configuration: it will not change until a compose file is edited.
+// An actor that is not ready is transient -- the reference one is unready on
+// an uncommitted repository -- and clears with nothing deployed.
+type Blocker string
+
+const (
+	// NoActor: this decider has nothing to hand work to.
+	NoActor Blocker = "no-actor"
+	// ActorNotReady: there is an actor and it would refuse right now.
+	ActorNotReady Blocker = "actor-not-ready"
+)
+
 func (s *Server) snapshot(w http.ResponseWriter, r *http.Request) {
-	canApply, whyNot := s.actorReadiness()
+	canApply, blocker, whyNot := s.actorReadiness()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(Snapshot{
 		Host:     s.Host,
 		Version:  s.Version,
 		Pending:  s.Queue.List(),
 		CanApply: canApply,
+		Blocker:  blocker,
 		WhyNot:   whyNot,
 	})
 }
@@ -224,12 +248,16 @@ type ReadinessReporter interface {
 //
 // No actor at all is not-ready with the reason already used elsewhere, so a
 // page has one thing to render rather than two shapes of the same fact.
-func (s *Server) actorReadiness() (bool, string) {
+func (s *Server) actorReadiness() (bool, Blocker, string) {
 	if s.Applier == nil {
-		return false, "no actor is configured, so nothing can be applied from here"
+		return false, NoActor, "no actor is configured, so nothing can be applied from here"
 	}
 	if rr, ok := s.Applier.(ReadinessReporter); ok {
-		return rr.Ready()
+		ready, reason := rr.Ready()
+		if ready {
+			return true, "", ""
+		}
+		return false, ActorNotReady, reason
 	}
-	return true, ""
+	return true, "", ""
 }

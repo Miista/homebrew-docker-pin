@@ -219,7 +219,7 @@ func TestStateMarksRowsThatCannotBeApplied(t *testing.T) {
 	stale.Stale = true
 
 	s := &Server{
-		Source:   &fakeSource{pending: []Hosted{noActor, stale}, blocked: []Blocked{{Host: "optiplex", Reason: "no actor is configured"}}},
+		Source:   &fakeSource{pending: []Hosted{noActor, stale}, blocked: []Blocked{{Host: "optiplex", Kind: "no-actor", Reason: "no actor is configured"}}},
 		Approver: &fakeApprover{}, Version: "v1",
 	}
 

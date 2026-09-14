@@ -56,6 +56,9 @@
                   color: var(--major); }
   /* A standing fact, not a failure: muted rather than red. */
   .banner-note { color: var(--muted); }
+  /* Transient: it clears on its own, so it should catch the eye without
+     reading as something broken. Amber, between the muted note and the red. */
+  .banner-wait { color: var(--minor); border-color: var(--minor); }
   .banner .who { font-weight: 650; }
 
   /* ---------- section framing ---------- */
@@ -198,8 +201,19 @@
     <span class="count" v-if="rows.length">{{ rows.length }} to decide</span>
   </div>
 
-  <div class="banner banner-note" v-for="b in blocked">
-    <span class="who">{{ b.host }}</span> &mdash; {{ b.reason }}
+  <!-- Two kinds of blocked, and what a person should do about them differs.
+       No actor is standing: nothing changes until a compose file is edited,
+       so it reads as a settled fact. An actor that is not ready is transient
+       -- the reference one is unready on an uncommitted repository -- so it
+       reads as "wait a moment" rather than "this is broken".
+
+       Told apart by b.kind, never by reading b.reason: that is the actor's
+       own prose and it is free to reword it. -->
+  <div v-for="b in blocked"
+       class="banner"
+       :class="b.kind === 'actor-not-ready' ? 'banner-wait' : 'banner-note'">
+    <span class="who">{{ b.kind === 'actor-not-ready' ? 'not right now' : 'no actor' }}</span>
+    &mdash; <span class="mono">{{ b.host }}</span>: {{ b.reason }}
   </div>
 
   <div class="banner banner-error" v-if="unreachable.length">

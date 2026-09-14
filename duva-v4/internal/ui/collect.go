@@ -78,8 +78,10 @@ type snapshot struct {
 	// canApply is whether this decider has an actor. Per decider, not per
 	// collector: one host can have an actor while another does not.
 	canApply bool
-	// whyNot is the decider's reason, relayed to the page unchanged.
-	whyNot string
+	// blocker is which kind of thing is in the way, for styling; whyNot is
+	// the words, which are the actor's and are never parsed.
+	blocker string
+	whyNot  string
 	// err is the transport failure, when the decider could not be asked.
 	//
 	// Kept rather than dropped because an unreachable decider must render as
@@ -112,7 +114,8 @@ func (c *Collector) Collect() {
 		go func(i int, d Decider) {
 			defer wg.Done()
 			snap, err := c.fetch(d)
-			results[i] = snapshot{queue: snap.Pending, canApply: snap.CanApply, whyNot: snap.WhyNot, err: err}
+			results[i] = snapshot{queue: snap.Pending, canApply: snap.CanApply,
+				blocker: string(snap.Blocker), whyNot: snap.WhyNot, err: err}
 		}(i, d)
 	}
 	wg.Wait()
@@ -338,7 +341,10 @@ func SplitKey(key string) (host, service string, ok bool) {
 // listing one here would claim a reason where the truth is that it was not
 // asked -- which Unreachable already says.
 type Blocked struct {
-	Host   string `json:"host"`
+	Host string `json:"host"`
+	// Kind is "no-actor" or "actor-not-ready", for styling. A page tells
+	// them apart by this and never by reading Reason.
+	Kind   string `json:"kind"`
 	Reason string `json:"reason"`
 }
 
@@ -350,7 +356,7 @@ func (c *Collector) Blocked() []Blocked {
 	var out []Blocked
 	for _, d := range c.Deciders {
 		if s, ok := c.cache[d.Host]; ok && s.err == nil && !s.canApply {
-			out = append(out, Blocked{Host: d.Host, Reason: s.whyNot})
+			out = append(out, Blocked{Host: d.Host, Kind: s.blocker, Reason: s.whyNot})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Host < out[j].Host })

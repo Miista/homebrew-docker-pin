@@ -87,3 +87,53 @@ func TestSnapshotSaysApplyableWhenTheActorIsReady(t *testing.T) {
 }
 
 func boolPtr(b bool) *bool { return &b }
+
+// The two reasons a click cannot land carry different kinds, so a page can
+// style them apart without matching on prose the actor is free to reword.
+func TestSnapshotDistinguishesTheTwoBlockers(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		srv  *Server
+		want Blocker
+	}{
+		{"no actor at all",
+			&Server{Queue: NewPending(), Host: "optiplex"},
+			NoActor},
+		{"an actor that would refuse",
+			&Server{Queue: NewPending(), Host: "optiplex",
+				Applier: &fakeApplier{ready: boolPtr(false), reason: "uncommitted changes"}},
+			ActorNotReady},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			tc.srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/snapshot", nil))
+			var snap Snapshot
+			json.NewDecoder(rec.Body).Decode(&snap)
+
+			if snap.CanApply {
+				t.Fatal("reported as able to apply")
+			}
+			if snap.Blocker != tc.want {
+				t.Errorf("blocker = %q, want %q", snap.Blocker, tc.want)
+			}
+			if snap.WhyNot == "" {
+				t.Error("no reason to show a person")
+			}
+		})
+	}
+}
+
+// A ready actor carries neither, so the page renders no banner at all.
+func TestSnapshotCarriesNoBlockerWhenReady(t *testing.T) {
+	s := &Server{Queue: NewPending(), Host: "optiplex",
+		Applier: &fakeApplier{ready: boolPtr(true)}}
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/snapshot", nil))
+
+	var snap Snapshot
+	json.NewDecoder(rec.Body).Decode(&snap)
+	if !snap.CanApply || snap.Blocker != "" || snap.WhyNot != "" {
+		t.Errorf("a ready actor reported can_apply=%v blocker=%q why=%q",
+			snap.CanApply, snap.Blocker, snap.WhyNot)
+	}
+}
