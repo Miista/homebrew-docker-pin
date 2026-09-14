@@ -233,10 +233,16 @@ func run(log zerolog.Logger) error {
 
 	log.Info().Msgf("check complete: %d new tag(s) across %d service(s), %d could not be checked",
 		found, len(services), failed)
+	reporter.summarise()
 
-	if !mayAdvance(failed) {
-		log.Warn().Msgf("not advancing the cutoff: %d service(s) could not be checked, "+
-			"so moving it would silently skip anything they published", failed)
+	if !mayAdvance(failed, reporter.unpublished()) {
+		if failed > 0 {
+			log.Warn().Msgf("not advancing the cutoff: %d service(s) could not be checked, "+
+				"so moving it would silently skip anything they published", failed)
+		} else {
+			log.Warn().Msg("not advancing the cutoff: findings were detected but could not be " +
+				"published, so moving it would mean nothing ever hears about them")
+		}
 		return nil
 	}
 	if err := saveCutoff(startedAt); err != nil {
@@ -256,9 +262,17 @@ func run(log zerolog.Logger) error {
 // most important sentence in this program and deserves somewhere to be
 // tested.
 //
+// A hole comes in two kinds, and for a while this only knew the first. A
+// service that could not be checked is one; a finding that was detected but
+// could not be published is the other, and it is worse, because the detector
+// saw it and still left no trace anywhere. Advancing past it means the
+// finding is now older than the cutoff and will never be reported again.
+// Both are the same failure -- something this run learned that nothing else
+// will ever hear -- so both hold the line.
+//
 // The cost of being wrong the other way is one noisy run. The asymmetry is
 // the whole argument.
-func mayAdvance(failed int) bool { return failed == 0 }
+func mayAdvance(failed, unpublished int) bool { return failed == 0 && unpublished == 0 }
 
 // readServices turns the compose project into what the detector looks at.
 //

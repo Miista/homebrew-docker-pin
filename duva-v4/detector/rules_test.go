@@ -2,6 +2,8 @@ package main
 
 import (
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -51,6 +53,12 @@ func service(name, image, tag string) detect.Service {
 // check runs one whole cycle the way the binary does: load the cutoff, check
 // everything, then advance or not. Returns what the cutoff is afterwards.
 func check(t *testing.T, services []detect.Service, reg detect.Registry) (before, after time.Time, found, failed int) {
+	return checkPublishing(t, services, reg, "")
+}
+
+// checkPublishing is check with a webhook. An empty url means findings are
+// not published at all, which is the case every other test here runs under.
+func checkPublishing(t *testing.T, services []detect.Service, reg detect.Registry, url string) (before, after time.Time, found, failed int) {
 	t.Helper()
 
 	before, _, err := loadCutoff(zerolog.Nop())
@@ -59,9 +67,10 @@ func check(t *testing.T, services []detect.Service, reg detect.Registry) (before
 	}
 
 	startedAt := time.Now()
-	found, failed = checkAll(services, before, reg, func(detect.Finding) {}, zerolog.Nop())
+	reporter := newReporter(url, "testhost", zerolog.Nop())
+	found, failed = checkAll(services, before, reg, reporter.report, zerolog.Nop())
 
-	if mayAdvance(failed) {
+	if mayAdvance(failed, reporter.unpublished()) {
 		if err := saveCutoff(startedAt); err != nil {
 			t.Fatalf("saveCutoff: %v", err)
 		}
@@ -282,3 +291,57 @@ func TestServeRefusesAnUnparseableSchedule(t *testing.T) {
 // them -- but croncal.Next, which is what serve uses, deliberately accepts it
 // and ORs as cron does. Asserting a refusal here would be asserting a rule
 // that lives in a function this never calls.
+
+// An unreachable webhook must be given up on, not retried per finding: one
+// DNS lookup each across hundreds of findings is what exhausts a resolver's
+// rate limit and costs the detector the registry lookups it actually needs.
+func TestAnUnreachableWebhookIsTriedOnce(t *testing.T) {
+	log := zerolog.Nop()
+	// Port 9 is discard: nothing listens, so the dial is refused immediately
+	// rather than hanging on a timeout.
+	r := newReporter("http://127.0.0.1:9/notify", "testhost", log)
+
+	for i := 0; i < 50; i++ {
+		r.report(detect.Finding{Service: "app", Tag: "1.0.1"})
+	}
+
+	if !r.unreachable {
+		t.Fatal("a refused dial did not mark the webhook unreachable")
+	}
+	// One attempt, then 49 skipped without touching the network.
+	if r.skipped != 49 {
+		t.Errorf("skipped = %d, want 49 (one attempt, the rest dropped)", r.skipped)
+	}
+	// But every one of them still counts as unpublished, or the cutoff would
+	// advance past findings nothing ever heard about.
+	if r.unpublished() != 50 {
+		t.Errorf("unpublished = %d, want 50", r.unpublished())
+	}
+}
+
+// A refusal is not unreachability. A webhook that answers 500 is there, and
+// the next finding must still be offered to it -- writing it off would drop
+// findings over one bad request.
+func TestARefusalDoesNotWriteOffTheWebhook(t *testing.T) {
+	var got int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got++
+		http.Error(w, "no", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	r := newReporter(srv.URL, "testhost", zerolog.Nop())
+	for i := 0; i < 5; i++ {
+		r.report(detect.Finding{Service: "app", Tag: "1.0.1"})
+	}
+
+	if r.unreachable {
+		t.Error("a 500 was treated as the webhook being unreachable")
+	}
+	if got != 5 {
+		t.Errorf("the webhook was offered %d of 5 findings", got)
+	}
+	if r.unpublished() != 5 {
+		t.Errorf("unpublished = %d, want 5", r.unpublished())
+	}
+}

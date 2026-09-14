@@ -3,6 +3,9 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"io"
+	"net"
 	"net/http"
 	"time"
 
@@ -28,7 +31,38 @@ type reporter struct {
 	host string
 	log  zerolog.Logger
 	http *http.Client
+
+	// unreachable records that the webhook's host could not be resolved or
+	// dialled, so the rest of this run stops trying.
+	//
+	// Not a retry policy -- it is the opposite. A run over ~45 services can
+	// produce hundreds of findings, and a webhook whose name does not resolve
+	// costs one DNS lookup each: enough to exhaust Pi-hole's default
+	// 1000-queries-a-minute allowance and get every subsequent lookup in the
+	// run answered REFUSED, including the registry ones this tool actually
+	// needs. One unreachable webhook must not cost the detector its ability
+	// to detect.
+	//
+	// Reset per run rather than persisted: the next scheduled run gets a
+	// clean attempt, which is where "retry is a property of running again"
+	// still holds.
+	unreachable bool
+	// skipped counts what was dropped after that, so the run says so once at
+	// the end rather than either lying about publishing or printing hundreds
+	// of identical errors.
+	skipped int
+	// failed counts every finding that did not land, whatever the reason --
+	// refused, unreachable, or skipped after the webhook was written off.
+	//
+	// It is what decides whether the cutoff may advance. A finding this run
+	// detected and could not hand on is a hole exactly like a service it
+	// could not check: move the line past it and it is older than the cutoff
+	// forever, so nothing ever hears about it.
+	failed int
 }
+
+// unpublished is how many findings this run detected but did not hand on.
+func (r *reporter) unpublished() int { return r.failed }
 
 func newReporter(url, host string, log zerolog.Logger) *reporter {
 	if url == "" {
@@ -83,6 +117,14 @@ func (r *reporter) report(f detect.Finding) {
 	if r.url == "" {
 		return
 	}
+	// The webhook was already found unreachable this run. Every further
+	// attempt would be another DNS lookup for a name that does not resolve,
+	// which is how a detector becomes a flood.
+	if r.unreachable {
+		r.skipped++
+		r.failed++
+		return
+	}
 
 	body, err := json.Marshal(Event{
 		Detector:   "detector/" + version,
@@ -96,21 +138,70 @@ func (r *reporter) report(f detect.Finding) {
 	})
 	if err != nil {
 		r.log.Error().Msgf("%s: could not encode the finding — %v", f.Service, err)
+		r.failed++
 		return
 	}
 
 	resp, err := r.http.Post(r.url, "application/json", bytes.NewReader(body))
 	if err != nil {
 		r.log.Error().Msgf("%s: could not publish %s — %v", f.Service, f.Tag, err)
+		r.failed++
+		// Could not resolve or dial it at all: that is a fact about the
+		// webhook, not about this finding, and it will be just as true for
+		// the next several hundred. Stop for the rest of the run.
+		if isUnreachable(err) {
+			r.unreachable = true
+			r.log.Warn().Msg("the webhook cannot be reached, so the rest of this run's findings will not be published")
+		}
 		return
 	}
-	defer resp.Body.Close()
+	// Drained before closing, or the connection is not returned to the pool
+	// and every finding costs a fresh dial -- the same reuse problem, on the
+	// path where the webhook is working.
+	defer func() {
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+	}()
 	if resp.StatusCode >= 300 {
 		// What is at the other end refused it. Said plainly rather than
 		// interpreted: this tool does not know what a 422 means to whatever
 		// is subscribed, only that it did not accept the finding.
 		r.log.Error().Msgf("%s: the webhook refused %s with %s", f.Service, f.Tag, resp.Status)
+		r.failed++
 		return
 	}
 	r.log.Debug().Msgf("%s: published %s", f.Service, f.Tag)
+}
+
+// isUnreachable says whether an error means the webhook's host cannot be
+// reached at all, as opposed to one request going wrong.
+//
+// A name that does not resolve and a connection that is refused are both
+// facts about the endpoint that will hold for every remaining finding in the
+// run. A timeout is not: it may be one slow request, and a consumer that is
+// merely slow should not be written off for the rest of the run.
+func isUnreachable(err error) bool {
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return true
+	}
+	var opErr *net.OpError
+	if errors.As(err, &opErr) && opErr.Op == "dial" {
+		// A dial that timed out is the slow case, not the absent one.
+		if opErr.Timeout() {
+			return false
+		}
+		return true
+	}
+	return false
+}
+
+// summarise says once, at the end of a run, what was not published.
+//
+// One line rather than one per finding: several hundred identical errors is
+// not more information than the fact, and it buries the findings themselves.
+func (r *reporter) summarise() {
+	if r.skipped > 0 {
+		r.log.Warn().Msgf("%d further findings were not published, because the webhook could not be reached", r.skipped)
+	}
 }
