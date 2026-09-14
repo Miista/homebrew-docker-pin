@@ -183,6 +183,13 @@ See `docs/duva-v4-diun-decider-actor.md`.
   pin, recreate, commit, push. The only one of the three that depends on
   `docker pin` -- applying an update means rewriting a pin, which is its
   engine.
+
+  **It must run as the user that owns the repository, and that user must be
+  in the `docker` group** (`user: "1000:1000"` plus `group_add`, GID from
+  `stat -c '%g' /var/run/docker.sock` — host-specific). Root leaves
+  root-owned files in a bind-mounted repository, makes git report dubious
+  ownership, and loses the commit identity `.git/config` already carries.
+  See `duva-v4/README.md`.
 - **`internal/actor`** — the *contract*, and a client. What the decider may
   know is an endpoint, a payload, and that the answer carries a stream URL; it
   may not know that applying involves a registry, a container or git, because

@@ -67,11 +67,21 @@ half complicated.
 
 | | docker socket | compose (read) | compose (write) | git |
 |---|---|---|---|---|
+| detector | — | yes | — | — |
 | decider | — | yes | — | — |
 | actor | read-write | yes | yes | yes |
 | UI | — | — | — | — |
 
-(diun is a dependency, not a component. What it needs is its own business.)
+(This document argues below for diun as the detector. That did not survive
+contact: diun watches whole repositories, which made every run a tag-listing
+flood and a lost database an expensive rebuild. The detector is ours, and it
+holds one timestamp. See `duva-v4/README.md` for what actually runs.)
+
+The actor's row has a deployment consequence: it must run **as the user that
+owns the repository**, and that user must be in the **`docker` group**. Root
+would leave root-owned files in a bind-mounted repository and lose the commit
+identity that `.git/config` already carries. `duva-v4/README.md` has the
+detail.
 
 Two things worth drawing out.
 
