@@ -53,6 +53,7 @@ import (
 	"github.com/Miista/homebrew-docker-pin/duva-v4/internal/detect"
 	"github.com/Miista/homebrew-docker-pin/internal/croncal"
 	"github.com/Miista/homebrew-docker-pin/oci/registry"
+	ociversion "github.com/Miista/homebrew-docker-pin/oci/version"
 )
 
 var version = "dev"
@@ -134,12 +135,6 @@ func main() {
 	}
 }
 
-// serve checks on a schedule, until told to stop.
-//
-// `run` stays the whole of the program: serve is a loop around it, so a
-// scheduled check and a manual one do exactly the same thing. A separate
-// scheduled path would be a second implementation to keep in agreement with
-// the first.
 // health is the exit code for the health subcommand: 0 healthy, 1 not.
 //
 // A detector with no webhook configured is healthy. That is a real way to run
@@ -158,6 +153,12 @@ func health() int {
 	return 0
 }
 
+// serve checks on a schedule, until told to stop.
+//
+// `run` stays the whole of the program: serve is a loop around it, so a
+// scheduled check and a manual one do exactly the same thing. A separate
+// scheduled path would be a second implementation to keep in agreement with
+// the first.
 func serve(log zerolog.Logger) error {
 	expr := scheduleFromEnv()
 	// Validated before the first check rather than at the first tick: a
@@ -250,6 +251,9 @@ func run(log zerolog.Logger) error {
 			return out, nil
 		},
 		TagCreated: registry.TagCreated,
+		// For a service following a moving tag: what does it point at now.
+		// One request, and the only one such a service needs.
+		TagDigest: registry.RemoteDigest,
 	}
 
 	// startedAt, not time.Now() at the end: anything published while the
@@ -342,6 +346,15 @@ func readServices(root string, log zerolog.Logger) ([]detect.Service, error) {
 			continue
 		}
 
+		// Whether the tag names a release or a stream decides what an update
+		// to this service even means, so it is settled here -- where the
+		// version knowledge lives -- rather than inside detect, which has
+		// none and should keep none.
+		moving := !ociversion.IsVersion(tag)
+		if moving {
+			log.Debug().Msgf("%s: follows the moving tag %q, so it is watched by digest", ref.Service, tag)
+		}
+
 		out = append(out, detect.Service{
 			Name:      ref.Service,
 			Container: container,
@@ -349,6 +362,8 @@ func readServices(root string, log zerolog.Logger) ([]detect.Service, error) {
 			Tag:       tag,
 			Include:   include,
 			Exclude:   exclude,
+			Moving:    moving,
+			Digest:    digestOf(raw),
 		})
 	}
 	return out, nil
@@ -371,4 +386,16 @@ func projectFile(sub string) (string, error) {
 		dir = joined
 	}
 	return compose.FindFile(dir)
+}
+
+// digestOf is the @sha256:... a pinned image reference records.
+//
+// Read from the raw line rather than resolved from a registry: it is what the
+// file says this service is on, which is the thing a moving tag's current
+// digest is compared against.
+func digestOf(raw string) string {
+	if i := strings.Index(raw, "@"); i >= 0 {
+		return raw[i+1:]
+	}
+	return ""
 }

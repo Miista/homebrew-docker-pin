@@ -169,3 +169,49 @@ func compareSuffixes(a, b string) int {
 
 // NewestMatching returns the highest tag (per CompareVersions) that matches
 // include and is strictly newer than current, or "" when no tag qualifies.
+
+// IsVersion reports whether a tag names a specific release, as opposed to a
+// stream that moves.
+//
+// The distinction decides what an update to the service even means. A tag
+// like 1.29.0 is a point: a newer release is a different tag, and updating
+// means changing the tag. A tag like latest, main, edge or dev is a stream:
+// it is already pointing at whatever is newest, so there is no newer tag to
+// move to -- the update is that the same tag now resolves to a different
+// digest.
+//
+// Conflating the two produces nonsense candidates. A service on `latest` was
+// offered `latest -> edge` and `latest -> pr-185`, which is not an upgrade
+// but a change of which stream the service follows -- a decision the file
+// already recorded and nothing here should overrule. The tag is the
+// instruction; only a person changes an instruction.
+//
+// The test is a numeric core, the same one Classify compares on: `1`, `1.29`,
+// `v1.29.0`, `2026.08.1` and `1.2.3-alpine` are versions; `latest`, `main`,
+// `edge`, `stable`, `nightly` and `pr-185` are not.
+// A multi-segment core is decisive on its own: nothing names a stream
+// `1.29.0`. A single-segment core is not -- `v3-agent-hub` and `v2-logo` are
+// branch builds, not releases of 3 and 2 -- so a bare-word suffix there is
+// read as a name rather than a qualifier. The cost of being wrong is a
+// digest-based update where a version comparison was possible, which is the
+// safe direction: it changes no tag.
+func IsVersion(tag string) bool {
+	m := versionCoreRe.FindStringSubmatch(tag)
+	if m == nil {
+		return false
+	}
+	core, suffix := m[1], m[2]
+	if strings.Contains(core, ".") {
+		return true
+	}
+	// Single-segment core. A qualifier suffix (-alpine, -rc1, or none) still
+	// reads as a version; anything else is a name that happens to start with
+	// a digit.
+	return suffix == "" || qualifierRe.MatchString(suffix)
+}
+
+// qualifierRe is a suffix that qualifies a release rather than naming a
+// stream: a flavour (-alpine, -slim), a prerelease (-rc1, -beta2), or a build
+// counter (-ls166). Deliberately narrow -- it must not match a branch name
+// like -agent-hub, which is the thing it exists to reject.
+var qualifierRe = regexp.MustCompile(`^-(alpine|slim|bookworm|bullseye|ubuntu|debian|distroless|rc\d*|beta\d*|alpha\d*|ls\d+)$`)

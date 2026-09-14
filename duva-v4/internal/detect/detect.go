@@ -43,6 +43,10 @@ type Registry struct {
 	// not say. Called only for tags that survived the include and exclude,
 	// so the expensive path is walked as little as possible.
 	TagCreated func(baseImage, tag string) (time.Time, error)
+	// TagDigest is what a tag points at now. Called only for a service
+	// following a moving tag, which is the one case where the answer is the
+	// finding rather than a detail of it.
+	TagDigest func(baseImage, tag string) (string, error)
 }
 
 // DatedTag is a tag, and when it was published if that was known for free.
@@ -71,6 +75,22 @@ type Service struct {
 	// pattern inferred here, because inferring one would be a version
 	// opinion and this package has none.
 	Include, Exclude *regexp.Regexp
+	// Moving says the tag this service follows is a stream rather than a
+	// release: latest, main, edge, dev.
+	//
+	// It changes which tags are worth looking at, not how they are compared
+	// -- this package still knows nothing about versions. A service tracking
+	// a stream has already chosen what it follows, so the only tag that can
+	// tell it anything is that same tag: the question is whether what it
+	// points at has changed. Every other tag in the repository is a different
+	// stream, and offering one would be proposing to change the instruction
+	// the file records.
+	//
+	// Decided by the caller, which is where the version knowledge lives.
+	Moving bool
+	// Digest is what the followed tag resolved to when the file was written,
+	// so a moving tag that still points there is not a finding.
+	Digest string
 }
 
 // Finding is one tag that appeared after the cutoff.
@@ -82,6 +102,10 @@ type Finding struct {
 	Tag string
 	// Published is when it appeared.
 	Published time.Time
+	// Digest is what the tag points at, set only for a moving tag whose
+	// digest has changed. Empty for a new tag, where the consumer has a tag
+	// to move to and needs nothing resolved.
+	Digest string
 }
 
 // A failure is returned rather than reported as an absence: a registry that
@@ -106,6 +130,14 @@ type Finding struct {
 // Findings arrive in whatever order the registry listed them. Sorting would
 // mean collecting first, which is the thing this signature exists to avoid.
 func Since(svc Service, cutoff time.Time, reg Registry, found func(Finding)) error {
+	// A service following a stream has already chosen what it follows. The
+	// only question is whether that stream now points somewhere else, which
+	// is one request -- and listing the repository's other tags would only
+	// produce candidates that change which stream it follows.
+	if svc.Moving {
+		return sinceMoved(svc, reg, found)
+	}
+
 	tags, err := reg.ListTags(svc.Image)
 	if err != nil {
 		return fmt.Errorf("listing tags for %s: %w", svc.Image, err)
@@ -144,6 +176,47 @@ func Since(svc Service, cutoff time.Time, reg Registry, found func(Finding)) err
 			Published: published,
 		})
 	}
+	return nil
+}
+
+// sinceMoved reports a moving tag whose digest has changed.
+//
+// There is no cutoff here, and that is deliberate rather than an omission. A
+// digest move has no publish date the registry will tell us cheaply, and it
+// needs none: the file records what the tag pointed at, so "has it moved" is
+// answered by comparing against that, not against a clock. A move that
+// happened before the last check is still a move the file does not reflect.
+//
+// One request, where the version path costs a listing plus a date per tag.
+func sinceMoved(svc Service, reg Registry, found func(Finding)) error {
+	if reg.TagDigest == nil {
+		// A registry seam that cannot resolve digests cannot answer the only
+		// question a moving tag raises. Silence would read as "nothing has
+		// changed", which is the failure this tool exists to prevent.
+		return fmt.Errorf("cannot check %s: it follows the moving tag %q and this registry cannot resolve digests",
+			svc.Name, svc.Tag)
+	}
+	digest, err := reg.TagDigest(svc.Image, svc.Tag)
+	if err != nil {
+		return fmt.Errorf("resolving %s:%s: %w", svc.Image, svc.Tag, err)
+	}
+	// Unpinned, so there is nothing recorded to have moved away from. The
+	// gate ignores these anyway -- a service that made no versioning decision
+	// has none to watch over -- but reporting one would be inventing a change
+	// out of the absence of a record.
+	if svc.Digest == "" {
+		return nil
+	}
+	if digest == svc.Digest {
+		return nil
+	}
+	found(Finding{
+		Service:   svc.Name,
+		Container: svc.Container,
+		Image:     svc.Image,
+		Tag:       svc.Tag,
+		Digest:    digest,
+	})
 	return nil
 }
 

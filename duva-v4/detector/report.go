@@ -131,10 +131,14 @@ func dialWebhook(rawURL string) error {
 
 // Event is what the detector publishes: one tag, and when it appeared.
 //
-// Everything here is something the detector observed. There is no digest,
-// because resolving one would be a request per finding to tell a consumer
-// something it can look up itself; no "current version", because comparing is
-// not this tool's job; and no verdict, for the same reason.
+// Everything here is something the detector observed. There is no "current
+// version", because comparing is not this tool's job, and no verdict, for the
+// same reason.
+//
+// A digest appears only for a moving tag. For a new tag, resolving one would
+// be a request per finding to tell a consumer something the actor learns for
+// free when it pulls; for a moving tag the tag did not change, so the digest
+// is the entire observation and there is no finding without it.
 type Event struct {
 	// Detector names the tool and its version, so a consumer reading a
 	// payload it does not recognise can tell what sent it.
@@ -151,6 +155,10 @@ type Event struct {
 	Tag string `json:"tag"`
 	// Published is when it appeared, RFC 3339.
 	Published string `json:"published"`
+	// Digest is what the tag points at, set only for a moving tag whose
+	// digest has changed -- where it is the whole of the finding, since the
+	// tag itself did not change.
+	Digest string `json:"digest,omitempty"`
 	// ObservedAt is when this detector noticed, which is not the same thing:
 	// a tag published during an outage is observed late, and a consumer
 	// reasoning about staleness wants both.
@@ -184,6 +192,7 @@ func (r *reporter) report(f detect.Finding) {
 		Image:      f.Image,
 		Tag:        f.Tag,
 		Published:  f.Published.UTC().Format(time.RFC3339),
+		Digest:     f.Digest,
 		ObservedAt: time.Now().UTC().Format(time.RFC3339),
 	})
 	if err != nil {

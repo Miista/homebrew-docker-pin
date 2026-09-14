@@ -31,6 +31,15 @@ type Event struct {
 	Image string `json:"image"`
 	// Tag is the tag that appeared.
 	Tag string `json:"tag"`
+	// Digest is what that tag points at, sent only when the tag is one the
+	// service already follows and the digest has moved.
+	//
+	// For a new tag it is empty and stays empty: resolving one would be a
+	// request per finding to tell the gate something the actor learns for
+	// free when it pulls. For a moving tag it is the entire finding --
+	// the tag did not change, so without the digest there is nothing to
+	// report.
+	Digest string `json:"digest,omitempty"`
 }
 
 // Translate turns an event into a notice.
@@ -51,10 +60,11 @@ func Translate(e Event) (decide.Notice, string, bool) {
 		// The gate wants a full reference. It reads the tag from it and
 		// re-reads the compose file for what is pinned now.
 		Image: e.Image + ":" + e.Tag,
-		// No digest: the detector does not resolve one, because doing so
-		// would be a registry request per finding to tell the gate
-		// something the actor is better placed to learn when it pulls.
-		Digest: "",
+		// Carried through as sent. Empty for a new tag, where the gate has a
+		// tag to move to and needs nothing resolved; set for a moving tag,
+		// where it is the only thing that changed and the gate's digest-move
+		// path needs it to have anything to act on.
+		Digest: e.Digest,
 	}, "", true
 }
 
