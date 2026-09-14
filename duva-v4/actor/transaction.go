@@ -53,13 +53,15 @@ var realDocker = Docker{
 var realGit = Git{
 	Add: func(dir, file string) error { return runGit(gitCmd(dir, "add", file)) },
 	Commit: func(dir, message string) error {
-		// Identity per invocation: this image carries no ~/.gitconfig, and a
-		// commit that failed for want of a user.email would be a confusing
-		// way to learn that.
-		return runGit(gitCmd(dir,
-			"-c", "user.name=duva",
-			"-c", "user.email=duva@localhost",
-			"commit", "-m", message))
+		// No -c identity. The repository being committed to is bind-mounted
+		// in, and its .git/config comes with it -- so whatever identity the
+		// repository already uses is the one it gets, which is the right
+		// answer and not this program's to overrule.
+		//
+		// A repository with no identity configured anywhere will fail the
+		// commit and say so, which is a better outcome than every commit
+		// being authored by a name nobody recognises.
+		return runGit(gitCmd(dir, "commit", "-m", message))
 	},
 	PullRebase:  func(dir string) error { return runGit(gitCmd(dir, "pull", "--rebase")) },
 	RebaseAbort: func(dir string) error { return runGit(gitCmd(dir, "rebase", "--abort")) },
