@@ -42,8 +42,16 @@ func checkAll(
 			// And nothing about what the service is on. Saying "currently on
 			// dev" alongside 2.24.0 implies the one could replace the other,
 			// which is a version judgement this tool has no basis for.
-			log.Info().Msgf("%s: %s was published %s",
-				f.Service, f.Tag, f.Published.Local().Format("2006-01-02 15:04:05 MST"))
+			// Two kinds of finding read differently. A new tag has a publish
+			// date; a moving tag has moved, and has no date the registry
+			// gives cheaply -- printing a zero time there says
+			// "0001-01-01 00:50:20 LMT", which is worse than saying nothing.
+			if f.Digest != "" {
+				log.Info().Msgf("%s: %s now points at %s", f.Service, f.Tag, shortDigest(f.Digest))
+			} else {
+				log.Info().Msgf("%s: %s was published %s",
+					f.Service, f.Tag, f.Published.Local().Format("2006-01-02 15:04:05 MST"))
+			}
 			report(f)
 		})
 
@@ -64,4 +72,16 @@ func checkAll(
 		}
 	}
 	return found, failed
+}
+
+// shortDigest is the first twelve hex characters of a digest.
+//
+// Seventy-one characters of hex in a log line is nobody's idea of readable,
+// and twelve is enough to match against a `docker images` listing or another
+// line in the same run.
+func shortDigest(d string) string {
+	if len(d) > 19 {
+		return d[:19]
+	}
+	return d
 }
