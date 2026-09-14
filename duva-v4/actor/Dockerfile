@@ -10,7 +10,7 @@
 # and to replace a container. Compare the decider's image, which holds neither
 # and is distroless as a result. This one carries git, for the commit.
 
-FROM golang:1.26-alpine@sha256:28d89ee9cc0ff9fec75c82ca201e6bf7fdf9a679d4b7b24dfa04f2bb766bb468 AS build
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine@sha256:28d89ee9cc0ff9fec75c82ca201e6bf7fdf9a679d4b7b24dfa04f2bb766bb468 AS build
 WORKDIR /src
 
 # The context is the repository root, not duva-v4: this module replaces four
@@ -26,7 +26,10 @@ RUN cd duva-v4 && go mod download
 
 COPY . .
 ARG VERSION=dev
-RUN cd duva-v4 && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /out/actor ./actor
+# Native build stage, Go cross-compiles: the toolchain under QEMU dies with
+# "sync: inconsistent mutex state" partway through compiling.
+ARG TARGETARCH
+RUN cd duva-v4 && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /out/actor ./actor
 
 # Alpine rather than distroless: the commit shells out to git, so there has to
 # be a git to shell out to. Everything else the actor does goes through the

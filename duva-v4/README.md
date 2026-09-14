@@ -18,6 +18,29 @@ network-facing half needs none of what the work needs.
 **The actor must run as the user that owns the repository, and that user must
 be in the `docker` group.**
 
+It checks this at startup and refuses to run otherwise, reporting every
+problem at once rather than one per restart:
+
+```
+this actor cannot do the work it exists for:
+
+  - this is running as root (uid 0), which would leave root-owned files in
+    the repository mounted at /compose and lose the commit identity its
+    .git/config carries
+    Set `user: "<uid>:<gid>"` ...
+```
+
+Refusing to start is right here where it would be wrong elsewhere: a detector
+whose webhook is down still detects and logs, but an actor that cannot write,
+cannot reach the daemon, or has no git can do nothing at all. Starting anyway
+means discovering it halfway through an apply — after a container has been
+replaced and before the pin recording it was written.
+
+The checks are: not root, `/compose` writable, the docker socket openable,
+git present and runnable, and the repository having a commit identity. The
+last matters because the commit is the *final* step of an apply: a missing
+`user.email` fails it after the container has already been replaced.
+
 This is not a hardening preference. Each half of it is load-bearing:
 
 ### As the repository's owner

@@ -71,7 +71,7 @@ func run(log zerolog.Logger) error {
 	// would take work, do most of it, and fail at the step that matters. The
 	// same reasoning as duva's preflight -- discovering it later means
 	// discovering it after a container was already replaced.
-	if err := writable(composeDir); err != nil {
+	if err := preflight(composeDir); err != nil {
 		return err
 	}
 
