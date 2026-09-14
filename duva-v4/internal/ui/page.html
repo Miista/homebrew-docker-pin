@@ -245,5 +245,57 @@
     <span class="checked">the detector decides when to look; this shows what it found</span>
   </footer>
 </main>
+<script>
+// Re-render by fetching the page this server already produces and swapping
+// <main>. The Go template stays the only thing that knows how a row looks:
+// a JSON endpoint and a second renderer here would be two descriptions of
+// the same thing, kept in agreement by hand.
+//
+// It replaces the <meta refresh> above for anyone with script enabled --
+// that tag stays as the fallback, so the page is never stale either way.
+(function () {
+  "use strict";
+
+  var PERIOD = 15000;
+
+  function swap() {
+    // "/" without a query: an apply result rides in the query string, and
+    // re-fetching it would replay a stale message forever.
+    fetch("/", { headers: { "Accept": "text/html" } })
+      .then(function (r) { return r.ok ? r.text() : Promise.reject(r.status); })
+      .then(function (html) {
+        var next = new DOMParser().parseFromString(html, "text/html")
+          .querySelector("main");
+        var now = document.querySelector("main");
+        // Nothing changed: leave the DOM alone entirely, so a focused button
+        // stays focused and a hovered row keeps its image shown.
+        if (!next || !now || next.innerHTML === now.innerHTML) return;
+        now.replaceWith(next);
+      })
+      .catch(function () {
+        // A failed poll is not worth reporting: the next one is 15s away,
+        // and the server being unreachable is not something this page can
+        // say anything useful about from inside itself.
+      });
+  }
+
+  // Cancel the meta refresh: with script running, swapping is strictly
+  // better, and leaving both would reload the page mid-swap every 30s.
+  var meta = document.querySelector('meta[http-equiv="refresh"]');
+  if (meta) meta.remove();
+
+  // A tab nobody is looking at does not need polling: this page is left open
+  // in a background tab for days, and a decider answering a request every 15s
+  // for nobody is the kind of thing that is only noticed in a log months
+  // later.
+  setInterval(function () { if (!document.hidden) swap(); }, PERIOD);
+
+  // Returning to the tab wants the current state now, not up to PERIOD from
+  // now -- which is exactly when someone is about to act on what they see.
+  document.addEventListener("visibilitychange", function () {
+    if (!document.hidden) swap();
+  });
+})();
+</script>
 </body>
 </html>

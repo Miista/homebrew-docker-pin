@@ -294,3 +294,22 @@ func TestStaleRowIsShownButNotApplyable(t *testing.T) {
 		t.Error("the disabled button does not say why")
 	}
 }
+
+// The script must fetch "/" without a query, or a stale apply message would
+// be re-rendered on every poll forever.
+func TestReactiveScriptFetchesTheBareURL(t *testing.T) {
+	s := &Server{Source: &fakeSource{}, Version: "v1"}
+	_, body := get(t, s, "/")
+	if !strings.Contains(body, `fetch("/"`) {
+		t.Error("the poller does not fetch the bare URL")
+	}
+	// And the meta refresh stays in the markup as the no-script fallback.
+	if !strings.Contains(body, `http-equiv="refresh"`) {
+		t.Error("the no-script fallback is gone")
+	}
+	// Belt and braces: the script removes that tag at runtime, so both do not
+	// run at once.
+	if !strings.Contains(body, `meta[http-equiv="refresh"]`) {
+		t.Error("the script does not cancel the meta refresh")
+	}
+}
