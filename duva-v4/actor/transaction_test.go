@@ -116,7 +116,7 @@ func TestVersionChangeIsAppliedAndCommitted(t *testing.T) {
 	req.File = w.file
 	step, lines := steps()
 
-	status, reason := transaction(req, step, w.docker(), w.git(), false)
+	status, reason := transaction(req, step, w.docker(), w.git(), false, "")
 	if status != actor.Completed {
 		t.Fatalf("status = %q (%s)\n%v", status, reason, *lines)
 	}
@@ -152,7 +152,7 @@ services:
 	}
 	step, _ := steps()
 
-	status, reason := transaction(req, step, w.docker(), w.git(), false)
+	status, reason := transaction(req, step, w.docker(), w.git(), false, "")
 	if status != actor.Completed {
 		t.Fatalf("status = %q (%s)", status, reason)
 	}
@@ -174,10 +174,10 @@ func TestBeingToldTwiceIsIdempotent(t *testing.T) {
 	req.File = w.file
 	step, _ := steps()
 
-	transaction(req, step, w.docker(), w.git(), false)
+	transaction(req, step, w.docker(), w.git(), false, "")
 	firstCommits := len(w.committed)
 
-	status, _ := transaction(req, step, w.docker(), w.git(), false)
+	status, _ := transaction(req, step, w.docker(), w.git(), false, "")
 	if status != actor.Completed {
 		t.Errorf("the second attempt reported %q, want completed", status)
 	}
@@ -200,7 +200,7 @@ func TestAFailedPullChangesNothing(t *testing.T) {
 	before := w.image(t)
 	step, _ := steps()
 
-	status, reason := transaction(req, step, w.docker(), w.git(), false)
+	status, reason := transaction(req, step, w.docker(), w.git(), false, "")
 	if status != actor.Failed {
 		t.Errorf("status = %q, want failed", status)
 	}
@@ -225,7 +225,7 @@ func TestARefusedImagePutsTheFileBack(t *testing.T) {
 	before := w.image(t)
 	step, lines := steps()
 
-	status, reason := transaction(req, step, w.docker(), w.git(), false)
+	status, reason := transaction(req, step, w.docker(), w.git(), false, "")
 	if status != actor.Failed {
 		t.Errorf("status = %q, want failed", status)
 	}
@@ -251,7 +251,7 @@ func TestADirtyRepositoryRefusesBeforeAnythingHappens(t *testing.T) {
 	req.File = w.file
 	step, _ := steps()
 
-	status, reason := transaction(req, step, w.docker(), w.git(), false)
+	status, reason := transaction(req, step, w.docker(), w.git(), false, "")
 	if status != actor.Failed {
 		t.Errorf("status = %q, want failed", status)
 	}
@@ -271,7 +271,7 @@ func TestABusyRepositoryIsToldToTryAgain(t *testing.T) {
 	req.File = w.file
 	step, _ := steps()
 
-	status, reason := transaction(req, step, w.docker(), w.git(), false)
+	status, reason := transaction(req, step, w.docker(), w.git(), false, "")
 	if status != actor.Failed {
 		t.Errorf("status = %q", status)
 	}
@@ -290,7 +290,7 @@ func TestAFailedCommitStillCompletes(t *testing.T) {
 	req.File = w.file
 	step, lines := steps()
 
-	status, _ := transaction(req, step, w.docker(), g, false)
+	status, _ := transaction(req, step, w.docker(), g, false, "")
 	if status != actor.Completed {
 		t.Errorf("status = %q, want completed -- the container is running the new image", status)
 	}
@@ -307,7 +307,7 @@ func TestPushIsOffByDefault(t *testing.T) {
 	req.File = w.file
 	step, _ := steps()
 
-	transaction(req, step, w.docker(), w.git(), false)
+	transaction(req, step, w.docker(), w.git(), false, "")
 	if w.pushed != 0 {
 		t.Errorf("pushed %d times with push off", w.pushed)
 	}
@@ -324,7 +324,7 @@ func TestPushRebasesFirst(t *testing.T) {
 	req.File = w.file
 	step, _ := steps()
 
-	transaction(req, step, w.docker(), g, true)
+	transaction(req, step, w.docker(), g, true, "")
 	if len(order) != 2 || order[0] != "rebase" || order[1] != "push" {
 		t.Errorf("order = %v, want rebase then push", order)
 	}
@@ -342,7 +342,7 @@ func TestAConflictedRebaseIsAbortedAndNotPushed(t *testing.T) {
 	req.File = w.file
 	step, _ := steps()
 
-	status, _ := transaction(req, step, w.docker(), g, true)
+	status, _ := transaction(req, step, w.docker(), g, true, "")
 	if status != actor.Completed {
 		t.Errorf("status = %q, want completed -- the update happened", status)
 	}
@@ -364,7 +364,7 @@ func TestAFailedPushStillCompletes(t *testing.T) {
 	req.File = w.file
 	step, lines := steps()
 
-	status, _ := transaction(req, step, w.docker(), g, true)
+	status, _ := transaction(req, step, w.docker(), g, true, "")
 	if status != actor.Completed {
 		t.Errorf("status = %q, want completed", status)
 	}

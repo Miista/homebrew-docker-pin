@@ -110,7 +110,7 @@ func runGit(cmd *exec.Cmd) error {
 // The signature is the actor contract's, not duva's: what comes in says what
 // should become true, and what goes out is a status and a reason. Nothing
 // about duva's Finding, its policy, or its queue appears here.
-func transaction(req actor.Request, step func(string, ...any), d Docker, g Git, push bool) (actor.Status, string) {
+func transaction(req actor.Request, step func(string, ...any), d Docker, g Git, push bool, tmpl string) (actor.Status, string) {
 	dir := dirOf(req.File)
 
 	// A clean repository is a precondition, not a setting: this commits, and
@@ -176,12 +176,37 @@ func transaction(req actor.Request, step func(string, ...any), d Docker, g Git, 
 
 	// From here the update is true whatever else happens: the container is
 	// running the new image, and the rest is record-keeping.
-	msg := fmt.Sprintf("%s: %s -> %s", req.Service, displayOf(req.From), displayOf(req.To))
+	// From and To are tags for a version change and digests for a digest move
+	// -- see the contract. Split here so a template can say "1.0 -> 1.1"
+	// without the digest fields lying about it, and so a digest move reads as
+	// the same tag rather than as a version that did not change.
+	fields := commitFields{
+		Container:  req.Service,
+		Image:      req.Image,
+		OldVersion: req.Tag,
+		NewVersion: req.Tag,
+	}
+	if isDigest(req.From) || isDigest(req.To) {
+		fields.OldDigest, fields.NewDigest = displayOf(req.From), displayOf(req.To)
+	} else {
+		fields.OldVersion, fields.NewVersion = req.From, req.To
+		fields.NewDigest = displayOf(req.Digest)
+	}
+	msg, err := commitSubject(tmpl, fields)
+	if err != nil {
+		step("the change is live but the commit template failed: %v", err)
+		return actor.Completed, ""
+	}
 	step("committing %q", msg)
 	if err := g.Add(dir, req.File); err != nil {
-		return actor.Completed, "" // applied; the commit is not the update
+		step("the change is live but could not be staged: %v", err)
+		return actor.Completed, ""
 	}
 	if err := g.Commit(dir, msg); err != nil {
+		// Said into the stream *and* worth a log line: a commit rejected by a
+		// repository's own hook leaves the change staged and uncommitted, and
+		// an unattended apply would leave no trace of that anywhere. This is
+		// how bazarr's first real apply was found to be half-done.
 		step("the change is live but could not be committed: %v", err)
 		return actor.Completed, ""
 	}
@@ -270,3 +295,6 @@ func displayOf(s string) string {
 }
 
 func dirOf(composeFile string) string { return filepath.Dir(composeFile) }
+
+// isDigest says whether a reference is a digest rather than a tag.
+func isDigest(s string) bool { return strings.HasPrefix(s, "sha256:") }

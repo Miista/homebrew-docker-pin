@@ -79,6 +79,18 @@ func run(log zerolog.Logger) error {
 	push := boolEnv("ACTOR_GIT_PUSH", false)
 	token := os.Getenv("ACTOR_TOKEN")
 
+	// Loaded once, at startup, and a bad one refuses to start. A template
+	// that does not parse would otherwise be discovered by an apply -- after
+	// a container had already been replaced -- and the failure would be a
+	// commit nobody made rather than a container nobody expected.
+	tmpl, err := loadCommitTemplate()
+	if err != nil {
+		return fmt.Errorf("the commit template: %w", err)
+	}
+	if _, err := commitSubject(tmpl, commitFields{Container: "probe", NewVersion: "1"}); err != nil {
+		return fmt.Errorf("the commit template: %w", err)
+	}
+
 	srv := &http.Server{
 		Addr: addr,
 		Handler: (&Server{
@@ -87,7 +99,7 @@ func run(log zerolog.Logger) error {
 			Log:     log,
 			Ready:   readiness,
 			Apply: func(req actor.Request, step func(string, ...any)) (actor.Status, string) {
-				return transaction(req, step, realDocker, realGit, push)
+				return transaction(req, step, realDocker, realGit, push, tmpl)
 			},
 		}).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
