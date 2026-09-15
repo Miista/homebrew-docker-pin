@@ -154,11 +154,35 @@ because the apply already landed something newer. That is correct — it
 re-decides against reality rather than against a stale premise — but it means
 the lock is held across "apply, then re-evaluate", not merely "apply".
 
-## Failure and revert
+## Failure
 
-**The actor owns the revert.** If the container refuses the new image, the
-actor puts the file back, because the file would otherwise describe something
-that never ran.
+**The actor does not revert.** Everything that can be answered before anything
+is done is answered in a precheck — the same `pin.Compute` the write itself
+uses, plus whether a container exists and whether the commit message would be
+accepted. What remains is the pull and the recreate. A failed pull has written
+nothing. A failed recreate is left exactly as it is.
+
+That last one is deliberate and was once the other way. Recreating stops and
+removes the old container before creating the replacement, so a single error
+covers four different situations: the old container still running, stopped but
+present, gone entirely, or a new one that exists and will not start. Putting
+the file back is right in the first two and wrong in the last two, where it
+would make the file disagree with the container that actually exists — and the
+actor cannot tell which it is in. An earlier version restored the pin under the
+claim "the container refused the new image", which described only the fourth
+and suited it least.
+
+So the file keeps what was decided, the repository is left dirty, and the
+reason says all of that plus what a person should check. `IsClean` then refuses
+the next apply until someone resolves it. This is the same handling every
+failure after the container already gets — a commit a hook rejected, a push
+that did not land — and it is the only one that does not assert something
+unverified.
+
+Reverting an apply by hand has the same limit, and more sharply: re-pinning the
+old digest does not undo a schema migration. bazarr, 2026-09-15 — the pin went
+back, the database had already migrated, and the old image could not read it.
+The image is not the only state that moved.
 
 This makes "the actor is dumb" true only about *policy*. It is not dumb about
 transactions: it holds the compose file, git, and the docker socket, and it

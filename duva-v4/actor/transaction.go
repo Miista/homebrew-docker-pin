@@ -16,10 +16,26 @@ import (
 // Applying is five steps: pull the image, write the digest into the compose
 // file, recreate the container, commit, push.
 //
-// There is no rollback except one case. If the container refuses the new
-// image the file is put back, because leaving a claim there would be a lie;
-// everything after the container is record-keeping and cannot make the update
-// untrue.
+// There is no rollback. Not as an omission -- as the design.
+//
+// Once a recreate has been attempted, this process cannot know what state the
+// container is in. Recreating stops and removes the old container before
+// creating the replacement, so a single error covers four different worlds:
+// the old one still running, the old one stopped but present, nothing at all,
+// or a new container that exists and would not start. Undoing the file is
+// right in the first two and actively wrong in the last two, where it would
+// make the file disagree with the container that actually exists.
+//
+// An earlier version did restore the pin on a failed recreate, under the
+// claim "the container refused the new image". That described only the
+// last of those four, and was the case the restore suited least.
+//
+// So the file is left saying what was decided, the repository is left dirty,
+// and the reason says so. IsClean then refuses the next apply until a person
+// looks -- which is the same handling every failure after the container
+// already gets, and the only one that does not assert something unverified.
+// Watchtower reaches the same answer from the other side: it has no file to
+// put back and still accepts an outage on failure rather than undoing.
 //
 // The seams -- docker, git -- are struct fields so tests can fake them. What
 // they cannot fake is whether the container really ends up running the image
@@ -152,8 +168,9 @@ func transaction(req actor.Request, step func(string, ...any), d Docker, g Git, 
 	//
 	// What cannot be pre-checked is the pull and the recreate: pulling is its
 	// own test, and whether a container will accept an image is only knowable
-	// by giving it one. Those two keep their existing handling -- a failed
-	// pull has written nothing, and a failed recreate restores the pin.
+	// by giving it one. A failed pull has written nothing. A failed recreate
+	// is the one outcome this cannot clean up after, which is why so much is
+	// answered here instead.
 	if err := precheck(req, d, tmpl); err != nil {
 		return actor.Failed, err.Error()
 	}
@@ -170,7 +187,7 @@ func transaction(req actor.Request, step func(string, ...any), d Docker, g Git, 
 	// pulled. For a digest move that tag is unchanged and the digest is what
 	// moved; for a version change the tag is the new one. Either way the
 	// digest comes from the image that was just pulled.
-	before, out, err := writePin(req, req.Image+":"+req.Tag, d)
+	out, err := writePin(req, req.Image+":"+req.Tag, d)
 	if err != nil {
 		return actor.Failed, fmt.Sprintf("writing the pin: %v", err)
 	}
@@ -185,13 +202,16 @@ func transaction(req actor.Request, step func(string, ...any), d Docker, g Git, 
 
 	step("recreating %s", container)
 	if err := d.Recreate(req.File, req.Service); err != nil {
-		step("%s refused the new image, putting the compose file back", container)
-		// The container refused it, so the file must not keep claiming it.
-		// A failure to restore is worse than the original problem.
-		if rerr := restorePin(req, before); rerr != nil {
-			return actor.Failed, fmt.Sprintf("%v; and restoring the previous pin failed: %v", err, rerr)
-		}
-		return actor.Failed, fmt.Sprintf("recreating %s: %v", container, err)
+		// Left as it is, deliberately. See the note at the top of this file:
+		// what happened to the container is not knowable from here, so the
+		// file is not touched and the state is handed to a person instead.
+		reason := fmt.Sprintf("recreating %s: %v"+
+			" — the compose file still records %s and the repository is now dirty,"+
+			" so no further update can be applied on this host until that is resolved."+
+			" Check whether %s is running before deciding which way to resolve it",
+			container, err, out.NewRaw, container)
+		step("%s", reason)
+		return actor.Failed, reason
 	}
 
 	// From here the update is true whatever else happens: the container is
@@ -263,16 +283,15 @@ func transaction(req actor.Request, step func(string, ...any), d Docker, g Git, 
 	return actor.Completed, ""
 }
 
-// writePin rewrites the image line, returning what it said before.
+// writePin rewrites the image line.
 //
 // pin.Compute does the work, so the actor and `docker pin` cannot disagree
 // about what a pinned line looks like -- which is the reason that package
 // exists at all.
-func writePin(req actor.Request, tagRef string, d Docker) (before string, out pin.Outcome, err error) {
-	before, err = compose.RawImage(req.File, req.Service)
-	if err != nil {
-		return "", pin.Outcome{}, err
-	}
+//
+// It used to also return the line as it stood before, for the rollback. There
+// is no rollback, so there is nothing to hold it for.
+func writePin(req actor.Request, tagRef string, d Docker) (out pin.Outcome, err error) {
 	// The digest of what was pulled, not of the tag: a digest move pulled a
 	// specific digest, and asking about the tag again could answer with
 	// whatever it points at now rather than what was decided about.
@@ -285,25 +304,20 @@ func writePin(req actor.Request, tagRef string, d Docker) (before string, out pi
 		Pull:      d.Pull,
 	})
 	if err != nil {
-		return "", pin.Outcome{}, err
+		return pin.Outcome{}, err
 	}
 	if out.Built {
 		// A locally built image has no registry digest, so pinning it would
 		// write a reference no other host can pull.
-		return "", pin.Outcome{}, fmt.Errorf("%s is built locally, so there is nothing to pin", req.Service)
+		return pin.Outcome{}, fmt.Errorf("%s is built locally, so there is nothing to pin", req.Service)
 	}
 	if !out.Changed {
-		return before, out, nil
+		return out, nil
 	}
 	if err := pin.Apply(req.File, req.Service, out); err != nil {
-		return "", pin.Outcome{}, err
+		return pin.Outcome{}, err
 	}
-	return before, out, nil
-}
-
-// restorePin puts the image line back to what it was.
-func restorePin(req actor.Request, before string) error {
-	return compose.PinImage(req.File, req.Service, before)
+	return out, nil
 }
 
 // candidateRef is what to pull.
@@ -370,38 +384,62 @@ func precheck(req actor.Request, d Docker, tmpl string) error {
 		}
 	}
 
-	// Can this file be rewritten? The preflight checks /compose is writable;
-	// this checks *this* file, which can be read-only, missing, or shaped in
-	// a way the rewrite does not recognise.
-	raw, err := compose.RawImage(req.File, req.Service)
-	if err != nil {
-		return fmt.Errorf("reading %s from %s: %w", req.Service, req.File, err)
+	// Would the write succeed? Asked by doing the write's own computation,
+	// not by reimplementing its checks.
+	//
+	// pin.Compute is exactly what `docker pin --dry-run` runs: it is the half
+	// of the write that decides what the line should become, and pin.Apply is
+	// the half that writes it. So everything the real write would refuse --
+	// a built image whose digest is local to this daemon, a file it cannot
+	// parse, an image line it cannot rewrite, a digest already there that is
+	// malformed -- is refused here, with nothing yet done.
+	//
+	// An earlier version of this hand-rolled IsBuilt and HasUnexpandedVariable
+	// beside it, which was a second implementation of a question this already
+	// answers, and one that would drift.
+	//
+	// The digest is the one the decider decided on rather than the daemon's,
+	// so this needs no pull: the point is to answer before pulling. For a
+	// version change the decider has no digest yet, and the only honest answer
+	// is a placeholder -- everything except the digest itself is still checked,
+	// which is everything that can fail before the pull.
+
+	// An unexpanded variable is the one question the engine does not answer.
+	// Every caller checks it around Compute rather than inside it -- `docker
+	// pin`, duva, the decider and the detector all do -- because `${TAG}` is a
+	// compose-file question, not a pinning one. Left to Compute it would be
+	// pulled as a literal and fail at the registry, describing a tag nobody
+	// wrote. Checked first because it is the cheapest and reads the same file.
+	if raw, err := compose.RawImage(req.File, req.Service); err == nil &&
+		compose.HasUnexpandedVariable(raw) {
+		return fmt.Errorf(
+			"%s in %s still has an unexpanded variable (%s), so there is nothing to pin",
+			req.Service, req.File, raw)
 	}
 
-	// The same three the `docker pin --dry-run` path refuses, because they
-	// are the same write and fail the same way.
+	probeDigest := req.Digest
+	if probeDigest == "" {
+		probeDigest = "sha256:" + strings.Repeat("0", 64)
+	}
+	out, err := pin.Compute(req.File, req.Service, req.Image+":"+req.Tag, pin.Docker{
+		GetDigest: func(string) (string, error) { return probeDigest, nil },
+		Pull:      func(string) error { return nil }, // not reached: the digest is given
+	})
+	if err != nil {
+		return fmt.Errorf("%s cannot be pinned in %s: %w", req.Service, req.File, err)
+	}
+	// Built is not an error from Compute -- it is a successful outcome saying
+	// there is nothing to pin, which the caller is expected to act on. Checked
+	// here rather than only in writePin, where it would be found after a pull.
 	//
-	// A built image's digest is local to this daemon -- no registry serves it
-	// -- so pinning one writes a reference no other host can pull, into a file
-	// that is committed and shared. Nothing upstream filters this: the
-	// detector and the decider both skip unexpanded variables, but neither
-	// looks at `build:`, so a service carrying both `build:` and a pinned
-	// `image:` reaches here.
-	if built, err := compose.IsBuilt(req.File, req.Service); err != nil {
-		return fmt.Errorf("reading %s from %s: %w", req.Service, req.File, err)
-	} else if built {
+	// It does reach here: the detector and the decider both skip unexpanded
+	// variables, but neither looks at `build:`, so a service carrying both a
+	// `build:` and a pinned `image:` arrives with nothing having filtered it.
+	// Its digest is local to this daemon, so pinning one would write a
+	// reference no other host could pull, into a file that is committed.
+	if out.Built {
 		return fmt.Errorf("%s is built locally (build:), so its digest is local to this "+
 			"daemon and no other host could pull what would be written", req.Service)
-	}
-
-	// Belt and braces: the detector and the decider both refuse these, so
-	// reaching here means something upstream changed. The pull would fail at
-	// the daemon with "invalid reference format" after this had already
-	// decided to act.
-	if compose.HasUnexpandedVariable(raw) {
-		return fmt.Errorf("%s has an unexpanded variable in its image (%s), "+
-			"which is read as written and is not a reference anything can pull",
-			req.Service, raw)
 	}
 
 	// Would the commit be accepted? The same question readiness asks, asked

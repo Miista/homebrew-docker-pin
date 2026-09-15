@@ -216,31 +216,62 @@ func TestAFailedPullChangesNothing(t *testing.T) {
 	}
 }
 
-// The one rollback: if the container refuses the image, the file must not
-// keep claiming it.
-func TestARefusedImagePutsTheFileBack(t *testing.T) {
+// A failed recreate is not undone.
+//
+// The error says only that recreating failed, and recreating stops and removes
+// the old container before creating the replacement -- so that one error
+// covers the old container still running, the old one gone, and a new one that
+// exists and would not start. Putting the file back is right in some of those
+// and wrong in others, and this cannot tell which it is in. So it does not
+// guess: the file keeps what was decided and a person is told.
+func TestAFailedRecreateIsNotUndone(t *testing.T) {
 	w := newWorld(t, versionPin)
 	w.recreateErr = errors.New("the container would not start")
 	req := versionRequest()
 	req.File = w.file
 	before := w.image(t)
-	step, lines := steps()
+	step, _ := steps()
 
 	status, reason := transaction(req, step, w.docker(), w.git(), false, "")
 	if status != actor.Failed {
 		t.Errorf("status = %q, want failed", status)
 	}
 	if !strings.Contains(reason, "would not start") {
-		t.Errorf("reason = %q", reason)
+		t.Errorf("reason = %q, want it to carry what the daemon said", reason)
 	}
-	if got := w.image(t); got != before {
-		t.Errorf("the file was left claiming an image that never ran:\n  got  %s\n  want %s", got, before)
+	if got := w.image(t); got == before {
+		t.Errorf("the pin was reverted; a failed recreate must leave the file alone:\n  got %s", got)
+	}
+	if got := w.image(t); !strings.Contains(got, "1.1.0") {
+		t.Errorf("the file should still record what was decided:\n  got %s", got)
 	}
 	if len(w.committed) != 0 {
 		t.Errorf("it committed a failed update: %v", w.committed)
 	}
-	if !containsLine(*lines, "putting the compose file back") {
-		t.Errorf("the revert was not reported:\n%v", *lines)
+}
+
+// Leaving the file is only defensible if somebody is told, and told what it
+// means: the repository is dirty, that blocks the next apply, and which way to
+// resolve it depends on whether the container is running -- which this cannot
+// determine and a person can.
+func TestAFailedRecreateSaysWhatItLeftBehind(t *testing.T) {
+	w := newWorld(t, versionPin)
+	w.recreateErr = errors.New("the container would not start")
+	req := versionRequest()
+	req.File = w.file
+	step, lines := steps()
+
+	_, reason := transaction(req, step, w.docker(), w.git(), false, "")
+
+	for _, want := range []string{"dirty", "until that is resolved", "running"} {
+		if !strings.Contains(reason, want) {
+			t.Errorf("reason does not mention %q:\n  %s", want, reason)
+		}
+	}
+	// The stream carries it too, not just the return value: the decider relays
+	// the terminal line, and an operator watching sees only what was streamed.
+	if !containsLine(*lines, "dirty") {
+		t.Errorf("what it left behind never reached the stream:\n%v", *lines)
 	}
 }
 

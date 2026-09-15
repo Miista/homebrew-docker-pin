@@ -184,6 +184,14 @@ See `docs/duva-v4-diun-decider-actor.md`.
   `docker pin` -- applying an update means rewriting a pin, which is its
   engine.
 
+  **No rollback**, unlike v3's `cmd/duva` below. Everything answerable is
+  answered in a precheck before the pull, via the same `pin.Compute` the write
+  uses. A failed recreate is left alone: recreating stops and removes the old
+  container before creating the replacement, so one error covers the old
+  container running, gone, or a new one that will not start — and restoring
+  the pin is wrong in some of those. The file keeps what was decided, the
+  repository is dirty, `IsClean` blocks the next apply, and the reason says so.
+
   **It must run as the user that owns the repository, and that user must be
   in the `docker` group** (`user: "1000:1000"` plus `group_add`, GID from
   `stat -c '%g' /var/run/docker.sock` — host-specific). Root leaves
