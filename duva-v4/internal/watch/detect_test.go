@@ -414,9 +414,10 @@ func TestAFirstCheckThatFindsSomethingReportsOnlyThat(t *testing.T) {
 // would report a tag the service has said it does not follow.
 func TestAFirstCheckStillHonoursTheIncludePattern(t *testing.T) {
 	reg := &fakeRegistry{
-		tags:         []string{"1.2.0", "2.0.0-rc1"},
+		tags:         []string{"1.0.0", "1.2.0", "2.0.0-rc1"},
 		datedListing: true,
 		published: map[string]time.Time{
+			"1.0.0":     at("2025-06-01T00:00:00Z"), // the tag it runs
 			"1.2.0":     at("2026-01-01T00:00:00Z"),
 			"2.0.0-rc1": at("2026-02-01T00:00:00Z"), // newer, but excluded
 		},
@@ -449,9 +450,11 @@ func TestAFirstCheckThatReachesNoTagIsAnError(t *testing.T) {
 	if !errors.As(err, &noTag) {
 		t.Fatalf("error is %T, want a NoTagError the caller can tell from an unreachable registry", err)
 	}
-	// The message has to say which of the two it is, because the fix differs.
-	if !strings.Contains(err.Error(), "duva.include") {
-		t.Errorf("the error does not point at what to check: %v", err)
+	// The message names the tag it could not find, because that is what makes
+	// this different from "nothing new": a tag a container is running must be
+	// in the repository it was pulled from.
+	if !strings.Contains(err.Error(), "1.0.0") {
+		t.Errorf("the error does not name the running tag it could not find: %v", err)
 	}
 }
 
@@ -468,8 +471,10 @@ func TestAFirstCheckAgainstAnEmptyRepositorySaysSo(t *testing.T) {
 	}
 }
 
-// Every date unreadable, and not even the running tag present: the check
-// reached the registry but confirmed nothing about this service.
+// The running tag is absent, which on a first check is the serious failure:
+// a container is running an image pulled from this repository, so that tag
+// being missing means it was deleted, the image moved, or this is not the
+// repository it runs from.
 func TestAFirstCheckWhoseDatesAllFailIsAnError(t *testing.T) {
 	reg := &fakeRegistry{
 		tags: []string{"1.1.0", "1.2.0"},
@@ -602,5 +607,54 @@ func TestAStreamAgainstADigestlessRegistryIsAnError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "latest") {
 		t.Errorf("the error does not name the tag it could not resolve: %v", err)
+	}
+}
+
+// A first check must reach the tag the service is running, even when it found
+// a candidate.
+//
+// Not "a tag" -- that one. A container is running an image pulled from this
+// repository, so its tag is the one the registry is certain to have. Missing
+// means it was deleted, the image moved, or this is not the repository the
+// service runs from -- and recording a cutoff on that would be the watcher
+// certifying a world it could not see.
+func TestAFirstCheckWithoutTheRunningTagFailsEvenWithACandidate(t *testing.T) {
+	reg := &fakeRegistry{
+		// 2.0.0 is a fine candidate. 1.0.0, which the service runs, is gone.
+		tags:         []string{"2.0.0"},
+		datedListing: true,
+		published:    map[string]time.Time{"2.0.0": at("2026-09-10T00:00:00Z")},
+	}
+
+	_, err := collectFirst(svc("1.0.0", "", ""), cutoff, reg.registry())
+	if err == nil {
+		t.Fatal("no error: a first check certified a repository missing the tag its container runs")
+	}
+	var noTag *NoTagError
+	if !errors.As(err, &noTag) {
+		t.Fatalf("error is %T, want a NoTagError", err)
+	}
+	if noTag.Tag != "1.0.0" {
+		t.Errorf("the error names tag %q, want the one the service runs", noTag.Tag)
+	}
+}
+
+// A later run does not assert it. The question there is narrower -- what
+// appeared since the line -- and a tag deleted after the line was drawn is not
+// that question. Asserting it every run would turn an upstream retention
+// policy into a permanently failing service.
+func TestALaterRunDoesNotRequireTheRunningTag(t *testing.T) {
+	reg := &fakeRegistry{
+		tags:         []string{"2.0.0"},
+		datedListing: true,
+		published:    map[string]time.Time{"2.0.0": at("2026-09-10T00:00:00Z")},
+	}
+
+	got, err := collect(svc("1.0.0", "", ""), cutoff, reg.registry())
+	if err != nil {
+		t.Fatalf("a later run failed for a tag that has since been deleted: %v", err)
+	}
+	if len(got) != 1 || got[0].Tag != "2.0.0" {
+		t.Errorf("reported %v, want the candidate it found", got)
 	}
 }

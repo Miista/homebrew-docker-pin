@@ -584,9 +584,10 @@ func TestAFirstRunOfTheSameWorldReportsTheNewest(t *testing.T) {
 	// No seeded cutoff: this is a first check.
 
 	reg := fakeReg{
-		tags: map[string][]string{"example.com/app": {"1.1.0", "0.9.0"}},
+		tags: map[string][]string{"example.com/app": {"1.1.0", "1.0.0", "0.9.0"}},
 		dates: map[string]time.Time{
 			"1.1.0": time.Now().Add(-300 * 24 * time.Hour),
+			"1.0.0": time.Now().Add(-350 * 24 * time.Hour), // the tag it runs
 			"0.9.0": time.Now().Add(-400 * 24 * time.Hour),
 		},
 	}

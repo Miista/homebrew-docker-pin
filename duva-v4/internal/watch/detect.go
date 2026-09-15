@@ -227,17 +227,28 @@ func since(svc Service, cutoff time.Time, atLeastOne bool, reg Registry, found f
 	// Nothing was new enough, and this service has never been checked. Report
 	// the newest there is, so a first run says what exists rather than
 	// nothing.
-	// Reaching no usable tag is a failed check, not an empty one -- whether
-	// or not this is the first.
+	// A first check must reach the tag this service is running.
 	//
-	// The include matched nothing the repository publishes, or no date could
-	// be read. Either way the watcher has confirmed nothing, and saying
-	// "nothing to report" would record a cutoff it never earned: the line
-	// would move forward on every run, for a service being silently checked
-	// against nothing, for as long as nobody looked. An error leaves the line
-	// where it is and asks the same question again.
+	// Not "a tag" -- that one. It is the one tag the registry is certain to
+	// have, because a container is running an image pulled from it, so its
+	// absence is not a quiet repository or a strict include: the tag was
+	// deleted, or the image moved, or this is not the repository the service
+	// is actually running. Recording a cutoff on that would be the watcher
+	// certifying a world it could not see.
+	//
+	// Only on a first check. Later runs answer a narrower question -- what
+	// appeared since the line -- and a tag deleted after the line was drawn
+	// is not that question. Making every run assert it would turn an upstream
+	// retention policy into a permanently failing service.
+	if atLeastOne && !sawCurrent {
+		return &NoTagError{Service: svc.Name, Image: svc.Image, Tag: svc.Tag, Listed: len(tags)}
+	}
+
+	// Reaching no usable tag at all is the same failure, on any run: the
+	// include matched nothing, or no date could be read, so the watcher has
+	// confirmed nothing and a cutoff would be a line it never earned.
 	if newestAt.IsZero() && !sawCurrent {
-		return &NoTagError{Service: svc.Name, Image: svc.Image, Listed: len(tags)}
+		return &NoTagError{Service: svc.Name, Image: svc.Image, Tag: svc.Tag, Listed: len(tags)}
 	}
 
 	// Nothing was new enough, and this service has never been checked. Report
@@ -260,6 +271,9 @@ func since(svc Service, cutoff time.Time, atLeastOne bool, reg Registry, found f
 type NoTagError struct {
 	Service string
 	Image   string
+	// Tag is what the service is running, which a first check expects to find
+	// and whose absence is the more serious of the two failures.
+	Tag string
 	// Listed is how many tags the registry offered before filtering, so the
 	// message can tell "the repository is empty" from "the include rejected
 	// all forty of them".
@@ -271,9 +285,9 @@ func (e *NoTagError) Error() string {
 		return fmt.Sprintf("%s: %s published no tags at all", e.Service, e.Image)
 	}
 	return fmt.Sprintf(
-		"%s: none of the %d tag(s) %s publishes could be used -- check duva.include, "+
-			"or whether their publish dates can be read",
-		e.Service, e.Listed, e.Image)
+		"%s: %s is running %s:%s, but that tag is not among the %d %s publishes -- "+
+			"it was deleted, the image moved, or this is not the repository it runs from",
+		e.Service, e.Service, e.Image, e.Tag, e.Listed, e.Image)
 }
 
 // sinceMoved reports a moving tag whose digest has changed.
