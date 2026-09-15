@@ -654,3 +654,84 @@ func TestAnUnexpandedVariableIsRefused(t *testing.T) {
 		t.Errorf("pulled %v; nothing should have been attempted", w.pulled)
 	}
 }
+
+// The steps name the act and nothing else.
+//
+// The panel sits inside a row that already says which service and which
+// version, so a step repeating the container and the full pinned line was
+// mostly restating it -- and a digest is 71 characters, which is most of the
+// panel. Nothing asserted this text before, which is how it drifted.
+func TestTheStepsNameTheActAndNothingElse(t *testing.T) {
+	w := newWorld(t, versionPin)
+	req := versionRequest()
+	req.File = w.file
+	step, lines := steps()
+
+	status, reason := transaction(req, step, w.docker(), w.git(), false, "")
+	if status != actor.Completed {
+		t.Fatalf("status = %q (%s)\n%v", status, reason, *lines)
+	}
+
+	want := []string{
+		"pulling new image",
+		"pinning image",
+		"recreating",
+		"committing",
+	}
+	if len(*lines) != len(want) {
+		t.Fatalf("steps = %v, want exactly %v", *lines, want)
+	}
+	for i, w := range want {
+		if (*lines)[i] != w {
+			t.Errorf("step %d = %q, want %q", i, (*lines)[i], w)
+		}
+	}
+
+	// The detail belongs in the commit and in failures, not in every step.
+	for _, line := range *lines {
+		if strings.Contains(line, "sha256:") {
+			t.Errorf("a step carries a digest, which is 71 characters of noise: %q", line)
+		}
+	}
+}
+
+// Pinning happens before recreating, and must.
+//
+// The question comes up because `docker pin` sounds like it reads the running
+// container. It does not: pin.Compute asks GetDigest, which is
+// `docker image inspect` of the ref that was just pulled, so no container is
+// consulted and the order is free on that count.
+//
+// It is not free on the other count. `docker compose up -d` reads the compose
+// file to decide what to run, so pinning after the recreate would recreate
+// against the old pin -- leaving the file claiming a digest that is not
+// running, which is the exact disagreement this whole transaction exists to
+// avoid.
+func TestThePinIsWrittenBeforeTheRecreate(t *testing.T) {
+	w := newWorld(t, versionPin)
+	req := versionRequest()
+	req.File = w.file
+	step, lines := steps()
+
+	status, _ := transaction(req, step, w.docker(), w.git(), false, "")
+	if status != actor.Completed {
+		t.Fatalf("status = %q\n%v", status, *lines)
+	}
+
+	var pinAt, recreateAt = -1, -1
+	for i, line := range *lines {
+		switch line {
+		case "pinning image":
+			pinAt = i
+		case "recreating":
+			recreateAt = i
+		}
+	}
+	if pinAt == -1 || recreateAt == -1 {
+		t.Fatalf("steps = %v, want both a pin and a recreate", *lines)
+	}
+	if pinAt > recreateAt {
+		t.Errorf("pinned at step %d but recreated at %d: compose up would have read the old pin",
+			pinAt, recreateAt)
+	}
+}

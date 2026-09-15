@@ -175,9 +175,15 @@ func transaction(req actor.Request, step func(string, ...any), d Docker, g Git, 
 		return actor.Failed, err.Error()
 	}
 
+	// The steps name the act and nothing else. Every one of them used to
+	// carry the container and the full pinned line, and a digest is 71
+	// characters -- so the panel was mostly a restatement of the row it sits
+	// inside, which already says which service and which version. Failures
+	// still carry the detail, because there the detail is the explanation.
+	//
 	// Pull first: the cheapest failure is the one before anything is
 	// written.
-	step("pulling %s for %s", ref, container)
+	step("pulling new image")
 	if err := d.Pull(ref); err != nil {
 		return actor.Failed, fmt.Sprintf("pulling %s: %v", ref, err)
 	}
@@ -195,12 +201,12 @@ func transaction(req actor.Request, step func(string, ...any), d Docker, g Git, 
 		// The file already says what was asked for. Under a protocol that
 		// re-notifies until something is done, this is how being told twice
 		// produces one commit rather than two.
-		step("%s already pins %s", container, out.NewRaw)
+		step("already pinned, nothing to do")
 		return actor.Completed, ""
 	}
-	step("pinned %s to %s", container, out.NewRaw)
+	step("pinning image")
 
-	step("recreating %s", container)
+	step("recreating")
 	if err := d.Recreate(req.File, req.Service); err != nil {
 		// Left as it is, deliberately. See the note at the top of this file:
 		// what happened to the container is not knowable from here, so the
@@ -240,7 +246,7 @@ func transaction(req actor.Request, step func(string, ...any), d Docker, g Git, 
 		// somebody had to be watching.
 		return done(step, "the change is live but the commit message could not be built: %v", err)
 	}
-	step("committing %q", msg)
+	step("committing")
 	if err := g.Add(dir, req.File); err != nil {
 		return done(step, "the change is live but could not be staged: %v", err)
 	}
