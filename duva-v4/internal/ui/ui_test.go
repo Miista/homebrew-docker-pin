@@ -103,7 +103,7 @@ func TestLongDigestsAreAllowedToWrap(t *testing.T) {
 	}
 	_, body := get(t, s, "/")
 
-	for _, sel := range []string{".steps div", ".banner"} {
+	for _, sel := range []string{".steps li", ".banner"} {
 		rule := ruleFor(body, sel)
 		if rule == "" {
 			t.Errorf("no %q rule in the page at all", sel)

@@ -130,7 +130,8 @@
   .rows li.stale { opacity: .55; }
 
   /* ---------- an apply, as it happens ---------- */
-  .steps { grid-column: 1 / -1; margin: .1rem 0 .35rem; padding: .45rem .65rem;
+  .steps { grid-column: 1 / -1; margin: .1rem 0 .35rem;
+           padding: .45rem .65rem .45rem 1.6rem;
            background: var(--tint); border-radius: 6px; font-size: .78rem;
            color: var(--muted); }
   /* A digest is 71 characters with no space or hyphen in it, so a browser has
@@ -138,12 +139,9 @@
      screen -- which on a phone means most of the step is unreadable.
      overflow-wrap: break-word will not do it: that breaks between words, and
      this is one word. anywhere is the rule that breaks mid-token. */
-  .steps div { padding: .05rem 0; overflow-wrap: anywhere; }
-  .steps div::before { content: "\2026  "; color: var(--faint); }
+  .steps li { padding: .05rem 0; overflow-wrap: anywhere; }
   .steps .ok { color: var(--ok); font-weight: 600; }
-  .steps .ok::before { content: "\2713  "; }
   .steps .bad { color: var(--major); font-weight: 600; }
-  .steps .bad::before { content: "\2717  "; }
 
   /* ---------- empty state: the common case ---------- */
   .empty { padding: 3rem 1rem 2.75rem; text-align: center; }
@@ -261,11 +259,11 @@
               :title="buttonReason(r)"
               @click="apply(r)">{{ running(r.key) ? "Updating…" : "Update" }}</button>
 
-      <div class="steps" v-if="steps[r.key] || finished[r.key]">
-        <div v-for="line in (steps[r.key] || [])">{{ line }}</div>
-        <div :class="finished[r.key] && finished[r.key].startsWith('failed') ? 'bad' : 'ok'"
-             v-if="finished[r.key]">{{ finished[r.key] }}</div>
-      </div>
+      <ul class="steps" v-if="steps[r.key] || finished[r.key]">
+        <li v-for="line in (steps[r.key] || [])">{{ line }}</li>
+        <li :class="finished[r.key] && finished[r.key].startsWith('failed') ? 'bad' : 'ok'"
+            v-if="finished[r.key]">{{ finished[r.key] }}</li>
+      </ul>
     </li>
   </ul>
   </template>
