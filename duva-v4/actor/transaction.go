@@ -41,14 +41,6 @@ type Git struct {
 	RebaseAbort func(dir string) error
 	Push        func(dir string) error
 	IsClean     func(dir string) (bool, error)
-	// Unstage undoes what Add did, for a commit that was refused.
-	//
-	// Not a rollback of the update -- the container is running the new image
-	// and that stays true. It undoes only this run's staging, because a
-	// change left staged makes the *next* apply refuse on "the repository has
-	// uncommitted changes": one failure would otherwise poison every one
-	// after it.
-	Unstage func(dir, file string) error
 }
 
 var realDocker = Docker{
@@ -74,9 +66,6 @@ var realGit = Git{
 	PullRebase:  func(dir string) error { return runGit(gitCmd(dir, "pull", "--rebase")) },
 	RebaseAbort: func(dir string) error { return runGit(gitCmd(dir, "rebase", "--abort")) },
 	Push:        func(dir string) error { return runGit(gitCmd(dir, "push")) },
-	Unstage: func(dir, file string) error {
-		return runGit(gitCmd(dir, "restore", "--staged", file))
-	},
 	IsClean: func(dir string) (bool, error) {
 		cmd := gitCmd(dir, "status", "--porcelain")
 		var stderr strings.Builder
@@ -216,25 +205,23 @@ func transaction(req actor.Request, step func(string, ...any), d Docker, g Git, 
 		return done(step, "the change is live but could not be staged: %v", err)
 	}
 	if err := g.Commit(dir, msg); err != nil {
-		// The container is running the new image, so this is not undone: a
-		// rollback here would tear down a healthy service over a commit
-		// message, which is worse than the divergence it fixes.
+		// Not undone, and deliberately not tidied either.
 		//
-		// But the staging *is* undone. A change left staged makes the next
-		// apply refuse on "the repository has uncommitted changes", so one
-		// rejected commit would otherwise block every service on this host
-		// until somebody noticed by hand.
-		unstaged := ""
-		if g.Unstage != nil {
-			if uerr := g.Unstage(dir, req.File); uerr != nil {
-				unstaged = fmt.Sprintf("; and it could not be unstaged either (%v), "+
-					"so the next apply will refuse until this is cleared by hand", uerr)
-			} else {
-				unstaged = "; the change was unstaged, so the file still records it " +
-					"and the next apply is not blocked"
-			}
-		}
-		return done(step, "the change is live but could not be committed: %v%s", err, unstaged)
+		// The container is running the new image, so a rollback would tear
+		// down a healthy service over a commit message. But unstaging does not
+		// help either, and an earlier version of this did it: `git restore
+		// --staged` turns "M " into " M", which `git status --porcelain` still
+		// reports, so IsClean still refuses and the next apply is blocked
+		// exactly as before. It moved the problem from the index to the
+		// worktree and read like a safeguard.
+		//
+		// The repository *is* dirty, and correctly so: the compose file records
+		// an update nobody committed. The next apply refusing is right. What
+		// matters is that this is loud enough for a person to see it, because
+		// only a person can resolve it.
+		return done(step, "the change is live but could not be committed: %v"+
+			" — the compose file records it and the repository is now dirty,"+
+			" so no further update can be applied on this host until that is resolved", err)
 	}
 
 	if push {
