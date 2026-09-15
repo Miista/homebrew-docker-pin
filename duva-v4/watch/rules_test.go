@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -505,5 +506,39 @@ func TestRunRefusesANameItDoesNotWatch(t *testing.T) {
 
 	if got := justOne(all, "wik"); got != nil {
 		t.Fatalf("justOne(wik) = %+v, want nil so the run refuses", got)
+	}
+}
+
+// A service that reached no usable tag keeps its old cutoff.
+//
+// The point of the error: a check that confirmed nothing must not record a
+// line it never earned, or every later run trusts it and the service is
+// silently never checked properly again.
+func TestAServiceThatReachedNoTagDoesNotAdvance(t *testing.T) {
+	useTempState(t)
+	// Seeded, so "did not advance" is a line staying put rather than one
+	// never written.
+	seeded := time.Now().Add(-48 * time.Hour)
+	seedCutoff(t, seeded, "app")
+
+	// Publishes only a tag the include rejects, so nothing is usable.
+	reg := fakeReg{
+		tags:  map[string][]string{"example.com/app": {"latest"}},
+		dates: map[string]time.Time{"latest": time.Now().Add(-90 * 24 * time.Hour)},
+	}
+	svc := service("app", "example.com/app", "1.0.0")
+	svc.Include = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
+
+	before, after, found, failed := check(t, []watch.Service{svc}, reg.registry())
+
+	if failed != 1 {
+		t.Errorf("failed = %d, want the service counted as not checked", failed)
+	}
+	if found != 0 {
+		t.Errorf("found = %d, want nothing -- no tag was usable", found)
+	}
+	if !after["app"].Equal(before["app"]) {
+		t.Errorf("the cutoff moved from %v to %v for a check that reached no tag",
+			before["app"], after["app"])
 	}
 }

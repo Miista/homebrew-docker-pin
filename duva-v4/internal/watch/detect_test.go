@@ -431,18 +431,77 @@ func TestAFirstCheckStillHonoursTheIncludePattern(t *testing.T) {
 	}
 }
 
-// A repository with no qualifying tag reports nothing rather than inventing
-// one.
-func TestAFirstCheckWithNothingToFindReportsNothing(t *testing.T) {
+// A first check that reaches no usable tag is an error, not silence.
+//
+// Silence would record a cutoff the watcher never earned -- it would trust
+// that line on every later run, having never confirmed a single tag behind it.
+// An error leaves the cutoff where it was and asks again next time.
+func TestAFirstCheckThatReachesNoTagIsAnError(t *testing.T) {
+	// The repository publishes only a tag the include rejects.
 	reg := &fakeRegistry{tags: []string{"latest"}, datedListing: true,
 		published: map[string]time.Time{"latest": at("2026-01-01T00:00:00Z")}}
 
 	got, err := collectFirst(svc("1.0.0", `^\d+\.\d+\.\d+$`, ""), cutoff, reg.registry())
+	if err == nil {
+		t.Fatalf("no error, and reported %v -- a cutoff would be recorded for a check that reached nothing", got)
+	}
+	var noTag *NoTagError
+	if !errors.As(err, &noTag) {
+		t.Fatalf("error is %T, want a NoTagError the caller can tell from an unreachable registry", err)
+	}
+	// The message has to say which of the two it is, because the fix differs.
+	if !strings.Contains(err.Error(), "duva.include") {
+		t.Errorf("the error does not point at what to check: %v", err)
+	}
+}
+
+// An empty repository says so plainly rather than blaming the include.
+func TestAFirstCheckAgainstAnEmptyRepositorySaysSo(t *testing.T) {
+	reg := &fakeRegistry{tags: nil, datedListing: true}
+
+	_, err := collectFirst(svc("1.0.0", "", ""), cutoff, reg.registry())
+	if err == nil {
+		t.Fatal("no error for a repository with no tags at all")
+	}
+	if !strings.Contains(err.Error(), "no tags at all") {
+		t.Errorf("an empty repository is reported as something else: %v", err)
+	}
+}
+
+// Every date unreadable, and not even the running tag present: the check
+// reached the registry but confirmed nothing about this service.
+func TestAFirstCheckWhoseDatesAllFailIsAnError(t *testing.T) {
+	reg := &fakeRegistry{
+		tags: []string{"1.1.0", "1.2.0"},
+		dateErr: map[string]error{
+			"1.1.0": errors.New("unreadable"),
+			"1.2.0": errors.New("unreadable"),
+		},
+	}
+
+	_, err := collectFirst(svc("1.0.0", "", ""), cutoff, reg.registry())
+	if err == nil {
+		t.Fatal("no error when no tag's date could be read")
+	}
+}
+
+// Seeing the tag this service already runs is proof the check reached a real
+// tag, even though that tag is never a candidate -- it is what you are on, not
+// somewhere to go. A repository publishing only that tag is a service up to
+// date, not a check that failed.
+func TestSeeingTheRunningTagIsProofEnough(t *testing.T) {
+	reg := &fakeRegistry{
+		tags:         []string{"1.0.0"},
+		datedListing: true,
+		published:    map[string]time.Time{"1.0.0": at("2026-01-01T00:00:00Z")},
+	}
+
+	got, err := collectFirst(svc("1.0.0", "", ""), cutoff, reg.registry())
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("a service already on the only tag published is up to date, not a failure: %v", err)
 	}
 	if len(got) != 0 {
-		t.Errorf("first check reported %v, want nothing -- no tag qualifies", got)
+		t.Errorf("reported %v, want nothing -- the only tag is the one it runs", got)
 	}
 }
 

@@ -174,8 +174,18 @@ func since(svc Service, cutoff time.Time, atLeastOne bool, reg Registry, found f
 	var newest Finding
 	var newestAt time.Time
 
+	// Whether the tag this service already runs was among them. It never
+	// qualifies as a candidate -- it is what you are on, not somewhere to go
+	// -- but seeing it is proof the check reached the repository and read a
+	// real tag, which is the difference between "up to date" and "confirmed
+	// nothing".
+	var sawCurrent bool
+
 	var reported int
 	for _, t := range tags {
+		if t.Name == svc.Tag {
+			sawCurrent = true
+		}
 		if !qualifies(t.Name, svc) {
 			continue
 		}
@@ -217,10 +227,53 @@ func since(svc Service, cutoff time.Time, atLeastOne bool, reg Registry, found f
 	// Nothing was new enough, and this service has never been checked. Report
 	// the newest there is, so a first run says what exists rather than
 	// nothing.
+	// Reaching no usable tag is a failed check, not an empty one -- whether
+	// or not this is the first.
+	//
+	// The include matched nothing the repository publishes, or no date could
+	// be read. Either way the watcher has confirmed nothing, and saying
+	// "nothing to report" would record a cutoff it never earned: the line
+	// would move forward on every run, for a service being silently checked
+	// against nothing, for as long as nobody looked. An error leaves the line
+	// where it is and asks the same question again.
+	if newestAt.IsZero() && !sawCurrent {
+		return &NoTagError{Service: svc.Name, Image: svc.Image, Listed: len(tags)}
+	}
+
+	// Nothing was new enough, and this service has never been checked. Report
+	// the newest there is, so a first run says what exists rather than
+	// nothing.
+	// Only when there is one. The running tag can be the sole tag published,
+	// which proves the check reached the repository but leaves no candidate --
+	// and reporting the zero value there would send an empty finding.
 	if atLeastOne && reported == 0 && !newestAt.IsZero() {
 		found(newest)
 	}
 	return nil
+}
+
+// NoTagError is a check that reached no tag it could use.
+//
+// Distinct from a registry that could not be reached, because the fix is
+// different: this one is usually an include pattern that matches nothing the
+// repository publishes, which no amount of retrying will change.
+type NoTagError struct {
+	Service string
+	Image   string
+	// Listed is how many tags the registry offered before filtering, so the
+	// message can tell "the repository is empty" from "the include rejected
+	// all forty of them".
+	Listed int
+}
+
+func (e *NoTagError) Error() string {
+	if e.Listed == 0 {
+		return fmt.Sprintf("%s: %s published no tags at all", e.Service, e.Image)
+	}
+	return fmt.Sprintf(
+		"%s: none of the %d tag(s) %s publishes could be used -- check duva.include, "+
+			"or whether their publish dates can be read",
+		e.Service, e.Listed, e.Image)
 }
 
 // sinceMoved reports a moving tag whose digest has changed.
