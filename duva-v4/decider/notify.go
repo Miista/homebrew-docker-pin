@@ -17,7 +17,9 @@ import (
 //
 // Configured the way diun is on these hosts -- an endpoint, a topic and a
 // token, all from the environment -- because that is the notifier already set
-// up here and a second convention would be one more thing to remember.
+// up here and a second convention would be one more thing to remember. The
+// token is NTFY_TOKEN, the name the shared .ntfy.env already uses, so the
+// decider joins that file rather than carrying a second copy of one secret.
 //
 // It is deliberately thin. A decider that could not tell anyone still decided
 // correctly, so nothing here can change what the detector is told or what the
@@ -55,7 +57,7 @@ func newNtfy(log zerolog.Logger) *ntfy {
 	n := &ntfy{
 		endpoint: endpoint,
 		topic:    topic,
-		token:    ntfyToken(),
+		token:    os.Getenv("NTFY_TOKEN"),
 		clickURL: os.Getenv("DECIDER_NOTIF_NTFY_CLICK"),
 		// Short: a notification nobody is waiting on must not hold a
 		// detector's request open.
@@ -64,20 +66,6 @@ func newNtfy(log zerolog.Logger) *ntfy {
 	}
 	log.Info().Msgf("notifying %s on topic %q", endpoint, topic)
 	return n
-}
-
-// ntfyToken is the bearer token, preferring the decider's own name and falling
-// back to the shared one.
-//
-// These hosts keep NTFY_TOKEN in a .ntfy.env that diun and the backup jobs
-// already load. Reading it means the decider joins that file rather than
-// needing a second copy of the same secret, while DECIDER_NOTIF_NTFY_TOKEN
-// still wins for a decider that should publish as something else.
-func ntfyToken() string {
-	if t := os.Getenv("DECIDER_NOTIF_NTFY_TOKEN"); t != "" {
-		return t
-	}
-	return os.Getenv("NTFY_TOKEN")
 }
 
 // announce publishes one entry. Never fatal, never blocking the decision.
