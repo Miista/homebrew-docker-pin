@@ -59,7 +59,7 @@ func TestV4AppliesWhatPolicyAllows(t *testing.T) {
 func TestV4AFailedAutoApplyIsAnnounced(t *testing.T) {
 	s := Up(t, "duva-v4/failed-apply")
 	// Pulls, pins, and then will not start: FROM scratch with no entrypoint.
-	s.PushUnrunnable("app", "1.0.1")
+	s.PushUnrunnable("broken-app", "1.0.1")
 	s.Pin("app")
 	s.Start()
 
@@ -78,11 +78,22 @@ func TestV4AFailedAutoApplyIsAnnounced(t *testing.T) {
 		}
 	})
 
-	t.Run("it is not left looking like it worked", func(t *testing.T) {
-		// Whatever else is true, the container is not running the new image:
-		// that is what failing to start means.
-		if got := s.RunningImage("app"); strings.Contains(got, "1.0.1") {
-			t.Errorf("the container is running the image that could not start: %s", got)
+	t.Run("the container is not running", func(t *testing.T) {
+		// Not which image it was created with -- docker reports that whether
+		// or not it ever ran, which is what made the first version of this
+		// assertion wrong. Whether it is up is the question.
+		if s.running("app") {
+			t.Error("the container is running, so nothing failed to start and this tests nothing")
+		}
+	})
+
+	t.Run("and the repository is left dirty", func(t *testing.T) {
+		// The pin was written before the recreate, so a failed recreate
+		// leaves the file recording a change that did not take. Deliberate:
+		// it is what blocks the next apply on this host until a person looks,
+		// and the updater's own failure message says so.
+		if got := s.Status(); got == "" {
+			t.Error("the repository is clean, so the pin was undone -- the rollback this deliberately does not do")
 		}
 	})
 }
