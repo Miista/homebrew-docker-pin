@@ -88,6 +88,51 @@ func TestPageRenders(t *testing.T) {
 	}
 }
 
+// A digest is 71 characters with no space or hyphen, so a browser has nowhere
+// to break it. Without a rule that breaks mid-token it runs past the panel and
+// off the side of the screen -- which is what an apply looked like on a phone:
+// the pull step ran off the viewport and most of it could not be read.
+//
+// Both places that show one need it. The steps panel streams "pulling
+// <image>@sha256:..." during every apply, and a failure reason carries the
+// pinned image line the same way.
+func TestLongDigestsAreAllowedToWrap(t *testing.T) {
+	s := &Server{
+		Source:   &fakeSource{},
+		Approver: &fakeApprover{},
+	}
+	_, body := get(t, s, "/")
+
+	for _, sel := range []string{".steps div", ".banner"} {
+		rule := ruleFor(body, sel)
+		if rule == "" {
+			t.Errorf("no %q rule in the page at all", sel)
+			continue
+		}
+		// overflow-wrap: break-word is not enough -- it breaks between words,
+		// and a digest is one word.
+		if !strings.Contains(rule, "overflow-wrap: anywhere") {
+			t.Errorf("%s cannot break a digest, so it will overflow:\n  %s", sel, rule)
+		}
+	}
+}
+
+// ruleFor returns the declaration block for a selector, so a test can assert
+// on what the page actually carries rather than on a substring appearing
+// somewhere in 400 lines of markup.
+func ruleFor(page, selector string) string {
+	i := strings.Index(page, selector+" {")
+	if i < 0 {
+		return ""
+	}
+	rest := page[i+len(selector)+2:]
+	end := strings.Index(rest, "}")
+	if end < 0 {
+		return ""
+	}
+	return strings.Join(strings.Fields(rest[:end]), " ")
+}
+
 // A click must reach the decider that owns the service, carrying the host --
 // two hosts run services of the same name.
 func TestApplyRoutesTheHostedKey(t *testing.T) {

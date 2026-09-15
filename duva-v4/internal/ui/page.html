@@ -49,9 +49,11 @@
            font-variant-numeric: tabular-nums; }
 
   /* ---------- result banner ---------- */
+  /* Same reason as .steps div: a failure reason carries the pinned image
+     line, digest and all, and one 71-character token has nowhere to break. */
   .banner { margin: 1.1rem 0 0; padding: .6rem .8rem; font-size: .9rem;
             background: var(--card); border: 1px solid var(--line);
-            border-radius: 8px; }
+            border-radius: 8px; overflow-wrap: anywhere; }
   .banner-error { background: var(--major-bg); border-color: var(--major-line);
                   color: var(--major); }
   /* A standing fact, not a failure: muted rather than red. */
@@ -131,7 +133,12 @@
   .steps { grid-column: 1 / -1; margin: .1rem 0 .35rem; padding: .45rem .65rem;
            background: var(--tint); border-radius: 6px; font-size: .78rem;
            color: var(--muted); }
-  .steps div { padding: .05rem 0; }
+  /* A digest is 71 characters with no space or hyphen in it, so a browser has
+     nowhere to break the line and lets it run past the panel and off the
+     screen -- which on a phone means most of the step is unreadable.
+     overflow-wrap: break-word will not do it: that breaks between words, and
+     this is one word. anywhere is the rule that breaks mid-token. */
+  .steps div { padding: .05rem 0; overflow-wrap: anywhere; }
   .steps div::before { content: "\2026  "; color: var(--faint); }
   .steps .ok { color: var(--ok); font-weight: 600; }
   .steps .ok::before { content: "\2713  "; }
