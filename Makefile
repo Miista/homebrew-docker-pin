@@ -6,24 +6,17 @@ BINARIES     := docker-pin docker-unpin
 # only shares certain host paths -- /tmp is not one of them.
 COVER_DIR   := $(HOME)/.cache/docker-pin-cover
 
-.PHONY: all build install clean docker-duva test test-unit test-integration cover cover-html conditions
+.PHONY: all build install clean test test-unit test-integration cover cover-html cover-html-v4 conditions
 
 all: build
 
 build:
 	go build -trimpath -o docker-pin   ./cmd/docker-pin
 	go build -trimpath -o docker-unpin ./cmd/docker-unpin
-	go build -trimpath -o duva         ./cmd/duva
 
 install: build
 	mkdir -p $(INSTALL_DIR)
 	install -m 755 $(BINARIES) $(INSTALL_DIR)/
-
-# docker-duva builds the duva container image locally (linux/amd64
-# and linux/arm64 for x86/pi hosts respectively; CI publishes the multi-arch
-# image to ghcr.io on release).
-docker-duva:
-	docker build -f cmd/duva/Dockerfile -t duva:dev .
 
 # --- tests ------------------------------------------------------------
 # test-unit needs nothing but Go. test-integration needs Docker, and runs
@@ -74,8 +67,8 @@ cover:
 	@rm -rf $(COVER_DIR) && mkdir -p $(COVER_DIR)/unit $(COVER_DIR)/integration $(COVER_DIR)/merged
 	@echo "== unit"
 	@# -coverpkg=./... attributes coverage to the package a statement lives in,
-	@# not the package whose test ran it. Without it, cmd/duva's tests
-	@# exercising internal/watch count for nothing and the report lies.
+	@# not the package whose test ran it. Without it a package's tests
+	@# exercising another count for nothing and the report lies.
 	@go test ./... -coverpkg=./... -cover -args -test.gocoverdir=$(COVER_DIR)/unit >/dev/null
 	@go tool covdata percent -i=$(COVER_DIR)/unit | sort
 	@echo
@@ -93,12 +86,34 @@ cover:
 	@go tool covdata textfmt -i=$(COVER_DIR)/merged -o=$(COVER_DIR)/merged.txt
 	@echo
 	@echo "TOTAL: $$(go tool cover -func=$(COVER_DIR)/merged.txt | tail -1 | awk '{print $$NF}')"
+	@echo
+	@# duva-v4 is its own module, so `go test ./...` from here never reaches it
+	@# -- it was absent from this report entirely while being most of what
+	@# changes. Reported separately rather than merged, for the same reason
+	@# test-unit runs each module on its own: pooling them would average a
+	@# pipeline that is mostly pure logic together with plugins that shell out
+	@# to a daemon, and neither number would mean anything.
+	@echo "== duva-v4 (its own module)"
+	@rm -rf $(COVER_DIR)/v4 && mkdir -p $(COVER_DIR)/v4
+	@cd duva-v4 && go test ./... -coverpkg=./... -cover -args -test.gocoverdir=$(COVER_DIR)/v4 >/dev/null
+	@go tool covdata percent -i=$(COVER_DIR)/v4 | sort
+	@# textfmt and -func from inside the module: both resolve package paths
+	@# against the current one, and duva-v4's are not in this module's graph.
+	@# From here `go tool cover -func` fails with "no required module provides
+	@# package", and the total comes out blank.
+	@cd duva-v4 && go tool covdata textfmt -i=$(COVER_DIR)/v4 -o=$(COVER_DIR)/v4.txt
+	@echo
+	@echo "DUVA-V4 TOTAL: $$(cd duva-v4 && go tool cover -func=$(COVER_DIR)/v4.txt | tail -1 | awk '{print $$NF}')"
 
 cover-html: cover
 	go tool cover -html=$(COVER_DIR)/merged.txt
 
+# duva-v4's, separately, because its profile is separate.
+cover-html-v4: cover
+	cd duva-v4 && go tool cover -html=$(COVER_DIR)/v4.txt
+
 clean:
-	rm -f $(BINARIES) duva
+	rm -f $(BINARIES)
 	rm -rf $(COVER_DIR)
 
 # --- condition coverage --------------------------------------------------

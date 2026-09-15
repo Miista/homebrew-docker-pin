@@ -15,10 +15,6 @@ import (
 	"sort"
 )
 
-// suiteImage is the duva image the pin scenarios refer to. It is v3's, which
-// is also where the `docker pin` CLI lives.
-const suiteImage = "duva:integration"
-
 // The v4 pipeline: three images, because it is three processes. A scenario
 // declares whichever of them it is about -- the watcher alone is a legitimate
 // world, and so is a queue with nothing to apply with.
@@ -76,28 +72,6 @@ func buildReceiver(root string) error {
 	return nil
 }
 
-// buildImage builds duva from the shipped Dockerfile.
-//
-// The real one, deliberately: a suite that builds its own image tests an
-// artifact nobody ships, and the two drift. That is not hypothetical -- while
-// the test image was FROM scratch and the shipped one was not, duva gained a
-// runtime dependency on git and only the shipped image would have shown it.
-func buildImage(root string) error {
-	args := []string{"build", "-q", "--label", label + "=integration",
-		"-f", filepath.Join("cmd", "duva", "Dockerfile"), "-t", suiteImage}
-	if os.Getenv("GOCOVERDIR") != "" {
-		args = append(args, "--build-arg", "COVER=1")
-	}
-	args = append(args, root)
-
-	cmd := exec.Command("docker", args...)
-	cmd.Dir = root
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("%w\n%s", err, out)
-	}
-	return nil
-}
-
 // buildV4 builds the three pipeline images, from the shipped Dockerfiles for
 // the same reason buildImage does: a suite that builds its own artifact tests
 // one nobody ships.
@@ -139,9 +113,6 @@ func Setup() (string, error) {
 	root, err := findRoot()
 	if err != nil {
 		return "", err
-	}
-	if err := buildImage(root); err != nil {
-		return "", fmt.Errorf("building %s: %w", suiteImage, err)
 	}
 	if err := buildReceiver(root); err != nil {
 		return "", fmt.Errorf("building %s: %w", receiverImage, err)

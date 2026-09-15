@@ -13,8 +13,8 @@ project, and the transaction put the file back exactly as it promises to.
 
 What follows was the design note, and is now partly a description.
 
-`duva-v3-monitor-handler.md` proposed carving duva into a monitor and a handler; this goes further and asks
-what happens when the **detection** half is not duva's either.
+An earlier design carved duva into a monitor and a handler; this goes further
+and asks what happens when the **detection** half is not duva's either.
 
 The existing duva is not touched by any of this. It keeps running as it is.
 
@@ -330,7 +330,7 @@ updater are per host. diun already is.
 
 The UI is **one instance over all of them**, and the queues are **registered
 with it** — the same arrangement Dockhand uses for its agents, and the same one
-the hub shipped in `feature/duva-v2` already implements: a static list of
+the hub in the version this replaces already implemented: a static list of
 `host=url`, dialled outbound, rows labelled with the configured host rather
 than whatever the far end calls itself.
 

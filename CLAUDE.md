@@ -95,43 +95,6 @@ constrained service, subject to the `duva.delay` soak, and reports what it held
 back as too fresh. Both `docker pin` and duva go through it, so they cannot
 disagree about what a pinned line looks like.
 
-### `internal/watch`
-duva's detection and policy. `Check` turns a compose file into findings;
-`Decide` says whether `duva.auto` allows duva to apply one itself; `State`
-records what is queued for approval, what `duva.delay` is holding back, and
-what has already been announced, so nothing is reported twice.
-
-### `internal/ui`
-duva's approval queue: one page listing what needs a human and what is soaking,
-with a button that applies through the same path an unattended run uses.
-
-It depends on three interfaces — `Source` (the rows), `Applier` (start/poll an
-update), `Refresher` (start/poll a check) — which is what lets the same page
-serve a local duva or a hub over remote agents without knowing which.
-
-### `internal/agent`
-The wire between a hub and an agent: payload types, the JSON `Server` that
-exposes one host's duva, and the `Client` a hub collects with. The server is
-the same three `internal/ui` interfaces with an HTTP encoding instead of an
-HTML one, so an agent decides nothing a single-process duva would not.
-
-`/healthz` is open; everything else is behind `DUVA_AGENT_TOKEN` when set.
-`/apply` is the authority to pull an image and recreate a container as root on
-that host, so an agent without a token is only safe where every host on the
-network is trusted to root every other.
-
-### `internal/hub`
-Fans out over configured agents and implements the same three interfaces, so
-the page cannot tell it is not talking to a local duva. Rows are labelled with
-the **configured** host (not the name the agent reports) because that is what
-applies route on. Reads serve a short-lived cache and re-collect when it is
-older than `MaxAge`; an agent that cannot be reached is reported through
-`OnUnreachable` on every collection, never silently dropped — a queue missing
-a host looks exactly like that host having nothing to do.
-
-Agents are configured, not discovered: at this scale a registration protocol
-would only add an inbound path by which something could claim to be an agent.
-
 ## Modules
 
 The repo is five modules. Not for its own sake: Go's `internal/` is invisible
@@ -184,7 +147,7 @@ See `docs/duva-v4-watch-queue-update.md`.
   `docker pin` -- applying an update means rewriting a pin, which is its
   engine.
 
-  **No rollback**, unlike v3's `cmd/duva` below. Everything answerable is
+  **No rollback.** Everything answerable is
   answered in a precheck before the pull, via the same `pin.Compute` the write
   uses. A failed recreate is left alone: recreating stops and removes the old
   container before creating the replacement, so one error covers the old
@@ -225,59 +188,6 @@ Each binary has its own Dockerfile, because each needs a different thing: the
 watcher and queue hold no socket and shell out to nothing; the updater holds
 the socket and carries git. The build context is the repository root, since
 the module replaces its siblings by relative path.
-
-### duva (`cmd/duva`)
-A container, not a CLI plugin. It watches the compose project mounted at
-`/compose` and records state in `/data/duva.json` — both fixed, because duva
-runs in a container where they are the contract.
-
-`DUVA_SCHEDULE` is a 5-field cron expression, parsed by `internal/croncal`,
-which rejects restricting both day-of-month and day-of-week: cron ORs those,
-systemd ANDs them, and a schedule that means two different things depending on
-who reads it is not a schedule.
-
-`DUVA_MODE` selects which half this process is:
-
-- `local` (default, and what duva has always been) — watches this host and
-  serves its own page. An install that was never configured keeps working.
-- `agent` — watches this host, serves JSON for a hub, no page. Holds exactly
-  what a local duva holds: the docker socket, the repository, the compose
-  files. The split is not a privilege reduction on this side.
-- `hub` — serves the page over `DUVA_AGENTS` (`host=url,...`). Watches
-  nothing, and needs neither the docker socket nor the compose files; that
-  the network-facing half needs none of the privilege the work needs is the
-  point of the split. Refuses to start with no agents, since an empty queue
-  would read as "nothing to do".
-
-Each agent keeps its own state and its own schedule, so one is useful on its
-own and a hub is purely additive. Two agents committing to one repository is
-what `PullRebase` before push already exists for.
-
-**It must be a service in the stack it watches.** duva reads its own
-container's compose labels to learn which project it is in; outside one there
-are no labels and it refuses to act rather than guess. With a root compose file
-that `include:`s the rest, one duva covers everything.
-
-Applying is a transaction in `apply.go`, with `transaction.go` deciding what a
-failure means: pull → write the pin → recreate the container → commit → push.
-There is no rollback except one case — if the container refuses the new image,
-the file is put back, because leaving a claim there would be a lie. Everything
-after the container is record-keeping and cannot make the update untrue.
-
-Recreating goes through the docker API (`recreate.go`), not `docker compose
-up`. duva sees the compose file at its own mount point while the daemon sees
-the stack at the host's path, and one `--project-directory` cannot satisfy both
-kinds of relative path: a bind must resolve to a host path, an `include:` to a
-path inside duva. A running container's configuration is already resolved, so
-swapping its image needs no path interpreted at all. Anonymous volumes are
-carried across explicitly — they exist only in the container's `Mounts`, and a
-replacement built from `Config` alone would come up healthy and empty.
-
-Per-service policy lives as labels: `duva.include_tags` / `duva.exclude_tags` constrain
-which tags qualify, `duva.delay` soaks a release before adopting it, and
-`duva.auto` (none/patch/minor/major, default none) says what duva may apply
-unattended. An unknown label is an error, not something ignored.
-
 
 ## Command semantics
 
@@ -392,7 +302,6 @@ This means:
   `docker` CLI on PATH at runtime; duva does not — it talks to the daemon's API
   over the socket, so its image carries only git, for the commit.
 - Base images are pinned by digest, and the released image must be built on the
-  same base the integration suites build. Both are held by tests in
-  `cmd/duva/dockerfile_test.go`: the released image was distroless-static long
-  after duva needed git at runtime, so every test passed against an image
-  nobody shipped.
+  same base the integration suites build. The lesson that earned this rule: the
+  released v3 image was distroless-static long after duva needed git at
+  runtime, so every test passed against an image nobody shipped.
