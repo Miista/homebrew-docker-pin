@@ -472,3 +472,53 @@ func TestACleanApplyCarriesNoReason(t *testing.T) {
 		t.Errorf("a clean apply reported %q / %q, want completed with nothing to say", status, reason)
 	}
 }
+
+// A rejected commit unstages what it staged. The container keeps the new
+// image -- that is not undone -- but a change left staged would make the next
+// apply refuse on "the repository has uncommitted changes", so one rejected
+// commit would block every service on the host until somebody noticed.
+func TestARejectedCommitUnstagesItself(t *testing.T) {
+	w := newWorld(t, versionPin)
+	req := versionRequest()
+	req.File = w.file
+	step, _ := steps()
+
+	var unstaged []string
+	g := w.git()
+	g.Commit = func(string, string) error { return errors.New("the hook said no") }
+	g.Unstage = func(dir, file string) error { unstaged = append(unstaged, file); return nil }
+
+	status, reason := transaction(req, step, w.docker(), g, false, "")
+
+	if status != actor.Completed {
+		t.Errorf("status = %q, want completed -- the container was replaced", status)
+	}
+	if len(unstaged) != 1 || unstaged[0] != w.file {
+		t.Errorf("unstaged %v, want the one file this run staged", unstaged)
+	}
+	if !strings.Contains(reason, "unstaged") {
+		t.Errorf("reason = %q, want it to say the staging was undone", reason)
+	}
+	// And the file still records the update: unstaging is not a rollback.
+	if raw, _ := os.ReadFile(w.file); !strings.Contains(string(raw), w.digest) {
+		t.Error("unstaging reverted the file; it should only undo the staging")
+	}
+}
+
+// If the unstage fails too, say so plainly: the next apply really will refuse
+// until somebody clears it.
+func TestAFailedUnstageIsReported(t *testing.T) {
+	w := newWorld(t, versionPin)
+	req := versionRequest()
+	req.File = w.file
+	step, _ := steps()
+
+	g := w.git()
+	g.Commit = func(string, string) error { return errors.New("no") }
+	g.Unstage = func(string, string) error { return errors.New("also no") }
+
+	_, reason := transaction(req, step, w.docker(), g, false, "")
+	if !strings.Contains(reason, "by hand") {
+		t.Errorf("reason = %q, want it to say this needs clearing by hand", reason)
+	}
+}

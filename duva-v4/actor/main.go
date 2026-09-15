@@ -87,6 +87,7 @@ func run(log zerolog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("the commit template: %w", err)
 	}
+	commitTemplate = tmpl
 	if _, err := commitSubject(tmpl, commitFields{Container: "probe", NewVersion: "1"}); err != nil {
 		return fmt.Errorf("the commit template: %w", err)
 	}
@@ -198,5 +199,19 @@ func readiness() actor.Readiness {
 				"commit or stash them and this clears on its own",
 		}
 	}
+
+	// Would the commit this is going to write be accepted? Asked here rather
+	// than discovered after a container has been replaced: leaving a running
+	// container the repository does not record is the divergence this tool
+	// exists to prevent, and a rollback at that point would mean tearing down
+	// a healthy service over a commit message.
+	if err := checkMessageAccepted(composeDir, commitTemplate); err != nil {
+		return actor.Readiness{Ready: false, Reason: err.Error()}
+	}
 	return actor.Readiness{Ready: true}
 }
+
+// commitTemplate is what readiness checks against and what an apply commits
+// under. Set once at startup so the two cannot differ: a readiness check that
+// validated a different template from the one used would be worse than none.
+var commitTemplate string

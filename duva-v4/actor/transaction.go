@@ -41,6 +41,14 @@ type Git struct {
 	RebaseAbort func(dir string) error
 	Push        func(dir string) error
 	IsClean     func(dir string) (bool, error)
+	// Unstage undoes what Add did, for a commit that was refused.
+	//
+	// Not a rollback of the update -- the container is running the new image
+	// and that stays true. It undoes only this run's staging, because a
+	// change left staged makes the *next* apply refuse on "the repository has
+	// uncommitted changes": one failure would otherwise poison every one
+	// after it.
+	Unstage func(dir, file string) error
 }
 
 var realDocker = Docker{
@@ -66,6 +74,9 @@ var realGit = Git{
 	PullRebase:  func(dir string) error { return runGit(gitCmd(dir, "pull", "--rebase")) },
 	RebaseAbort: func(dir string) error { return runGit(gitCmd(dir, "rebase", "--abort")) },
 	Push:        func(dir string) error { return runGit(gitCmd(dir, "push")) },
+	Unstage: func(dir, file string) error {
+		return runGit(gitCmd(dir, "restore", "--staged", file))
+	},
 	IsClean: func(dir string) (bool, error) {
 		cmd := gitCmd(dir, "status", "--porcelain")
 		var stderr strings.Builder
@@ -205,10 +216,25 @@ func transaction(req actor.Request, step func(string, ...any), d Docker, g Git, 
 		return done(step, "the change is live but could not be staged: %v", err)
 	}
 	if err := g.Commit(dir, msg); err != nil {
-		// A rejected commit leaves the change staged, so the next apply would
-		// refuse on "the repository has uncommitted changes" -- which is why
-		// this has to be loud rather than a stream line nobody kept.
-		return done(step, "the change is live but could not be committed: %v", err)
+		// The container is running the new image, so this is not undone: a
+		// rollback here would tear down a healthy service over a commit
+		// message, which is worse than the divergence it fixes.
+		//
+		// But the staging *is* undone. A change left staged makes the next
+		// apply refuse on "the repository has uncommitted changes", so one
+		// rejected commit would otherwise block every service on this host
+		// until somebody noticed by hand.
+		unstaged := ""
+		if g.Unstage != nil {
+			if uerr := g.Unstage(dir, req.File); uerr != nil {
+				unstaged = fmt.Sprintf("; and it could not be unstaged either (%v), "+
+					"so the next apply will refuse until this is cleared by hand", uerr)
+			} else {
+				unstaged = "; the change was unstaged, so the file still records it " +
+					"and the next apply is not blocked"
+			}
+		}
+		return done(step, "the change is live but could not be committed: %v%s", err, unstaged)
 	}
 
 	if push {

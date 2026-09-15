@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"text/template"
 )
@@ -116,4 +118,70 @@ func loadCommitTemplate() (string, error) {
 		return "", fmt.Errorf("ACTOR_COMMIT_TEMPLATE is set but empty")
 	}
 	return tmpl, nil
+}
+
+// checkMessageAccepted renders a representative subject and asks the
+// repository's own commit-msg hook whether it would take it.
+//
+// Asked at readiness, before any work, because the alternative is what
+// happened to bazarr: pulled, repinned, recreated, and only then rejected --
+// leaving the container running a new image the repository does not record.
+// A rollback at that point would mean tearing down a healthy service over a
+// commit message, which is worse than the divergence it fixes. Not starting
+// is strictly better than unwinding.
+//
+// The message is representative rather than real: readiness is asked with no
+// service in mind. That is enough to catch the failure that matters -- a
+// template whose *shape* the hook refuses, which is every apply -- and not
+// enough to catch one that refuses a particular service name, which is not a
+// thing hooks do.
+//
+// No hook, or a hook that cannot be run, is ready. A repository without one
+// accepts anything, and refusing to work because a hook is missing would be
+// inventing a requirement.
+func checkMessageAccepted(dir, tmpl string) error {
+	subject, err := commitSubject(tmpl, commitFields{
+		Container:  "example",
+		Image:      "example.com/example",
+		OldVersion: "1.0.0",
+		NewVersion: "1.0.1",
+		OldDigest:  "sha256:0000000000000000",
+		NewDigest:  "sha256:1111111111111111",
+	})
+	if err != nil {
+		return err
+	}
+
+	hookPath, err := exec.Command("git", "-C", dir, "-c", "safe.directory="+dir,
+		"rev-parse", "--git-path", "hooks/commit-msg").Output()
+	if err != nil {
+		return nil // not a git repository to ask; the preflight has that
+	}
+	hook := strings.TrimSpace(string(hookPath))
+	if !filepath.IsAbs(hook) {
+		hook = filepath.Join(dir, hook)
+	}
+	info, err := os.Stat(hook)
+	if err != nil || info.IsDir() || info.Mode()&0o111 == 0 {
+		return nil // no hook, or not executable: nothing would reject this
+	}
+
+	f, err := os.CreateTemp("", "duva-commit-msg-*")
+	if err != nil {
+		return nil // cannot ask; do not invent a refusal
+	}
+	defer os.Remove(f.Name())
+	if _, err := f.WriteString(subject + "\n"); err != nil {
+		f.Close()
+		return nil
+	}
+	f.Close()
+
+	cmd := exec.Command(hook, f.Name())
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("the repository's commit-msg hook would reject %q: %s",
+			subject, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
