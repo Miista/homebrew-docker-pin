@@ -194,21 +194,21 @@ func transaction(req actor.Request, step func(string, ...any), d Docker, g Git, 
 	}
 	msg, err := commitSubject(tmpl, fields)
 	if err != nil {
-		step("the change is live but the commit template failed: %v", err)
-		return actor.Completed, ""
+		// Completed with a reason, never a bare Completed: the container is
+		// running the new image, so the update is true -- but the record of it
+		// was not written, and that must reach a log rather than only a stream
+		// somebody had to be watching.
+		return done(step, "the change is live but the commit message could not be built: %v", err)
 	}
 	step("committing %q", msg)
 	if err := g.Add(dir, req.File); err != nil {
-		step("the change is live but could not be staged: %v", err)
-		return actor.Completed, ""
+		return done(step, "the change is live but could not be staged: %v", err)
 	}
 	if err := g.Commit(dir, msg); err != nil {
-		// Said into the stream *and* worth a log line: a commit rejected by a
-		// repository's own hook leaves the change staged and uncommitted, and
-		// an unattended apply would leave no trace of that anywhere. This is
-		// how bazarr's first real apply was found to be half-done.
-		step("the change is live but could not be committed: %v", err)
-		return actor.Completed, ""
+		// A rejected commit leaves the change staged, so the next apply would
+		// refuse on "the repository has uncommitted changes" -- which is why
+		// this has to be loud rather than a stream line nobody kept.
+		return done(step, "the change is live but could not be committed: %v", err)
 	}
 
 	if push {
@@ -218,13 +218,13 @@ func transaction(req actor.Request, step func(string, ...any), d Docker, g Git, 
 			if g.RebaseAbort != nil {
 				g.RebaseAbort(dir)
 			}
-			step("could not rebase before pushing: %v", err)
-			return actor.Completed, ""
+			return done(step, "committed locally, but could not rebase before pushing: %v", err)
 		}
 		if err := g.Push(dir); err != nil {
-			// A commit that did not reach the remote rides along with the
-			// next push. Worth saying, not worth failing over.
-			step("committed locally but not pushed: %v", err)
+			// A commit that did not reach the remote rides along with the next
+			// push. Worth saying, not worth failing over -- but said with a
+			// reason, so it reaches the log and not only the stream.
+			return done(step, "committed locally but not pushed: %v", err)
 		}
 	}
 	return actor.Completed, ""
@@ -298,3 +298,20 @@ func dirOf(composeFile string) string { return filepath.Dir(composeFile) }
 
 // isDigest says whether a reference is a digest rather than a tag.
 func isDigest(s string) bool { return strings.HasPrefix(s, "sha256:") }
+
+// done reports work that finished with the container running the new image
+// but something after it unfinished.
+//
+// Completed, because the update is true: the host is running what was asked
+// for, and no amount of bookkeeping trouble makes that untrue. With a reason,
+// because "completed" alone is what let a staged, uncommitted change sit
+// unnoticed -- the reason goes into the terminal line, which the decider
+// relays and the actor logs.
+//
+// Said once here rather than at each call site, so a new step after the
+// container cannot quietly return a bare Completed.
+func done(step func(string, ...any), format string, args ...any) (actor.Status, string) {
+	reason := fmt.Sprintf(format, args...)
+	step("%s", reason)
+	return actor.Completed, reason
+}

@@ -153,10 +153,18 @@ func (s *Server) run(req actor.Request, st *stream) {
 	// reading it is how the work is known to have ended, and an actor that
 	// finished without saying so is indistinguishable from one that died.
 	st.write(actor.Terminal(status, reason))
-	if status == actor.Completed {
-		s.logf("%s: completed", req.Service)
-	} else {
+	switch {
+	case status != actor.Completed:
 		s.logf("%s: failed: %s", req.Service, reason)
+	case reason != "":
+		// Completed *with* a reason means the container is running the new
+		// image and something after it did not work -- a commit that a hook
+		// rejected, a push that did not land. The reason was dropped here
+		// once, which is how bazarr's first real apply left a staged,
+		// uncommitted change with no trace anywhere but a stream nobody kept.
+		s.logf("%s: completed, but: %s", req.Service, reason)
+	default:
+		s.logf("%s: completed", req.Service)
 	}
 }
 

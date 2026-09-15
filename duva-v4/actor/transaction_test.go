@@ -404,3 +404,71 @@ func containsLine(lines []string, want string) bool {
 	}
 	return false
 }
+
+// --- nothing after the container is silent -----------------------------------
+//
+// The container is running the new image, so the status is Completed -- but a
+// bare Completed is what let bazarr's first real apply leave a staged,
+// uncommitted change with no trace anywhere. Every one of these must carry a
+// reason, because the reason is what reaches the log.
+
+func TestGitFailuresAreNeverSilent(t *testing.T) {
+	boom := errors.New("the hook said no")
+
+	for _, tc := range []struct {
+		name   string
+		break_ func(g *Git)
+		want   string
+	}{
+		{"staging fails", func(g *Git) {
+			g.Add = func(string, string) error { return boom }
+		}, "could not be staged"},
+		{"committing fails", func(g *Git) {
+			g.Commit = func(string, string) error { return boom }
+		}, "could not be committed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newWorld(t, versionPin)
+			req := versionRequest()
+			req.File = w.file
+			step, lines := steps()
+
+			g := w.git()
+			tc.break_(&g)
+			status, reason := transaction(req, step, w.docker(), g, false, "")
+
+			// The update is true: the container was replaced.
+			if status != actor.Completed {
+				t.Errorf("status = %q, want completed -- the container was replaced", status)
+			}
+			if len(w.recreated) != 1 {
+				t.Errorf("recreated %v, want the one service", w.recreated)
+			}
+			// But it must say what did not finish.
+			if reason == "" {
+				t.Fatal("completed with no reason: this is the silence that hid a half-done apply")
+			}
+			if !strings.Contains(reason, tc.want) {
+				t.Errorf("reason = %q, want it to mention %q", reason, tc.want)
+			}
+			// And whoever was watching saw the same thing.
+			if joined := strings.Join(*lines, "\n"); !strings.Contains(joined, tc.want) {
+				t.Errorf("the stream never mentioned it:\n%s", joined)
+			}
+		})
+	}
+}
+
+// The positive: a clean run says nothing, so a reason always means something
+// went wrong rather than being noise on every apply.
+func TestACleanApplyCarriesNoReason(t *testing.T) {
+	w := newWorld(t, versionPin)
+	req := versionRequest()
+	req.File = w.file
+	step, _ := steps()
+
+	status, reason := transaction(req, step, w.docker(), w.git(), false, "")
+	if status != actor.Completed || reason != "" {
+		t.Errorf("a clean apply reported %q / %q, want completed with nothing to say", status, reason)
+	}
+}
