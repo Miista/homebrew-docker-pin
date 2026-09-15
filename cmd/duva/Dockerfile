@@ -16,6 +16,14 @@
 FROM golang:1.26-alpine@sha256:28d89ee9cc0ff9fec75c82ca201e6bf7fdf9a679d4b7b24dfa04f2bb766bb468 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
+# Every replaced module's go.mod too: this repository resolves compose, oci
+# and dockerapi from the tree, so a download with only the root go.mod cannot
+# read them and fails. The v4 images have always done this; this one was left
+# behind when the modules were split out, which is what stopped the
+# integration suite building.
+COPY compose/go.mod compose/go.sum ./compose/
+COPY dockerapi/go.mod dockerapi/go.sum ./dockerapi/
+COPY oci/go.mod ./oci/
 RUN go mod download
 COPY . .
 # COVER=1 builds a coverage-instrumented binary, so the integration suites --

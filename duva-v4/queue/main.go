@@ -92,6 +92,30 @@ func main() {
 	}
 }
 
+// notify wires a notifier to the two things worth telling someone about.
+//
+// A function rather than four lines inside run, so a test can exercise the
+// same wiring the binary uses: without that, deleting either of these lines
+// breaks nothing that is checked, and the notification silently stops.
+//
+// A nil notifier is nobody to tell, which is the default -- and it is left as
+// a nil Announce rather than a no-op function, so the handler's own guard is
+// what decides and there is one answer to "is anyone notified".
+func notify(n *ntfy, host string, h *q.Handler, a *applier) {
+	if n == nil {
+		return
+	}
+	h.Announce = func(e q.Entry) { n.announce(host, e, queued, "") }
+	// A successful auto-apply says nothing: it is the policy working as
+	// configured. A failed one may have left the container down and the
+	// repository dirty, which wants a person.
+	if a != nil {
+		a.onFailure = func(e q.Entry, reason string) {
+			n.announce(host, e, failedApply, reason)
+		}
+	}
+}
+
 // health is the exit code for the health subcommand: 0 healthy, 1 not.
 //
 // It asks the running process, over the loopback port it serves on, rather
@@ -167,20 +191,7 @@ func run(log zerolog.Logger) error {
 		Applier: applying,
 		Log:     log,
 	}
-	// Nil when no endpoint is configured, and then nobody is told. Left as a
-	// nil Announce rather than a no-op function, so the handler's own guard
-	// is what decides and there is one answer to "is anyone notified".
-	if n := newNtfy(log); n != nil {
-		handler.Announce = func(e q.Entry) { n.announce(cfg.Host, e, queued, "") }
-		// A successful auto-apply says nothing: it is the policy working as
-		// configured. A failed one may have left the container down and the
-		// repository dirty, which wants a person.
-		if live != nil {
-			live.onFailure = func(e q.Entry, reason string) {
-				n.announce(cfg.Host, e, failedApply, reason)
-			}
-		}
-	}
+	notify(newNtfy(log), cfg.Host, handler, live)
 
 	srv := &http.Server{
 		Addr: addr,
