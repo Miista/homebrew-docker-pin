@@ -1,13 +1,13 @@
-// ui serves the approval queue over one or more deciders.
+// ui serves the approval queue over one or more queues.
 //
 // It holds no docker socket, reads no compose file and talks to no registry.
-// Everything it shows it asked a decider for, and everything it does it asks a
-// decider to do -- which is the point of it being its own process: the
+// Everything it shows it asked a queue for, and everything it does it asks a
+// queue to do -- which is the point of it being its own process: the
 // network-facing half needs none of the privilege the work needs.
 //
 // Configuration:
 //
-//	DUVA_UI_DECIDERS      the deciders to serve, "host=url,host=url"
+//	DUVA_UI_QUEUES      the queues to serve, "host=url,host=url"
 //	DUVA_UI_TOKEN         the bearer token they require
 //	DUVA_UI_TOKEN_<HOST>  that host's token, when they differ
 //	DUVA_UI_READ_ONLY     serve the page without the Update button
@@ -52,7 +52,7 @@ func main() {
 			// polls, because this image carries neither a shell nor curl.
 			//
 			// It reports whether this process is serving, not whether the
-			// deciders are reachable. An unreachable decider is the UI's
+			// queues are reachable. An unreachable queue is the UI's
 			// subject matter -- it renders as unreachable, which is the whole
 			// point of the page -- and marking the UI unhealthy for it would
 			// take down the one thing that can tell you about it.
@@ -86,23 +86,23 @@ func health() int {
 }
 
 func run(log zerolog.Logger) error {
-	deciders, err := parseDeciders(os.Getenv("DUVA_UI_DECIDERS"), tokenFromEnv)
+	queues, err := parseQueues(os.Getenv("DUVA_UI_QUEUES"), tokenFromEnv)
 	if err != nil {
-		return fmt.Errorf("DUVA_UI_DECIDERS: %w", err)
+		return fmt.Errorf("DUVA_UI_QUEUES: %w", err)
 	}
-	// Refusing rather than serving an empty page: with no deciders every
+	// Refusing rather than serving an empty page: with no queues every
 	// reload would say "nothing waiting for approval", which is the single
 	// most misleading thing this program can display. It is also the exact
 	// sentence it shows when everything is genuinely fine.
-	if len(deciders) == 0 {
-		return fmt.Errorf("no deciders: set DUVA_UI_DECIDERS to host=url[,host=url]")
+	if len(queues) == 0 {
+		return fmt.Errorf("no queues: set DUVA_UI_QUEUES to host=url[,host=url]")
 	}
 
-	collector := ui.NewCollector(deciders)
+	collector := ui.NewCollector(queues)
 	// On the collection rather than on a timer: someone loading the page is
-	// exactly when a decider being down is worth saying out loud.
+	// exactly when a queue being down is worth saying out loud.
 	collector.OnUnreachable = func(host, err string) {
-		log.Warn().Msgf("could not reach the decider on %s, so its queue is not shown: %s", host, err)
+		log.Warn().Msgf("could not reach the queue on %s, so its queue is not shown: %s", host, err)
 	}
 
 	srv := &http.Server{
@@ -119,9 +119,9 @@ func run(log zerolog.Logger) error {
 	defer stop()
 
 	go func() {
-		for _, d := range deciders {
+		for _, d := range queues {
 			if d.Token == "" {
-				// Worth a line each: a decider that minted its own token
+				// Worth a line each: a queue that minted its own token
 				// answers nothing without it, and the symptom is a host that
 				// is simply always unreachable.
 				log.Warn().Msgf("no token for %s — set %s or DUVA_UI_TOKEN", d.Host, tokenEnv(d.Host))
@@ -154,7 +154,7 @@ func approver(c *ui.Collector, log zerolog.Logger) ui.Approver {
 	return nil
 }
 
-// loggedApprover records who was approved before asking the decider to do it.
+// loggedApprover records who was approved before asking the queue to do it.
 //
 // The page shows the result, but the page is a browser tab somebody closes.
 // An approval replaces a container on another host, which is worth a line in

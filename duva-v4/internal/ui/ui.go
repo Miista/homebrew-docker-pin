@@ -1,9 +1,9 @@
-// Package ui serves the approval queue over one or more deciders.
+// Package ui serves the approval queue over one or more queues.
 //
 // Lifted from duva's internal/ui, which served the same page over agents.
-// What changed is the protocol underneath: a decider's queue is one list
+// What changed is the protocol underneath: a host's queue is one list
 // rather than a queue and a soak list, and there is no refresh button because
-// the detector owns when a check happens -- the UI cannot make a registry be
+// the watcher owns when a check happens -- the UI cannot make a registry be
 // asked.
 package ui
 
@@ -15,7 +15,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/Miista/homebrew-docker-pin/duva-v4/internal/decide"
+	"github.com/Miista/homebrew-docker-pin/duva-v4/internal/queue"
 	"github.com/Miista/homebrew-docker-pin/oci/version"
 )
 
@@ -42,15 +42,15 @@ var page = template.Must(template.New("page").Delims("[[", "]]").Parse(pageHTML)
 // Source supplies what the page renders.
 //
 // An interface rather than the collector, so the page can be tested without
-// a decider to talk to -- and so a single-decider deployment could serve
+// a queue to talk to -- and so a single-queue deployment could serve
 // itself without fanning out.
 type Source interface {
 	// Pending returns what is waiting, labelled by host and sorted.
 	Pending() []Hosted
-	// Blocked names deciders that cannot apply right now, with why, so the
+	// Blocked names queues that cannot apply right now, with why, so the
 	// page can say it once and disable the buttons those rows offer.
 	Blocked() []Blocked
-	// Unreachable lists deciders that could not be asked. Rendered rather
+	// Unreachable lists queues that could not be asked. Rendered rather
 	// than logged: a queue missing a host looks exactly like that host
 	// having nothing to do.
 	Unreachable() []Problem
@@ -58,7 +58,7 @@ type Source interface {
 
 // Approver acts on a click.
 type Approver interface {
-	// Approve tells the owning decider to apply one queued entry, keyed
+	// Approve tells the owning queue to apply one queued entry, keyed
 	// "host/service".
 	Approve(key string) error
 }
@@ -110,7 +110,7 @@ func servePNG(b []byte) http.HandlerFunc {
 // poller, from one toRow -- so the two cannot describe a row differently.
 type row struct {
 	Service string `json:"service"`
-	// Host is the decider it came from, shown so two services of the same
+	// Host is the queue it came from, shown so two services of the same
 	// name on different hosts are tellable apart.
 	Host string `json:"host"`
 	// Key is what a click posts back: "host/service". The row carries it
@@ -125,10 +125,10 @@ type row struct {
 	Moved bool `json:"moved"`
 	// Tag is what the service follows, shown instead of a digest pair.
 	Tag string `json:"tag"`
-	// CanApply is whether this row's decider has an actor. Per row: one host
-	// can have an actor while another does not.
+	// CanApply is whether this row's queue has an update. Per row: one host
+	// can have an updater while another does not.
 	CanApply bool `json:"can_apply"`
-	// Stale marks a row whose decider has stopped answering.
+	// Stale marks a row whose queue has stopped answering.
 	Stale     bool   `json:"stale"`
 	Kind      string `json:"kind"`
 	Why       string `json:"why"`
@@ -244,13 +244,13 @@ func (s *Server) apply(w http.ResponseWriter, r *http.Request) {
 //
 // A moved digest is seventy-one characters of hex nobody reads; the first
 // twelve identify it well enough to match against a log line or a commit.
-func display(e decide.Entry) string {
+func display(e queue.Entry) string {
 	return e.To
 }
 
 // isDigestMove reports whether an entry is a moving tag that moved, rather
 // than a change of tag.
-func isDigestMove(e decide.Entry) bool {
+func isDigestMove(e queue.Entry) bool {
 	return strings.HasPrefix(e.To, "sha256:")
 }
 
@@ -258,7 +258,7 @@ func isDigestMove(e decide.Entry) bool {
 //
 // A digest move has no version pair, so there is nothing to classify -- and
 // saying so plainly beats an empty cell, which reads as missing data.
-func kindLabel(e decide.Entry) string {
+func kindLabel(e queue.Entry) string {
 	if e.Kind == "" {
 		return "digest"
 	}
@@ -278,8 +278,8 @@ func (s *Server) stateJSON(w http.ResponseWriter, r *http.Request) {
 
 // stream relays one in-flight apply's progress to the page.
 //
-// Relayed rather than letting the browser talk to the decider directly: the
-// token that reaches a decider is this process's, and putting it in a page
+// Relayed rather than letting the browser talk to the queue directly: the
+// token that reaches a queue is this process's, and putting it in a page
 // would hand the authority to replace containers to every browser that loads
 // the queue.
 func (s *Server) stream(w http.ResponseWriter, r *http.Request) {

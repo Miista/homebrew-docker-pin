@@ -8,11 +8,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Miista/homebrew-docker-pin/duva-v4/internal/decide"
+	"github.com/Miista/homebrew-docker-pin/duva-v4/internal/queue"
 	"github.com/Miista/homebrew-docker-pin/oci/version"
 )
 
-// fakeSource is a queue without deciders behind it.
+// fakeSource is a queue without queues behind it.
 type fakeSource struct {
 	blocked     []Blocked
 	pending     []Hosted
@@ -36,7 +36,7 @@ func (f *fakeApprover) Approve(key string) error {
 func entry(service, from, to string, kind version.Kind) Hosted {
 	return Hosted{
 		CanApply: true,
-		Entry: decide.Entry{
+		Entry: queue.Entry{
 			Service: service,
 			Image:   "ghcr.io/example/" + service,
 			From:    from,
@@ -117,7 +117,7 @@ func TestLongDigestsAreAllowedToWrap(t *testing.T) {
 	}
 }
 
-// The decider applies one service at a time across the whole host, holding
+// The queue applies one service at a time across the whole host, holding
 // that lock for the entire transaction. A second click is not refused: Start
 // accepts it, spawns a goroutine, and parks on the mutex -- so the row shows
 // "Updating…" and a step panel while doing nothing at all, for as long as the
@@ -133,7 +133,7 @@ func TestOtherRowsOnABusyHostAreDisabled(t *testing.T) {
 		t.Error("the Update button does not consider whether the host is already applying")
 	}
 	// Scoped to the host, not the whole page: two hosts apply independently,
-	// and one decider's lock says nothing about another's.
+	// and one queue's lock says nothing about another's.
 	if !strings.Contains(body, "this.running(r.key) && r.host === host") {
 		t.Error("busyHost is not scoped to the host, so one host's apply would grey out every other host too")
 	}
@@ -208,7 +208,7 @@ func ruleFor(page, selector string) string {
 	return strings.Join(strings.Fields(rest[:end]), " ")
 }
 
-// A click must reach the decider that owns the service, carrying the host --
+// A click must reach the queue that owns the service, carrying the host --
 // two hosts run services of the same name.
 func TestApplyRoutesTheHostedKey(t *testing.T) {
 	ap := &fakeApprover{}
@@ -276,7 +276,7 @@ func stateOf(t *testing.T, s *Server) map[string]any {
 	return out
 }
 
-// An unreachable decider must reach the page: a queue missing a host reads
+// An unreachable queue must reach the page: a queue missing a host reads
 // exactly like that host having nothing to do.
 func TestStateReportsUnreachable(t *testing.T) {
 	s := &Server{Source: &fakeSource{
@@ -330,7 +330,7 @@ func TestReadOnlyRegistersNoApplyRoutes(t *testing.T) {
 	}
 }
 
-// A row whose decider has no actor, or has stopped answering, must reach the
+// A row whose queue has no updater, or has stopped answering, must reach the
 // page marked so -- the page greys the button, but only if it is told.
 func TestStateMarksRowsThatCannotBeApplied(t *testing.T) {
 	noActor := entry("gluetun", "1.0", "1.1", version.KindMinor)
@@ -355,7 +355,7 @@ func TestStateMarksRowsThatCannotBeApplied(t *testing.T) {
 		}
 	}
 	if second, _ := rows[1].(map[string]any); second["stale"] != true {
-		t.Error("a row from an unreachable decider is not marked stale")
+		t.Error("a row from an unreachable queue is not marked stale")
 	}
 	if wa, _ := got["blocked"].([]any); len(wa) != 1 {
 		t.Error("the host with no actor is not named")

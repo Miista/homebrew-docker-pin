@@ -8,21 +8,21 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Miista/homebrew-docker-pin/duva-v4/internal/decide"
+	"github.com/Miista/homebrew-docker-pin/duva-v4/internal/queue"
 )
 
-// fakeDecider stands up one decider's two endpoints.
-type fakeDecider struct {
-	queue    []decide.Entry
+// fakeQueue stands up one queue's two endpoints.
+type fakeQueue struct {
+	queue    []queue.Entry
 	canApply bool
 	token    string
 	applied  []string
 	// refusal, when set, is what /v1/apply answers with: a 200 and a message,
-	// which is how a decider says "nothing is queued under that name".
+	// which is how a queue says "nothing is queued under that name".
 	refusal string
 }
 
-func (f *fakeDecider) serve(t *testing.T) *httptest.Server {
+func (f *fakeQueue) serve(t *testing.T) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
 	auth := func(r *http.Request) bool {
@@ -33,7 +33,7 @@ func (f *fakeDecider) serve(t *testing.T) *httptest.Server {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		json.NewEncoder(w).Encode(decide.Snapshot{Pending: f.queue, CanApply: f.canApply})
+		json.NewEncoder(w).Encode(queue.Snapshot{Pending: f.queue, CanApply: f.canApply})
 	})
 	mux.HandleFunc("/v1/apply/", func(w http.ResponseWriter, r *http.Request) {
 		if !auth(r) {
@@ -49,11 +49,11 @@ func (f *fakeDecider) serve(t *testing.T) *httptest.Server {
 }
 
 func TestCollectorGathersEveryQueue(t *testing.T) {
-	a := &fakeDecider{queue: []decide.Entry{{Service: "authelia"}}}
-	b := &fakeDecider{queue: []decide.Entry{{Service: "caddy"}}}
+	a := &fakeQueue{queue: []queue.Entry{{Service: "authelia"}}}
+	b := &fakeQueue{queue: []queue.Entry{{Service: "caddy"}}}
 	sa, sb := a.serve(t), b.serve(t)
 
-	c := NewCollector([]Decider{
+	c := NewCollector([]Upstream{
 		{Host: "pi", URL: sb.URL},
 		{Host: "optiplex", URL: sa.URL},
 	})
@@ -63,7 +63,7 @@ func TestCollectorGathersEveryQueue(t *testing.T) {
 		t.Fatalf("got %d entries, want 2", len(got))
 	}
 	// Sorted by host, so a row keeps its place between reloads however the
-	// deciders happened to answer.
+	// queues happened to answer.
 	if got[0].Host != "optiplex" || got[0].Service != "authelia" {
 		t.Errorf("first = %+v", got[0])
 	}
@@ -72,13 +72,13 @@ func TestCollectorGathersEveryQueue(t *testing.T) {
 	}
 }
 
-// One decider being down must not cost the others' queues, and must be
+// One queue being down must not cost the others' queues, and must be
 // reported rather than dropped.
-func TestUnreachableDeciderIsReportedNotDropped(t *testing.T) {
-	up := (&fakeDecider{queue: []decide.Entry{{Service: "authelia"}}}).serve(t)
+func TestUnreachableQueueIsReportedNotDropped(t *testing.T) {
+	up := (&fakeQueue{queue: []queue.Entry{{Service: "authelia"}}}).serve(t)
 
 	var told []string
-	c := NewCollector([]Decider{
+	c := NewCollector([]Upstream{
 		{Host: "optiplex", URL: up.URL},
 		// A port nothing listens on: refused immediately rather than hanging
 		// the test on a timeout.
@@ -94,7 +94,7 @@ func TestUnreachableDeciderIsReportedNotDropped(t *testing.T) {
 		t.Fatalf("unreachable = %+v, want pi", bad)
 	}
 	if bad[0].Err == "" {
-		t.Error("an unreachable decider carries no reason")
+		t.Error("an unreachable queue carries no reason")
 	}
 	if len(told) == 0 || told[0] != "pi" {
 		t.Errorf("OnUnreachable told = %v, want pi", told)
@@ -104,11 +104,11 @@ func TestUnreachableDeciderIsReportedNotDropped(t *testing.T) {
 // The routing this exists for: two hosts run services of the same name, and a
 // click must reach the one whose row was clicked.
 func TestApproveGoesToTheNamedHost(t *testing.T) {
-	a := &fakeDecider{}
-	b := &fakeDecider{}
+	a := &fakeQueue{}
+	b := &fakeQueue{}
 	sa, sb := a.serve(t), b.serve(t)
 
-	c := NewCollector([]Decider{
+	c := NewCollector([]Upstream{
 		{Host: "optiplex", URL: sa.URL},
 		{Host: "pi", URL: sb.URL},
 	})
@@ -123,24 +123,24 @@ func TestApproveGoesToTheNamedHost(t *testing.T) {
 	}
 }
 
-// A decider's refusal is a 200 with a message. It must surface as an error to
+// A queue's refusal is a 200 with a message. It must surface as an error to
 // the page, or a click that did nothing would report success.
 func TestRefusalSurfacesAsAnError(t *testing.T) {
-	d := &fakeDecider{refusal: "nothing is queued for caddy"}
+	d := &fakeQueue{refusal: "nothing is queued for caddy"}
 	s := d.serve(t)
-	c := NewCollector([]Decider{{Host: "pi", URL: s.URL}})
+	c := NewCollector([]Upstream{{Host: "pi", URL: s.URL}})
 
 	err := c.Approve(Key("pi", "caddy"))
 	if err == nil {
 		t.Fatal("a refusal was reported as success")
 	}
 	if !strings.Contains(err.Error(), "nothing is queued") {
-		t.Errorf("err = %v, want the decider's own words", err)
+		t.Errorf("err = %v, want the queue's own words", err)
 	}
 }
 
 func TestApproveRejectsUnknownHostAndBadKey(t *testing.T) {
-	c := NewCollector([]Decider{{Host: "pi", URL: "http://127.0.0.1:1"}})
+	c := NewCollector([]Upstream{{Host: "pi", URL: "http://127.0.0.1:1"}})
 	if err := c.Approve("caddy"); err == nil {
 		t.Error("a key with no host was accepted")
 	}
@@ -149,18 +149,18 @@ func TestApproveRejectsUnknownHostAndBadKey(t *testing.T) {
 	}
 }
 
-// The token must be presented, or every decider that minted one is silently
+// The token must be presented, or every queue that minted one is silently
 // unreachable.
 func TestTokenIsPresented(t *testing.T) {
-	d := &fakeDecider{token: "sekrit", queue: []decide.Entry{{Service: "authelia"}}}
+	d := &fakeQueue{token: "sekrit", queue: []queue.Entry{{Service: "authelia"}}}
 	s := d.serve(t)
 
-	withToken := NewCollector([]Decider{{Host: "pi", URL: s.URL, Token: "sekrit"}})
+	withToken := NewCollector([]Upstream{{Host: "pi", URL: s.URL, Token: "sekrit"}})
 	if got := withToken.Pending(); len(got) != 1 {
 		t.Fatalf("with the token: got %d entries, want 1", len(got))
 	}
 
-	without := NewCollector([]Decider{{Host: "pi", URL: s.URL}})
+	without := NewCollector([]Upstream{{Host: "pi", URL: s.URL}})
 	if got := without.Pending(); len(got) != 0 {
 		t.Errorf("without the token: got %d entries, want none", len(got))
 	}
@@ -181,20 +181,20 @@ func TestSplitKey(t *testing.T) {
 	}
 }
 
-// A decider that stops answering keeps its queue: what was waiting is still
-// waiting, and the decider being unreachable is a fact about the decider, not
+// A queue that stops answering keeps its queue: what was waiting is still
+// waiting, and the queue being unreachable is a fact about the queue, not
 // about its queue. Dropping the rows would show an empty page, which says the
 // opposite of the truth.
-func TestAnUnreachableDeciderKeepsItsLastQueue(t *testing.T) {
-	d := &fakeDecider{queue: []decide.Entry{{Service: "gluetun"}}, canApply: true}
+func TestAnUnreachableQueueKeepsItsLastQueue(t *testing.T) {
+	d := &fakeQueue{queue: []queue.Entry{{Service: "gluetun"}}, canApply: true}
 	srv := d.serve(t)
-	c := NewCollector([]Decider{{Host: "optiplex", URL: srv.URL}})
+	c := NewCollector([]Upstream{{Host: "optiplex", URL: srv.URL}})
 
 	if got := c.Pending(); len(got) != 1 || got[0].Stale {
 		t.Fatalf("first collection: %+v, want one fresh row", got)
 	}
 
-	// The decider goes away.
+	// The queue goes away.
 	srv.Close()
 	c.MaxAge = time.Nanosecond // force a re-collect
 
@@ -203,13 +203,13 @@ func TestAnUnreachableDeciderKeepsItsLastQueue(t *testing.T) {
 		t.Fatalf("after it went away: %d rows, want the 1 it had", len(got))
 	}
 	if !got[0].Stale {
-		t.Error("a row from an unreachable decider is not marked stale")
+		t.Error("a row from an unreachable queue is not marked stale")
 	}
-	// And must not be applyable: the route to the actor is through the decider.
+	// And must not be applyable: the route to the updater is through the queue.
 	if got[0].CanApply {
-		t.Error("a row from an unreachable decider is still applyable")
+		t.Error("a row from an unreachable queue is still applyable")
 	}
 	if len(c.Unreachable()) != 1 {
-		t.Error("the decider is not reported unreachable")
+		t.Error("the queue is not reported unreachable")
 	}
 }

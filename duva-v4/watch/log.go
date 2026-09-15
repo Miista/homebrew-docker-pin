@@ -7,22 +7,21 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// The UI's log is meant to be read by a person looking at `docker logs`
-// because the page did not show what they expected, not parsed by a machine.
-// So: one line per event, a complete sentence, and the consequence stated
-// rather than implied.
+// The watcher's log is meant to be read by a person looking at `docker logs`
+// after a check ran, not parsed by a machine. So: one line per event, a
+// complete sentence, and the consequence stated rather than implied.
 //
 // The format is zerolog's ConsoleWriter, "TIME | LEVEL | message", matching
 // duva, diun and the other tools this runs alongside.
 //
-// The timestamp carries the date. This process is long-lived and mostly
-// silent, so a bare clock time cannot tell whether a queue went unreachable
-// an hour ago or last Tuesday -- and `docker logs` on a container up for a
-// week is exactly where that question gets asked.
+// The timestamp carries the date. These processes are long-lived and check on
+// a daily schedule, so a bare clock time cannot tell yesterday's run from
+// today's -- and `docker logs` on a container up for a week is exactly where
+// that question gets asked.
 
 // newLogger builds the process-wide logger. Level comes from
-// DUVA_UI_LOG_LEVEL, so verbosity can be turned up on a running host without
-// a redeploy -- which is how an unreachable queue gets diagnosed.
+// DUVA_WATCH_LOG_LEVEL, so verbosity can be turned up on a running host without
+// a redeploy -- which matters for a tool whose whole output is its log.
 func newLogger(levelStr string) zerolog.Logger {
 	// ParseLevel("") returns NoLevel with no error, which as a threshold
 	// filters everything -- so an unset level would silence the watcher

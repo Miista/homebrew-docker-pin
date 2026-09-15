@@ -58,10 +58,10 @@ not use this — it runs in a container and talks to the daemon's API over the
 mounted socket, so its image needs no CLI.
 
 ### `oci/registry` (module)
-Tag listing and selection for `upgrade`, duva and the v4 detector.
+Tag listing and selection for `upgrade`, duva and the v4 watcher.
 Version comparison lives beside it in `oci/version`: `Classify` and
 `CompareVersions` never touched a registry, and filing them under one left
-the v4 decider importing a registry client to answer a question about text. Talks to
+the v4 queue importing a registry client to answer a question about text. Talks to
 registries directly over HTTPS — GHCR, Docker Hub, or any OCI Distribution
 registry — discovering bearer auth from the `WWW-Authenticate` challenge.
 - `ListMatchingTags` / `MatchingCandidates` keep only version-like tags and
@@ -143,9 +143,9 @@ nothing else.
 |---|---|---|
 | `.` | the plugins, duva, and their support | — |
 | `compose/` | reading and rewriting compose files | everything |
-| `dockerapi/` | the docker daemon client | duva, the v4 actor |
-| `oci/` | registry client + version comparison | `docker pin`, duva, the detector |
-| `duva-v4/` | detector, decider, actor, ui | — |
+| `dockerapi/` | the docker daemon client | duva, the v4 updater |
+| `oci/` | registry client + version comparison | `docker pin`, duva, the watcher |
+| `duva-v4/` | watcher, queue, updater, ui | — |
 
 Each replaces the others by relative path rather than by version: they are
 developed together, and a version would mean tagging a release to change one
@@ -158,7 +158,7 @@ pagination against fakes rather than the logic the rest of the repo is about.
 It also means swapping it for a library would be a module replacement rather
 than surgery -- measured, and not worth it today: go-containerregistry is
 6.9MB and 48 modules for a program that only lists tags, regclient 7.4MB and
-20, against 7.4MB for the whole current detector. Neither is lighter where it
+20, against 7.4MB for the whole current watcher. Neither is lighter where it
 matters, and neither exposes Docker Hub's `tag_last_pushed`, which is a Hub
 extension rather than an OCI concept.
 
@@ -167,19 +167,19 @@ extension rather than an OCI concept.
 Three single-purpose processes plus a page, replacing what duva does in one.
 Built and working end to end, not deployed. duva itself is untouched and
 still ships.
-See `docs/duva-v4-diun-decider-actor.md`.
+See `docs/duva-v4-watch-queue-update.md`.
 
-- **`detector/`** — what exists, and when. Lists tags, keeps the ones
+- **`watcher/`** — what exists, and when. Lists tags, keeps the ones
   published since the last check, publishes them to a webhook. Knows nothing
   about versions: not semver, not calver, not whether 4.39.25 beats 4.39.20.
   Its only state is one timestamp, so losing it costs a noisy run rather than
   a rebuild. Reads `diun.include_tags` / `diun.exclude_tags`, which ~45
   services already carry.
-- **`decider/`** — the gate. Given a notice and what the compose file
+- **`queue/`** — the gate. Given a notice and what the compose file
   declares: is this an update, how big, and may it be applied unattended.
   Holds the queue, keyed by service so a newer candidate supersedes a pending
   one. Holds no docker socket and talks to no registry.
-- **`actor/`** — the reference implementation of the contract: pull, write the
+- **`updater/`** — the reference implementation of the contract: pull, write the
   pin, recreate, commit, push. The only one of the three that depends on
   `docker pin` -- applying an update means rewriting a pin, which is its
   engine.
@@ -198,31 +198,31 @@ See `docs/duva-v4-diun-decider-actor.md`.
   root-owned files in a bind-mounted repository, makes git report dubious
   ownership, and loses the commit identity `.git/config` already carries.
   See `duva-v4/README.md`.
-- **`internal/actor`** — the *contract*, and a client. Specified in
-  `docs/actor-contract.md`, so a different actor can be written without
-  reading this one's source. What the decider may
+- **`internal/updater`** — the *contract*, and a client. Specified in
+  `docs/update-contract.md`, so a different updater can be written without
+  reading this one's source. What the queue may
   know is an endpoint, a payload, and that the answer carries a stream URL; it
   may not know that applying involves a registry, a container or git, because
-  an actor that opens a pull request touches none of them. Completed means the
-  actor did its job, not that the host runs a new image.
-- **`internal/detectevent`** — translates the detector's webhook, so nothing
-  else knows which detector is in use. One shape at a time: a gate sniffing
-  between payload formats would carry translators for detectors nobody runs.
-- **`ui/`** — the page, over one or more deciders. Holds no compose file, no
-  docker socket and no registry credentials: it asks deciders what is queued
+  an updater that opens a pull request touches none of them. Completed means the
+  updater did its job, not that the host runs a new image.
+- **`internal/detectevent`** — translates the watcher's webhook, so nothing
+  else knows which watcher is in use. One shape at a time: a gate sniffing
+  between payload formats would carry translators for watchers nobody runs.
+- **`ui/`** — the page, over one or more queues. Holds no compose file, no
+  docker socket and no registry credentials: it asks queues what is queued
   and asks them to apply what was clicked. Lifted from duva's `internal/ui`,
   minus the soak list (a soak is an entry with a release time, not a second
-  list) and the refresh button (the detector owns when a check happens).
-  Deciders are configured, not discovered: `DUVA_UI_DECIDERS=host=url,...`,
+  list) and the refresh button (the watcher owns when a check happens).
+  Queues are configured, not discovered: `DUVA_UI_DECIDERS=host=url,...`,
   with tokens in `DUVA_UI_TOKEN` or per-host `DUVA_UI_TOKEN_<HOST>` — never
   in the list, so the list itself is not a secret. Refuses to start with no
-  deciders, since "nothing waiting for approval" is the most misleading
+  queues, since "nothing waiting for approval" is the most misleading
   sentence it can print and is also what it says when all is well. An
-  unreachable decider renders as unreachable and suppresses that
+  unreachable queue renders as unreachable and suppresses that
   reassurance.
 
 Each binary has its own Dockerfile, because each needs a different thing: the
-detector and decider hold no socket and shell out to nothing; the actor holds
+watcher and queue hold no socket and shell out to nothing; the updater holds
 the socket and carries git. The build context is the repository root, since
 the module replaces its siblings by relative path.
 
