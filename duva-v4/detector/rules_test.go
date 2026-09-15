@@ -468,3 +468,42 @@ func TestAnUnpublishableFindingStillAdvancesTheLine(t *testing.T) {
 		t.Errorf("held %d, want the unpublishable finding kept for the next run", h)
 	}
 }
+
+// A run named after a service checks that one and nothing else.
+func TestRunNarrowsToTheNamedService(t *testing.T) {
+	all := []detect.Service{
+		{Name: "wiki", Container: "wiki"},
+		{Name: "whoami", Container: "whoami"},
+		{Name: "cloudflared", Container: "cloudflared-wr"},
+	}
+
+	got := justOne(all, "whoami")
+	if len(got) != 1 || got[0].Name != "whoami" {
+		t.Fatalf("justOne(whoami) = %+v, want just whoami", got)
+	}
+}
+
+// The name a person has to hand is whatever docker ps showed them, which in
+// this project is often not the service name.
+func TestRunAcceptsTheContainerName(t *testing.T) {
+	all := []detect.Service{
+		{Name: "cloudflared", Container: "cloudflared-wr"},
+	}
+
+	got := justOne(all, "cloudflared-wr")
+	if len(got) != 1 || got[0].Name != "cloudflared" {
+		t.Fatalf("justOne(cloudflared-wr) = %+v, want the cloudflared service", got)
+	}
+}
+
+// A name that matches nothing must not quietly check everything -- that would
+// turn a typo into a full run against every service on the host.
+func TestRunRefusesANameItDoesNotWatch(t *testing.T) {
+	all := []detect.Service{
+		{Name: "wiki", Container: "wiki"},
+	}
+
+	if got := justOne(all, "wik"); got != nil {
+		t.Fatalf("justOne(wik) = %+v, want nil so the run refuses", got)
+	}
+}

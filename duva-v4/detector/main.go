@@ -20,6 +20,14 @@
 //	/compose   the compose project directory, read-only
 //	/data      per-service cutoffs, and findings not yet handed on
 //
+// Subcommands:
+//
+//	run [service]  check everything, or just the named service (its service
+//	               name or its container name). A schedule always checks
+//	               everything; narrowing is for asking about one thing.
+//	serve          check on DETECTOR_SCHEDULE
+//	health         exit 0 if the webhook is reachable
+//
 // Configuration:
 //
 //	DETECTOR_HOST            what this detector calls itself
@@ -97,6 +105,10 @@ const defaultSchedule = "0 3 * * *"
 
 func main() {
 	mode := "run"
+	// A service named after run narrows that run to it. Nothing is recorded
+	// differently: the cutoff each service carries is its own, so checking one
+	// moves only that one, exactly as a full run would have.
+	var only string
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "version", "--version", "-v":
@@ -104,6 +116,9 @@ func main() {
 			return
 		case "run", "serve":
 			mode = os.Args[1]
+			if mode == "run" && len(os.Args) > 2 {
+				only = os.Args[2]
+			}
 		case "health":
 			// For HEALTHCHECK. The detector serves no HTTP of its own, so
 			// health is a subcommand the image can exec rather than a port
@@ -117,7 +132,7 @@ func main() {
 			// is nothing else to be wrong.
 			os.Exit(health())
 		default:
-			fmt.Fprintln(os.Stderr, "Usage: detector [run|serve|health|version]")
+			fmt.Fprintln(os.Stderr, "Usage: detector [run [service]|serve|health|version]")
 			os.Exit(1)
 		}
 	}
@@ -128,7 +143,7 @@ func main() {
 	if mode == "serve" {
 		err = serve(log)
 	} else {
-		err = run(log)
+		err = run(log, only)
 	}
 	if err != nil {
 		log.Error().Msgf("%v", err)
@@ -177,7 +192,7 @@ func serve(log zerolog.Logger) error {
 	// schedule would otherwise leave a freshly deployed detector silent for
 	// up to a day, and it is what makes restarting the container a way to
 	// ask for a check now.
-	if err := run(log); err != nil {
+	if err := run(log, ""); err != nil {
 		log.Error().Msgf("%v", err)
 	}
 
@@ -199,7 +214,7 @@ func serve(log zerolog.Logger) error {
 			log.Info().Msg("shutting down")
 			return nil
 		case <-timer.C:
-			if err := run(log); err != nil {
+			if err := run(log, ""); err != nil {
 				// A failed check is not a reason to stop checking: the next
 				// one may find the registry back.
 				log.Error().Msgf("%v", err)
@@ -208,7 +223,7 @@ func serve(log zerolog.Logger) error {
 	}
 }
 
-func run(log zerolog.Logger) error {
+func run(log zerolog.Logger, only string) error {
 	host := os.Getenv("DETECTOR_HOST")
 	if host == "" {
 		if h, err := os.Hostname(); err == nil && h != "" {
@@ -232,6 +247,13 @@ func run(log zerolog.Logger) error {
 	services, err := readServices(root, log)
 	if err != nil {
 		return err
+	}
+	if only != "" {
+		services = justOne(services, only)
+		if len(services) == 0 {
+			return fmt.Errorf("%s names no service the detector watches in %s: "+
+				"it is absent, unpinned, or its image cannot be read", only, root)
+		}
 	}
 	log.Info().Msgf("checking %d service(s) in %s", len(services), root)
 
@@ -372,4 +394,18 @@ func digestOf(raw string) string {
 		return raw[i+1:]
 	}
 	return ""
+}
+
+// justOne narrows a run to a single service.
+//
+// It matches the container name as well as the service name because those
+// differ in this project more often than not, and the name a person has to
+// hand is whatever docker ps showed them.
+func justOne(services []detect.Service, name string) []detect.Service {
+	for _, s := range services {
+		if s.Name == name || s.Container == name {
+			return []detect.Service{s}
+		}
+	}
+	return nil
 }
