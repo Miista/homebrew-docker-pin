@@ -165,9 +165,16 @@
   /* ---------- narrow phones: two tight lines, no sideways scroll ---------- */
   @media (max-width: 30rem) {
     body { padding: 1.25rem .9rem 2.5rem; }
-    .head { padding: .4rem .7rem .3rem; }
-    main > .rows { padding: 0 .7rem; }
+    /* The head draws the card's top edge, which is why main > .rows sets
+       border-top: 0. Hiding it leaves the card open at the top, and the first
+       row's own border-top stands in for it -- inset on both sides, because a
+       row sits inside the card's .7rem padding. That is the short line above
+       the list. Both halves are needed: the card draws its own edge, and the
+       first row stops drawing one. Either alone still looks wrong. */
     .head { display: none; }
+    main > .rows { padding: 0 .7rem;
+                   border-top: 1px solid var(--line); border-radius: 10px; }
+    .rows li:first-child { border-top: 0; }
     .rows li { grid-template-columns: minmax(0, 1fr) max-content max-content;
                row-gap: 0; padding: .4rem 0; min-height: 0; }
     .svc { grid-column: 1; white-space: normal; }

@@ -117,6 +117,59 @@ func TestLongDigestsAreAllowedToWrap(t *testing.T) {
 	}
 }
 
+// On a phone the column head is hidden, and it was the head that drew the
+// card's top edge -- main > .rows sets border-top: 0 for exactly that reason.
+// Without it the first row's own border-top becomes the visible top of the
+// card, and because a row sits inside the card's horizontal padding that
+// border is inset on both sides: a short line floating above the list rather
+// than the card's edge.
+func TestTheCardDrawsItsOwnTopEdgeWithoutTheHead(t *testing.T) {
+	s := &Server{Source: &fakeSource{}, Approver: &fakeApprover{}}
+	_, body := get(t, s, "/")
+
+	phone := mediaBlock(body, "max-width: 30rem")
+	if phone == "" {
+		t.Fatal("no narrow-phone media query in the page")
+	}
+	if !strings.Contains(phone, ".head { display: none; }") {
+		t.Fatal("the head is no longer hidden on phones; this test guards the consequence of that")
+	}
+	if !strings.Contains(ruleFor(phone, "main > .rows"), "border-top") {
+		t.Error("the card does not draw its own top edge, so the first row's inset border shows as one")
+	}
+	if !strings.Contains(ruleFor(phone, ".rows li:first-child"), "border-top: 0") {
+		t.Error("the first row still draws a border, which doubles the card's edge")
+	}
+}
+
+// mediaBlock returns the body of the @media block whose condition contains
+// cond, so a test can assert on the phone layout without matching rules that
+// only apply on a desktop.
+func mediaBlock(page, cond string) string {
+	i := strings.Index(page, cond)
+	if i < 0 {
+		return ""
+	}
+	rest := page[i:]
+	open := strings.Index(rest, "{")
+	if open < 0 {
+		return ""
+	}
+	depth, start := 0, open
+	for j := open; j < len(rest); j++ {
+		switch rest[j] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return rest[start+1 : j]
+			}
+		}
+	}
+	return ""
+}
+
 // ruleFor returns the declaration block for a selector, so a test can assert
 // on what the page actually carries rather than on a substring appearing
 // somewhere in 400 lines of markup.
