@@ -64,10 +64,11 @@
   .banner .who { font-weight: 650; }
 
   /* ---------- section framing ---------- */
-  h1 { font-size: .95rem; font-weight: 700; margin: 1.6rem 0 .1rem;
+  /* The .45rem below used to come from the subtitle that sat here. With the
+     heading alone it has to come from the heading, or it sits flush on the
+     column head. */
+  h1 { font-size: .95rem; font-weight: 700; margin: 1.6rem 0 .55rem;
        letter-spacing: -.005em; }
-  .sub { margin: 0 0 .45rem; color: var(--muted); font-size: .8rem;
-         max-width: 36rem; text-wrap: pretty; }
 
   /* ---------- rows ---------- */
   .rows { list-style: none; margin: 0; padding: 0; }
@@ -239,7 +240,6 @@
 
   <template v-if="rows.length">
   <h1>Waiting on you</h1>
-  <p class="sub">duva will not touch these until you say so.</p>
   <div class="head" aria-hidden="true">
     <span>Service</span><span>Change</span><span>Kind</span><span></span>
   </div>
