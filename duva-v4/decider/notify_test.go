@@ -119,3 +119,19 @@ func TestAnUnreachableNotifierIsNotFatal(t *testing.T) {
 	n.announce("optiplex", decide.Entry{Service: "whoami", From: "1.0", To: "1.1", Kind: ociversion.KindMinor})
 	// Reaching here without a panic is the assertion.
 }
+
+// The shared .ntfy.env these hosts already use sets NTFY_TOKEN, so the decider
+// joins that file rather than needing a second copy of the same secret. Its
+// own name still wins, for a decider that should publish as something else.
+func TestTheTokenFallsBackToTheSharedOne(t *testing.T) {
+	t.Setenv("DECIDER_NOTIF_NTFY_TOKEN", "")
+	t.Setenv("NTFY_TOKEN", "tk_shared")
+	if got := ntfyToken(); got != "tk_shared" {
+		t.Errorf("token = %q, want the shared one", got)
+	}
+
+	t.Setenv("DECIDER_NOTIF_NTFY_TOKEN", "tk_own")
+	if got := ntfyToken(); got != "tk_own" {
+		t.Errorf("token = %q, want the decider's own to win", got)
+	}
+}

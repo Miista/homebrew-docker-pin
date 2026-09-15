@@ -55,7 +55,7 @@ func newNtfy(log zerolog.Logger) *ntfy {
 	n := &ntfy{
 		endpoint: endpoint,
 		topic:    topic,
-		token:    os.Getenv("DECIDER_NOTIF_NTFY_TOKEN"),
+		token:    ntfyToken(),
 		clickURL: os.Getenv("DECIDER_NOTIF_NTFY_CLICK"),
 		// Short: a notification nobody is waiting on must not hold a
 		// detector's request open.
@@ -64,6 +64,20 @@ func newNtfy(log zerolog.Logger) *ntfy {
 	}
 	log.Info().Msgf("notifying %s on topic %q", endpoint, topic)
 	return n
+}
+
+// ntfyToken is the bearer token, preferring the decider's own name and falling
+// back to the shared one.
+//
+// These hosts keep NTFY_TOKEN in a .ntfy.env that diun and the backup jobs
+// already load. Reading it means the decider joins that file rather than
+// needing a second copy of the same secret, while DECIDER_NOTIF_NTFY_TOKEN
+// still wins for a decider that should publish as something else.
+func ntfyToken() string {
+	if t := os.Getenv("DECIDER_NOTIF_NTFY_TOKEN"); t != "" {
+		return t
+	}
+	return os.Getenv("NTFY_TOKEN")
 }
 
 // announce publishes one entry. Never fatal, never blocking the decision.
