@@ -265,8 +265,15 @@
 
   <!-- Only when there is more than one host. A single tab reading "optiplex"
        beside "All" offers a choice between a thing and the same thing. -->
+  <!-- No v-if on the tabs. petite-vue's v-if reads el.parentElement, and the
+       first element inside a <template v-if> has none while the block is being
+       built -- it throws "null is not an object (evaluating 's.insertBefore')"
+       and the whole page fails to mount, footer included. So the tab strip is
+       always in the DOM and hides itself when there is one host, where
+       "optiplex" beside "All" offers a choice between a thing and the same
+       thing. -->
   <div class="filters">
-    <div class="tabs" v-if="hosts().length > 1">
+    <div class="tabs" :style="hosts().length > 1 ? '' : 'display:none'">
       <button :class="host === '' ? 'on' : ''" @click="host = ''">
         All <span class="n">{{ rows.length }}</span>
       </button>
@@ -303,7 +310,7 @@
       </ul>
     </li>
   </ul>
-  <p class="none" v-if="!shown().length">
+  <p class="none" :style="shown().length ? 'display:none' : ''">
     Nothing matches. <a href="#" @click.prevent="host = ''; q = ''">Show all {{ rows.length }}</a>.
   </p>
   </template>
