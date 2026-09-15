@@ -132,8 +132,15 @@
   .kind-major { color: var(--major); }
   .kind-minor { color: var(--minor); }
   .kind-patch, .kind-digest { color: var(--digest); font-weight: 700; }
-  .kind-unknown { color: var(--digest); font-weight: 600; cursor: help;
-                  border-bottom: 1px dotted var(--faint); }
+  /* No dotted underline. It is the convention for "hover me", but .kind is a
+     grid cell, so the border ran the width of the column rather than the word
+     -- and a phone has no hover to offer anyway. The title attribute stays:
+     free where there is a pointer, silent where there is not. */
+  /* Fainter than the rest, because it is the only kind that is not a
+     measurement: duva could not compare the two tags, so there is nothing
+     being reported about how big the change is. It is also the reliable tell
+     for a candidate that should not have been offered. */
+  .kind-unknown { color: var(--faint); font-weight: 600; cursor: help; }
 
   /* ---------- buttons ---------- */
   form { margin: 0; }
