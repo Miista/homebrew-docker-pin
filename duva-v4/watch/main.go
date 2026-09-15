@@ -314,6 +314,17 @@ func readServices(root string, log zerolog.Logger) ([]watch.Service, error) {
 		return nil, fmt.Errorf("reading the compose project at %s: %w", root, err)
 	}
 
+	// Said once, with the count: a service with no container_name is not
+	// indexed at all, so it never reaches the loop below and none of its
+	// reasons are logged. On a host that is a service silently unwatched for
+	// as long as nobody looks -- which is the failure this tool exists to
+	// prevent, arriving as silence.
+	if all, err := compose.ListServices(root); err == nil && len(all) > len(index) {
+		log.Warn().Msgf("%d of %d service(s) declare no container_name, so they are not watched: "+
+			"duva replaces a container by name and cannot act on one it cannot name",
+			len(all)-len(index), len(all))
+	}
+
 	var out []watch.Service
 	for container, ref := range index {
 		raw, err := compose.RawImage(ref.File, ref.Service)
