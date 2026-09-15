@@ -351,3 +351,37 @@ func TestNoAnnouncerStillQueues(t *testing.T) {
 		t.Error("nothing was queued when no announcer was configured")
 	}
 }
+
+// A restart does not re-announce what was already waiting.
+//
+// This is the whole reason the queue is kept on disk. The watcher re-sends a
+// finding whose delivery it could not confirm, and before this the queue had
+// forgotten the entry, called it new, and told someone a second time -- once
+// per entry still pending, on every deploy.
+func TestARestartDoesNotReAnnounceWhatWasAlreadyWaiting(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "queue.json")
+	n := Notice{Container: "my-app", Image: "example.com/app:1.1.0", Digest: "sha256:new"}
+
+	var told []string
+	announce := func(e Entry) { told = append(told, e.Service) }
+
+	before := &Handler{
+		Lookup: project(t, pinnedProject), Queue: Load(path, nil),
+		Applier: &fakeApplier{}, Announce: announce, Now: func() time.Time { return now },
+	}
+	before.Handle(n)
+	if len(told) != 1 {
+		t.Fatalf("announced %v on first arrival, want one", told)
+	}
+
+	// The queue restarts and the watcher re-sends the same finding.
+	after := &Handler{
+		Lookup: project(t, pinnedProject), Queue: Load(path, nil),
+		Applier: &fakeApplier{}, Announce: announce, Now: func() time.Time { return now },
+	}
+	after.Handle(n)
+
+	if len(told) != 1 {
+		t.Errorf("announced %v across a restart, want still one", told)
+	}
+}

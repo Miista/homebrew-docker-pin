@@ -58,6 +58,10 @@ const addr = ":8080"
 // composeDir is the contract with whoever runs this.
 var composeDir = "/compose"
 
+// stateFile is where the queue is kept across a restart. A named volume
+// mounted at /data, like the watcher's.
+var stateFile = "/data/queue.json"
+
 // defaultApplyTimeout bounds an apply.
 //
 // It is the only thing the queue has to believe about work it did not do:
@@ -127,7 +131,15 @@ func run(log zerolog.Logger) error {
 		return fmt.Errorf("reading the compose project at %s: %w", root, err)
 	}
 
-	queue := q.NewPending()
+	// Restored from /data, so a restart is not a decision about what is
+	// waiting. Without a volume the path is still /data and load finds
+	// nothing there, which is the same queue this had before.
+	queue := q.Load(stateFile, func(err error) {
+		log.Error().Msgf("the queue could not be kept across a restart: %v", err)
+	})
+	if n := queue.Len(); n > 0 {
+		log.Info().Msgf("%d entr(ies) were still waiting from before the restart", n)
+	}
 
 	// The concrete one, so a notifier can be attached to it below: the
 	// Applier interface deliberately says nothing about failures -- the

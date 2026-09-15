@@ -53,11 +53,51 @@ type Entry struct {
 type Pending struct {
 	mu      sync.RWMutex
 	entries map[string]Entry
+	// store is where this survives a restart. The zero value writes nowhere,
+	// so a queue built with NewPending is exactly what it was before.
+	store store
+	// onSaveError is told when a write failed. Nil discards, which is what a
+	// queue with no store wants.
+	onSaveError func(error)
 }
 
-// NewPending returns an empty queue.
+// NewPending returns an empty queue that keeps nothing across a restart.
 func NewPending() *Pending {
 	return &Pending{entries: map[string]Entry{}}
+}
+
+// Load returns a queue restored from path, and writes every change back to it.
+//
+// A queue is what is waiting on a person, and a restart is not a decision
+// about any of it: without this a deploy dropped every pending approval, and
+// re-announced each one the next time the watcher re-sent it.
+//
+// A file that cannot be parsed is reported and started from empty rather than
+// refused. The queue rebuilds from the next check -- noisily, since everything
+// in it looks new again -- and a queue that starts is worth more than one that
+// is right about what it has already said.
+func Load(path string, onError func(error)) *Pending {
+	q := &Pending{entries: map[string]Entry{}, store: store{path: path}, onSaveError: onError}
+	entries, err := q.store.load()
+	if err != nil {
+		if onError != nil {
+			onError(err)
+		}
+		return q
+	}
+	q.entries = entries
+	return q
+}
+
+// save writes the queue out. Called with the lock held.
+//
+// A failed write is reported and otherwise ignored: the entry is in the queue
+// either way, and refusing to queue because a disk is full would turn a
+// recoverable problem into a lost decision.
+func (q *Pending) save() {
+	if err := q.store.save(q.entries); err != nil && q.onSaveError != nil {
+		q.onSaveError(err)
+	}
 }
 
 // Put adds or replaces the entry for a service, reporting whether anything
@@ -87,6 +127,7 @@ func (q *Pending) Put(e Entry, now time.Time) (changed bool) {
 		e.FirstSeen = now.UTC().Format(time.RFC3339)
 	}
 	q.entries[e.Service] = e
+	q.save()
 	return true
 }
 
@@ -104,6 +145,9 @@ func (q *Pending) Remove(service string) bool {
 	defer q.mu.Unlock()
 	_, ok := q.entries[service]
 	delete(q.entries, service)
+	if ok {
+		q.save()
+	}
 	return ok
 }
 
