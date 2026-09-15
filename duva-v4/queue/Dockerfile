@@ -32,6 +32,12 @@ ARG VERSION=dev
 # emulation and actually reliable: the Go toolchain under QEMU dies with
 # "sync: inconsistent mutex state" on this repo.
 ARG TARGETARCH
+RUN mkdir -p /out/data
+# A file, not just a directory: docker seeds a fresh named volume from the
+# image only when there is something there to seed it from, and an empty
+# directory leaves the volume root-owned -- unwritable by the user this runs
+# as, so every save would fail on a container that looked healthy.
+RUN echo "{}" > /out/data/queue.json
 RUN cd duva-v4 && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /out/queue ./queue
 
 # distroless-static, not scratch.
@@ -65,6 +71,16 @@ EXPOSE 8080
 # still parses perfectly.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
   CMD ["/queue", "health"]
+
+# /data exists in the image, owned by the user this actually runs as.
+#
+# 1000, not nonroot: a `user:` in compose overrides the image's, and this runs
+# as the host user that owns /compose. Docker seeds a fresh named volume from
+# the image -- ownership included -- but only when there is something there to
+# seed from, which is why /data carries a file and not just a directory.
+# Measured, not assumed: with an empty directory the volume comes out
+# root-owned and every save fails on a container that otherwise looks healthy.
+COPY --from=build --chown=1000:1000 /out/data /data
 
 USER nonroot:nonroot
 ENTRYPOINT ["/queue"]
