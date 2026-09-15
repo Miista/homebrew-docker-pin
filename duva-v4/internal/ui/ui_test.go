@@ -444,3 +444,58 @@ func TestTheRegistryHostIsStrippedFromWhatIsShown(t *testing.T) {
 		}
 	}
 }
+
+// The queue can be narrowed to one host, and searched.
+//
+// Thirty-three rows across two hosts is a list nobody reads: the tabs answer
+// "what is waiting on this box" and the search answers "where is that one
+// service", which are the two questions actually asked of it.
+func TestTheQueueCanBeNarrowed(t *testing.T) {
+	s := &Server{
+		Source:   &fakeSource{pending: []Hosted{entry("authelia", "4.39.20", "4.39.26", version.KindPatch)}},
+		Approver: &fakeApprover{},
+	}
+	_, body := get(t, s, "/")
+
+	// The table renders the filtered view, not the whole queue.
+	if !strings.Contains(body, `v-for="r in shown()"`) {
+		t.Error("the table does not render the filtered rows")
+	}
+	// Tabs come from the rows, so a host with nothing waiting has none.
+	if !strings.Contains(body, "new Set(this.rows.map(r => r.host))") {
+		t.Error("the host tabs are not derived from what is queued")
+	}
+	// Searching covers the fields a person would type: the service, the image
+	// it runs, and either end of the change.
+	for _, field := range []string{"r.service", "r.image", "r.current_tag", "r.candidate"} {
+		if !strings.Contains(body, field+" +") && !strings.Contains(body, "+ "+field) {
+			t.Errorf("the search does not cover %s", field)
+		}
+	}
+}
+
+// Filtering narrows what is shown, never what is known.
+//
+// busyHost asks whether any row on a host is applying, and the heading counts
+// what is waiting. Both ask about the whole queue, so narrowing rows itself
+// would make them answer about whatever happens to be on screen -- a second
+// apply would be allowed on a host whose running one had been filtered away.
+func TestFilteringDoesNotNarrowWhatIsKnown(t *testing.T) {
+	s := &Server{
+		Source:   &fakeSource{pending: []Hosted{entry("authelia", "4.39.20", "4.39.26", version.KindPatch)}},
+		Approver: &fakeApprover{},
+	}
+	_, body := get(t, s, "/")
+
+	// The count and the host lock read rows, which stays whole.
+	if !strings.Contains(body, "({{ rows.length }})") {
+		t.Error("the heading counts something other than the whole queue")
+	}
+	if !strings.Contains(body, "this.rows.some(r => this.running(r.key) && r.host === host)") {
+		t.Error("busyHost no longer asks the whole queue, so a filtered-away apply would be missed")
+	}
+	// And poll() replaces rows wholesale rather than a filtered copy.
+	if !strings.Contains(body, "this.rows = s.rows || []") {
+		t.Error("poll does not refill the whole queue")
+	}
+}
