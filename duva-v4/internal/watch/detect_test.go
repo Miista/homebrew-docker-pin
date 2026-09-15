@@ -3,6 +3,7 @@ package watch
 import (
 	"errors"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 )
@@ -442,5 +443,105 @@ func TestAFirstCheckWithNothingToFindReportsNothing(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Errorf("first check reported %v, want nothing -- no tag qualifies", got)
+	}
+}
+
+// movingSvc is a service following a stream, pinned to digest.
+func movingSvc(tag, digest string) Service {
+	return Service{Name: "app", Container: "my-app", Image: "example.com/app",
+		Tag: tag, Digest: digest, Moving: true}
+}
+
+// movingReg answers what a tag points at now, which is the only question a
+// moving tag raises.
+func movingReg(now string) Registry {
+	return Registry{
+		ListTags: func(string) ([]DatedTag, error) {
+			panic("a moving tag must not cost a listing: it is one request")
+		},
+		TagDigest: func(_, _ string) (string, error) { return now, nil },
+	}
+}
+
+// latest points somewhere else, so it is reported -- whatever the age of
+// whatever it points at. No window applies here, which is why a stream always
+// answers on a first check and needs no fallback.
+func TestAMovedStreamIsReported(t *testing.T) {
+	got, err := collect(movingSvc("latest", "sha256:old"), cutoff, movingReg("sha256:new"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("reported %v, want one finding", got)
+	}
+	if got[0].Digest != "sha256:new" {
+		t.Errorf("reported digest %q, want what the tag points at now", got[0].Digest)
+	}
+	// The tag is what it follows, not a new one to move to.
+	if got[0].Tag != "latest" {
+		t.Errorf("reported tag %q, want the stream it follows", got[0].Tag)
+	}
+	// A moved stream has no version pair, and inventing one would make the
+	// queue classify a change it cannot see.
+	if got[0].Published != (time.Time{}) {
+		t.Errorf("a moved stream carries a publish time: %v", got[0].Published)
+	}
+}
+
+// The digest matches, so it is current and nothing is reported. This is the
+// stop condition -- and it is also why a stream that is up to date stays
+// silent rather than reporting the tag it already runs.
+func TestAnUnmovedStreamIsSilent(t *testing.T) {
+	got, err := collect(movingSvc("latest", "sha256:same"), cutoff, movingReg("sha256:same"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Errorf("reported %v, want nothing -- the tag has not moved", got)
+	}
+}
+
+// A first check of a stream behaves identically: there is no window to widen,
+// so AtLeastOne changes nothing here.
+func TestAFirstCheckOfAStreamIsTheSameCheck(t *testing.T) {
+	moved, err := collectFirst(movingSvc("latest", "sha256:old"), cutoff, movingReg("sha256:new"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(moved) != 1 {
+		t.Errorf("a first check of a moved stream reported %v, want one", moved)
+	}
+
+	still, err := collectFirst(movingSvc("latest", "sha256:same"), cutoff, movingReg("sha256:same"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(still) != 0 {
+		t.Errorf("a first check of an unmoved stream reported %v, want nothing", still)
+	}
+}
+
+// Unpinned: there is no recorded digest to have moved away from, so reporting
+// would be inventing a change out of the absence of a record.
+func TestAnUnpinnedStreamIsNotAFinding(t *testing.T) {
+	got, err := collect(movingSvc("latest", ""), cutoff, movingReg("sha256:whatever"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Errorf("reported %v for an unpinned service, want nothing", got)
+	}
+}
+
+// A registry that cannot resolve digests cannot answer the question a stream
+// raises. Silence would read as "nothing has changed", which is the failure
+// this tool exists to prevent.
+func TestAStreamAgainstADigestlessRegistryIsAnError(t *testing.T) {
+	_, err := collect(movingSvc("latest", "sha256:old"), cutoff, Registry{})
+	if err == nil {
+		t.Fatal("no error for a registry that cannot resolve digests")
+	}
+	if !strings.Contains(err.Error(), "latest") {
+		t.Errorf("the error does not name the tag it could not resolve: %v", err)
 	}
 }
