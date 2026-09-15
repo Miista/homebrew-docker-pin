@@ -27,9 +27,12 @@ import (
 
 // Docker is the docker access applying needs.
 type Docker struct {
-	Pull          func(ref string) error
-	GetDigest     func(ref string) (string, error)
-	Recreate      func(composeFile, service string) error
+	Pull      func(ref string) error
+	GetDigest func(ref string) (string, error)
+	Recreate  func(composeFile, service string) error
+	// Exists reports whether the service has a container to replace, without
+	// touching it. Nil skips the check.
+	Exists        func(service string) error
 	ContainerName func(service string) string
 }
 
@@ -47,6 +50,7 @@ var realDocker = Docker{
 	Pull:          dockerapi.Pull,
 	GetDigest:     dockerapi.Digest,
 	Recreate:      dockerapi.Recreate,
+	Exists:        dockerapi.Exists,
 	ContainerName: dockerapi.ContainerName,
 }
 
@@ -136,6 +140,22 @@ func transaction(req actor.Request, step func(string, ...any), d Docker, g Git, 
 		if name := d.ContainerName(req.Service); name != "" {
 			container = name
 		}
+	}
+
+	// Everything answerable, answered before anything is done.
+	//
+	// The principle: do not start what cannot finish. Every one of these used
+	// to fail *after* a pull, and some after a pin was written -- leaving a
+	// compose file claiming an image nothing runs. None of them can be
+	// answered by trying and undoing, because undoing is what this design
+	// refuses to do once a container is involved.
+	//
+	// What cannot be pre-checked is the pull and the recreate: pulling is its
+	// own test, and whether a container will accept an image is only knowable
+	// by giving it one. Those two keep their existing handling -- a failed
+	// pull has written nothing, and a failed recreate restores the pin.
+	if err := precheck(req, d, tmpl); err != nil {
+		return actor.Failed, err.Error()
 	}
 
 	// Pull first: the cheapest failure is the one before anything is
@@ -327,4 +347,42 @@ func done(step func(string, ...any), format string, args ...any) (actor.Status, 
 	reason := fmt.Sprintf(format, args...)
 	step("%s", reason)
 	return actor.Completed, reason
+}
+
+// precheck answers everything that can be answered before anything is done.
+//
+// Ordered cheapest-and-most-likely first, and every failure is reported with
+// nothing yet changed -- which is the whole point. A refusal here is a queue
+// entry that stays queued and a person who can fix the cause; a failure two
+// steps later is a compose file recording an image that nothing runs.
+//
+// The compose file is checked by computing the pin rather than writing it:
+// pin.Compute is the same function the write uses, so a file it cannot parse,
+// a service it cannot find, or an image line it cannot rewrite is discovered
+// here rather than after a pull.
+func precheck(req actor.Request, d Docker, tmpl string) error {
+	// Is there a container to replace? A service in the compose file with
+	// nothing running is the failure that leaves a pin claiming an image that
+	// does not run anywhere.
+	if d.Exists != nil {
+		if err := d.Exists(req.Service); err != nil {
+			return fmt.Errorf("%s has no container to replace: %w", req.Service, err)
+		}
+	}
+
+	// Can this file be rewritten? The preflight checks /compose is writable;
+	// this checks *this* file, which can be read-only, missing, or shaped in
+	// a way the rewrite does not recognise.
+	if _, err := compose.RawImage(req.File, req.Service); err != nil {
+		return fmt.Errorf("reading %s from %s: %w", req.Service, req.File, err)
+	}
+
+	// Would the commit be accepted? The same question readiness asks, asked
+	// again with this service's real values -- readiness uses a representative
+	// message, and a template that renders differently for a real service
+	// would otherwise be found out after the container was replaced.
+	if err := checkMessageAccepted(dirOf(req.File), tmpl); err != nil {
+		return err
+	}
+	return nil
 }

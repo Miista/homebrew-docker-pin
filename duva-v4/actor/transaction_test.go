@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -498,5 +499,75 @@ func TestARefusedCommitSaysTheHostIsBlocked(t *testing.T) {
 	// The file still records the update: nothing about this is a rollback.
 	if raw, _ := os.ReadFile(w.file); !strings.Contains(string(raw), w.digest) {
 		t.Error("the file was reverted; a failed commit must not undo the update")
+	}
+}
+
+// --- do not start what cannot finish -----------------------------------------
+
+// A service with no container must be refused before anything happens. It
+// used to fail inside Recreate -- after a pull and after the pin was written
+// -- leaving the compose file claiming an image that nothing runs.
+func TestAMissingContainerIsRefusedBeforeAnythingHappens(t *testing.T) {
+	w := newWorld(t, versionPin)
+	req := versionRequest()
+	req.File = w.file
+	step, _ := steps()
+
+	before, _ := os.ReadFile(w.file)
+
+	d := w.docker()
+	d.Exists = func(service string) error { return errors.New("no such container") }
+
+	status, reason := transaction(req, step, d, w.git(), false, "")
+
+	if status != actor.Failed {
+		t.Errorf("status = %q, want failed", status)
+	}
+	if !strings.Contains(reason, "no container to replace") {
+		t.Errorf("reason = %q, want it to say there is nothing to replace", reason)
+	}
+	// Nothing was done: no pull, no write, no recreate.
+	if len(w.pulled) != 0 {
+		t.Errorf("pulled %v; a refusal must come before the pull", w.pulled)
+	}
+	if len(w.recreated) != 0 {
+		t.Errorf("recreated %v; nothing should have been touched", w.recreated)
+	}
+	after, _ := os.ReadFile(w.file)
+	if string(before) != string(after) {
+		t.Error("the compose file was changed by a run that should not have started")
+	}
+}
+
+// Same for a commit message the repository's hook would reject: refused with
+// nothing done, rather than discovered after the container was replaced.
+func TestARejectableMessageIsRefusedBeforeAnythingHappens(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "docker-compose.yml")
+	if err := os.WriteFile(file, []byte(versionPin), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A repository whose hook demands a prefix the default template lacks.
+	exec.Command("git", "-C", dir, "init", "-q").Run()
+	hooks := filepath.Join(dir, ".git", "hooks")
+	os.MkdirAll(hooks, 0o755)
+	os.WriteFile(filepath.Join(hooks, "commit-msg"),
+		[]byte("#!/bin/sh\ngrep -q '^[a-z]*/' \"$1\" || exit 1\n"), 0o755)
+
+	w := &world{file: file, clean: true, digest: "sha256:newdigest"}
+	req := versionRequest()
+	req.File = file
+	step, _ := steps()
+
+	status, reason := transaction(req, step, w.docker(), w.git(), false, "")
+
+	if status != actor.Failed {
+		t.Errorf("status = %q, want failed", status)
+	}
+	if !strings.Contains(reason, "commit-msg") {
+		t.Errorf("reason = %q, want it to name the hook", reason)
+	}
+	if len(w.pulled) != 0 || len(w.recreated) != 0 {
+		t.Errorf("work started anyway: pulled=%v recreated=%v", w.pulled, w.recreated)
 	}
 }

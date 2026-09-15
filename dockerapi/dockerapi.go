@@ -453,3 +453,17 @@ func containerLabel(id, label string) (string, error) {
 	}
 	return c.Config.Labels[label], nil
 }
+
+// Exists reports whether a compose service has a container to replace.
+//
+// For a caller that wants to know *before* doing anything irreversible.
+// Recreate finds the container itself, but by then a pull has happened and a
+// pin has been written -- and a service with no container leaves the compose
+// file claiming an image that nothing runs.
+//
+// Read-only: a lookup by the same labels Recreate uses, so the two cannot
+// disagree about what "this service" means.
+func Exists(service string) error {
+	_, err := findContainer(service)
+	return err
+}
