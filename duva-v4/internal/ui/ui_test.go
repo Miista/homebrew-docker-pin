@@ -117,6 +117,28 @@ func TestLongDigestsAreAllowedToWrap(t *testing.T) {
 	}
 }
 
+// The decider applies one service at a time across the whole host, holding
+// that lock for the entire transaction. A second click is not refused: Start
+// accepts it, spawns a goroutine, and parks on the mutex -- so the row shows
+// "Updating…" and a step panel while doing nothing at all, for as long as the
+// first apply takes. Indistinguishable from real work.
+//
+// So every button on a host with an apply in flight has to be disabled, not
+// only the row that started it.
+func TestOtherRowsOnABusyHostAreDisabled(t *testing.T) {
+	s := &Server{Source: &fakeSource{}, Approver: &fakeApprover{}}
+	_, body := get(t, s, "/")
+
+	if !strings.Contains(body, "busyHost(r.host)") {
+		t.Error("the Update button does not consider whether the host is already applying")
+	}
+	// Scoped to the host, not the whole page: two hosts apply independently,
+	// and one decider's lock says nothing about another's.
+	if !strings.Contains(body, "r.host === host && this.steps[r.key]") {
+		t.Error("busyHost is not scoped to the host, so one host's apply would grey out every other host too")
+	}
+}
+
 // On a phone the column head is hidden, and it was the head that drew the
 // card's top edge -- main > .rows sets border-top: 0 for exactly that reason.
 // Without it the first row's own border-top becomes the visible top of the

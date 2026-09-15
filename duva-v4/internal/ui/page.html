@@ -257,7 +257,7 @@
             :title="r.kind === 'unknown' ? 'duva could not compare these tags — not a semantic version' : ''">{{ r.kind }}</span>
 
       <button class="apply" v-if="canApply"
-              :disabled="!r.can_apply || !!steps[r.key]"
+              :disabled="!r.can_apply || !!steps[r.key] || busyHost(r.host)"
               :title="buttonReason(r)"
               @click="apply(r)">{{ steps[r.key] ? "Updating…" : "Update" }}</button>
 
@@ -329,8 +329,25 @@ createApp({
         }
       },
 
+      // Is another service on this host already being applied?
+      //
+      // The decider serialises applies across every service it owns -- one
+      // decider is one host -- and holds that lock for the whole transaction.
+      // A second click therefore does not fail: it is accepted, spawns a
+      // goroutine, and parks on the mutex saying "Updating…" while doing
+      // nothing, for as long as the first apply takes. Greying the rest is
+      // what makes the page agree with what the decider will actually do.
+      busyHost(host) {
+        return this.rows.some(r => r.host === host && this.steps[r.key])
+      },
+
       buttonReason(r) {
         if (r.stale) return r.host + " is not answering, so this cannot be confirmed or applied"
+        if (this.busyHost(r.host) && !this.steps[r.key]) {
+          const busy = this.rows.find(o => o.host === r.host && this.steps[o.key])
+          return r.host + " is applying " + (busy ? busy.service : "another service") +
+                 "; one at a time per host"
+        }
         if (r.can_apply) return ""
         // The decider's own words, relayed: why an actor would refuse is its
         // business, and a sentence composed here would be one this page had
