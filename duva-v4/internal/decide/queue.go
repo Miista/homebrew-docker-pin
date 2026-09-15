@@ -63,10 +63,15 @@ func NewPending() *Pending {
 // Put adds or replaces the entry for a service, reporting whether anything
 // changed.
 //
-// Unchanged means the same candidate arriving again, which is the common case
-// under a protocol that re-notifies: the detector says the same thing every
-// run until something is done about it. Reporting that nothing changed is how
-// a caller avoids logging or notifying twice about one candidate.
+// Unchanged means the same candidate arriving again. That is not the schedule:
+// a completed check advances that service's cutoff, so a tag is reported once.
+// It is the delivery. The detector's outbox drops a finding only when the POST
+// succeeded, so one that was received while the response was lost -- a
+// timeout, a restart mid-request -- is held and re-sent on the next run.
+// DETECTOR_SINCE re-reports deliberately, which is the other way to see it.
+//
+// Reporting that nothing changed is how a caller avoids logging or notifying
+// twice about one candidate.
 func (q *Pending) Put(e Entry, now time.Time) (changed bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()

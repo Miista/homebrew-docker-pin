@@ -315,10 +315,11 @@ func TestHandleWithoutALog(t *testing.T) {
 
 // Someone is told once, when the candidate is new.
 //
-// The detector re-notifies every run until something is done, so the naive
-// wiring would buzz a phone daily for one queued update. Put already tells a
-// fresh candidate from a repeat -- it exists for that -- so the announcement
-// rides on it rather than on a second notion of newness.
+// Not the schedule -- a completed check advances that service's cutoff, so a
+// tag is reported once. The delivery: the detector's outbox drops a finding
+// only when the POST succeeded, so one received while the response was lost is
+// re-sent next run. Put already tells a fresh candidate from a repeat, so the
+// announcement rides on it.
 func TestOnlyANewCandidateIsAnnounced(t *testing.T) {
 	h, _ := handlerOver(t, pinnedProject, &fakeApplier{})
 	var told []string
