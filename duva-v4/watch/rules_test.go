@@ -542,3 +542,62 @@ func TestAServiceThatReachedNoTagDoesNotAdvance(t *testing.T) {
 			before["app"], after["app"])
 	}
 }
+
+// A normal run needs only new tags since the cutoff, and advances either way.
+//
+// The counterpart to a first run having to reach a real tag however far back.
+// Once a service has a line, "nothing published since then" is the ordinary
+// healthy answer -- not a failure -- and the line still moves, or a quiet
+// project would be re-asked the same question forever.
+func TestANormalRunNeedsNothingButAdvancesAnyway(t *testing.T) {
+	useTempState(t)
+	seeded := time.Now().Add(-48 * time.Hour)
+	seedCutoff(t, seeded, "app")
+
+	// Published long before the cutoff, so a normal run has nothing to say --
+	// and the service is not on it, so this is not the running-tag case.
+	reg := fakeReg{
+		tags:  map[string][]string{"example.com/app": {"1.0.0", "0.9.0"}},
+		dates: map[string]time.Time{
+			"1.0.0": time.Now().Add(-300 * 24 * time.Hour),
+			"0.9.0": time.Now().Add(-400 * 24 * time.Hour),
+		},
+	}
+
+	before, after, found, failed := check(t,
+		[]watch.Service{service("app", "example.com/app", "1.0.0")}, reg.registry())
+
+	if failed != 0 {
+		t.Errorf("failed = %d, want a clean run -- old tags are not a failure", failed)
+	}
+	if found != 0 {
+		t.Errorf("found = %d, want nothing new since the cutoff", found)
+	}
+	if !after["app"].After(before["app"]) {
+		t.Errorf("the line did not advance: %v -> %v", before["app"], after["app"])
+	}
+}
+
+// And the first run of that same world reports the newest tag, however old.
+func TestAFirstRunOfTheSameWorldReportsTheNewest(t *testing.T) {
+	useTempState(t)
+	// No seeded cutoff: this is a first check.
+
+	reg := fakeReg{
+		tags: map[string][]string{"example.com/app": {"1.1.0", "0.9.0"}},
+		dates: map[string]time.Time{
+			"1.1.0": time.Now().Add(-300 * 24 * time.Hour),
+			"0.9.0": time.Now().Add(-400 * 24 * time.Hour),
+		},
+	}
+
+	_, _, found, failed := check(t,
+		[]watch.Service{service("app", "example.com/app", "1.0.0")}, reg.registry())
+
+	if failed != 0 {
+		t.Errorf("failed = %d, want a clean run", failed)
+	}
+	if found != 1 {
+		t.Errorf("found = %d, want the newest tag reported however old it is", found)
+	}
+}
