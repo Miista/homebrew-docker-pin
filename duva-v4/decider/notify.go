@@ -28,7 +28,7 @@ type ntfy struct {
 	endpoint string
 	topic    string
 	token    string
-	// clickURL, when set, is where tapping the notification goes. The
+	// clickURL, when set, is where the notification's button goes. The
 	// decider has no notion of its own public address -- it serves an API,
 	// and the UI it would point at is a different container -- so this is
 	// given rather than derived.
@@ -82,7 +82,10 @@ func (n *ntfy) announce(host string, e decide.Entry) {
 		req.Header.Set("Authorization", "Bearer "+n.token)
 	}
 	if n.clickURL != "" {
-		req.Header.Set("Click", n.clickURL)
+		// A button, not Click. Click makes the whole notification a link, so
+		// tapping it anywhere -- including just to read it -- opens the UI.
+		// An action is a thing you press on purpose.
+		req.Header.Set("Actions", viewAction("Open duva", n.clickURL))
 	}
 
 	res, err := n.client.Do(req)
@@ -94,6 +97,17 @@ func (n *ntfy) announce(host string, e decide.Entry) {
 	if res.StatusCode >= 300 {
 		n.log.Warn().Msgf("notifying about %s was refused with %s", e.Service, res.Status)
 	}
+}
+
+// viewAction is an ntfy action button that opens a URL.
+//
+// The URL is quoted because the header separates fields on commas, and a query
+// string is entitled to contain one. Any double quote in it is dropped rather
+// than escaped: the header format has no escape, and a URL carrying a literal
+// quote is malformed anyway -- dropping it is better than emitting a header
+// that silently truncates the action.
+func viewAction(label, url string) string {
+	return fmt.Sprintf("view, %s, %q, clear=true", label, strings.ReplaceAll(url, `"`, ""))
 }
 
 // message is what a person reads. Separate from the sending so it can be

@@ -65,11 +65,12 @@ func TestAnEndpointWithoutATopicNotifiesNobody(t *testing.T) {
 
 // What actually goes over the wire: the topic in the path, the title and the
 // click as headers, the change as the body.
-func TestAnAnnouncementCarriesTheTopicTitleAndClick(t *testing.T) {
-	var gotPath, gotTitle, gotAuth, gotClick, gotBody string
+func TestAnAnnouncementCarriesTheTopicTitleAndButton(t *testing.T) {
+	var gotPath, gotTitle, gotAuth, gotClick, gotActions, gotBody string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath, gotTitle = r.URL.Path, r.Header.Get("Title")
 		gotAuth, gotClick = r.Header.Get("Authorization"), r.Header.Get("Click")
+		gotActions = r.Header.Get("Actions")
 		buf := make([]byte, r.ContentLength)
 		r.Body.Read(buf)
 		gotBody = string(buf)
@@ -99,8 +100,13 @@ func TestAnAnnouncementCarriesTheTopicTitleAndClick(t *testing.T) {
 	if gotAuth != "Bearer tk_secret" {
 		t.Errorf("Authorization = %q, want a bearer token", gotAuth)
 	}
-	if gotClick != "http://192.0.2.10:8097/" {
-		t.Errorf("Click = %q", gotClick)
+	// A button, not Click: Click makes the whole notification a link, so
+	// tapping it merely to read it opens the UI.
+	if gotClick != "" {
+		t.Errorf("Click = %q, want none -- the whole notification must not be a link", gotClick)
+	}
+	if gotActions != `view, Open duva, "http://192.0.2.10:8097/", clear=true` {
+		t.Errorf("Actions = %q", gotActions)
 	}
 	if gotBody != "v1.10.4 → v1.12.0 (minor)" {
 		t.Errorf("body = %q", gotBody)
@@ -118,4 +124,14 @@ func TestAnUnreachableNotifierIsNotFatal(t *testing.T) {
 	}
 	n.announce("optiplex", decide.Entry{Service: "whoami", From: "1.0", To: "1.1", Kind: ociversion.KindMinor})
 	// Reaching here without a panic is the assertion.
+}
+
+// The Actions header separates fields on commas, and a query string is
+// entitled to contain one. An unquoted URL would truncate the action there.
+func TestAViewActionQuotesTheURL(t *testing.T) {
+	got := viewAction("Open duva", "https://duva.example.com/?a=1,b=2")
+	want := `view, Open duva, "https://duva.example.com/?a=1,b=2", clear=true`
+	if got != want {
+		t.Errorf("viewAction = %q, want %q", got, want)
+	}
 }
