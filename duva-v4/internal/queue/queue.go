@@ -120,6 +120,20 @@ func (q *Pending) Put(e Entry, now time.Time) (changed bool) {
 	if existed && prev.To == e.To && prev.From == e.From {
 		return false
 	}
+	// A candidate only supersedes a pending one if it is actually newer.
+	//
+	// Not last-write-wins, which is what this was: a watcher reporting four
+	// releases at once sends them in whatever order it listed them, and
+	// keeping the last arrival left the queue offering 4.39.24 when 4.39.27
+	// was among them. Every service with more than one release outstanding
+	// showed its oldest update.
+	//
+	// Only where both are versions. A digest move has no version pair to
+	// compare, and there the newer arrival is by definition the current one.
+	if existed && prev.Kind != "" && e.Kind != "" &&
+		version.CompareVersions(e.To, prev.To) < 0 {
+		return false
+	}
 	// FirstSeen is when *this* candidate arrived, so a superseding one gets
 	// its own. Carrying the old one forward would make a row that has been
 	// waiting five minutes look like it had been waiting a week.

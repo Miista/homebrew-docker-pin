@@ -251,3 +251,75 @@ func TestEntryFromCarriesThePolicy(t *testing.T) {
 		t.Errorf("identity is wrong: %+v", e)
 	}
 }
+
+// Four releases arriving at once leave the newest queued, whatever the order.
+//
+// The watcher reports every tag published since the cutoff, in whatever order
+// the registry listed them. This was last-write-wins, so authelia -- with
+// 4.39.24 through 4.39.27 all outstanding -- ended up offering 4.39.24,
+// because that is what arrived last. Every service with more than one release
+// behind showed its oldest update.
+func TestTheNewestCandidateWins(t *testing.T) {
+	now := time.Now()
+	for _, order := range [][]string{
+		{"4.39.27", "4.39.26", "4.39.25", "4.39.24"}, // newest first, as seen
+		{"4.39.24", "4.39.25", "4.39.26", "4.39.27"}, // oldest first
+		{"4.39.25", "4.39.27", "4.39.24", "4.39.26"}, // arbitrary
+	} {
+		q := NewPending()
+		for _, to := range order {
+			q.Put(Entry{Service: "authelia", From: "4.39.20", To: to,
+				Kind: version.KindPatch}, now)
+		}
+		e, ok := q.Get("authelia")
+		if !ok {
+			t.Fatalf("%v: nothing queued", order)
+		}
+		if e.To != "4.39.27" {
+			t.Errorf("%v: queued %s, want the newest", order, e.To)
+		}
+	}
+}
+
+// An older candidate arriving is not news, so nothing is announced for it.
+func TestAnOlderCandidateIsNotNews(t *testing.T) {
+	now := time.Now()
+	q := NewPending()
+
+	if !q.Put(Entry{Service: "app", From: "1.0.0", To: "1.3.0", Kind: version.KindMinor}, now) {
+		t.Fatal("the first candidate was not new")
+	}
+	if q.Put(Entry{Service: "app", From: "1.0.0", To: "1.1.0", Kind: version.KindMinor}, now) {
+		t.Error("an older candidate reported itself as new, so it would notify again")
+	}
+	if e, _ := q.Get("app"); e.To != "1.3.0" {
+		t.Errorf("queued %s, want the newer one kept", e.To)
+	}
+}
+
+// A genuinely newer one still supersedes.
+func TestANewerCandidateStillSupersedes(t *testing.T) {
+	now := time.Now()
+	q := NewPending()
+	q.Put(Entry{Service: "app", From: "1.0.0", To: "1.1.0", Kind: version.KindMinor}, now)
+
+	if !q.Put(Entry{Service: "app", From: "1.0.0", To: "1.3.0", Kind: version.KindMinor}, now) {
+		t.Error("a newer candidate was not reported as new")
+	}
+	if e, _ := q.Get("app"); e.To != "1.3.0" {
+		t.Errorf("queued %s, want the newer one", e.To)
+	}
+}
+
+// A digest move has no version pair to compare, so the latest arrival wins --
+// which is right: it is what the tag points at now.
+func TestADigestMoveAlwaysTakesTheLatest(t *testing.T) {
+	now := time.Now()
+	q := NewPending()
+	q.Put(Entry{Service: "app", Tag: "latest", Digest: "sha256:aaa", To: "sha256:aaa"}, now)
+	q.Put(Entry{Service: "app", Tag: "latest", Digest: "sha256:bbb", To: "sha256:bbb"}, now)
+
+	if e, _ := q.Get("app"); e.To != "sha256:bbb" {
+		t.Errorf("queued %s, want what the tag points at now", e.To)
+	}
+}
