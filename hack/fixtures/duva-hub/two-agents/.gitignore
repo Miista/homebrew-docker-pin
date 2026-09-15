@@ -1,4 +1,0 @@
-# Each agent keeps its own state under data/, so they do not share a file; the
-# hub keeps none at all. The certificate is the suite's self-signed registry.
-/data/
-/certs/

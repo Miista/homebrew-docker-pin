@@ -1,8 +1,0 @@
-# The newer versions duva should find in this scenario.
-#
-# The one thing the compose file cannot say, since no service references
-# them. Everything it does name is published from the file itself.
-updates:
-  app:
-    - 1.26.3
-    - 1.31.4
