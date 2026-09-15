@@ -343,3 +343,104 @@ func TestItHasNoVersionOpinion(t *testing.T) {
 		t.Errorf("a backport published after the cutoff was filtered out; that is the gate's call, not ours")
 	}
 }
+
+// collectFirst runs a first check and gathers what it streamed.
+func collectFirst(svc Service, cutoff time.Time, reg Registry) ([]Finding, error) {
+	var out []Finding
+	err := AtLeastOne(svc, cutoff, reg, func(f Finding) { out = append(out, f) })
+	return out, err
+}
+
+// A service whose newest release predates the window still reports it, once.
+//
+// Without this a quiet project reports nothing on its first check, which
+// reads as "up to date" when it is not -- and stays that way until someone
+// publishes again, which may be never.
+func TestAFirstCheckFindsSomethingEvenWhenNothingIsRecent(t *testing.T) {
+	reg := &fakeRegistry{
+		tags:         []string{"1.0.0", "1.1.0", "1.2.0"},
+		datedListing: true,
+		published: map[string]time.Time{
+			// All well before the cutoff: nothing is "new".
+			"1.0.0": at("2026-01-01T00:00:00Z"),
+			"1.1.0": at("2026-02-01T00:00:00Z"),
+			"1.2.0": at("2026-03-01T00:00:00Z"),
+		},
+	}
+
+	// The ordinary check finds nothing, which is the behaviour being fixed.
+	if got, err := collect(svc("1.0.0", "", ""), cutoff, reg.registry()); err != nil {
+		t.Fatal(err)
+	} else if len(got) != 0 {
+		t.Fatalf("a windowed check found %v, want nothing older than the cutoff", got)
+	}
+
+	got, err := collectFirst(svc("1.0.0", "", ""), cutoff, reg.registry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("a first check found %d findings, want exactly one", len(got))
+	}
+	// The newest, not merely the first the registry happened to list.
+	if got[0].Tag != "1.2.0" {
+		t.Errorf("reported %q, want the newest tag there is", got[0].Tag)
+	}
+}
+
+// When the window does find something, the fallback stays out of the way:
+// reporting the newest as well would duplicate it.
+func TestAFirstCheckThatFindsSomethingReportsOnlyThat(t *testing.T) {
+	reg := &fakeRegistry{
+		tags:         []string{"1.0.0", "1.2.0"},
+		datedListing: true,
+		published: map[string]time.Time{
+			"1.0.0": at("2026-01-01T00:00:00Z"),
+			"1.2.0": at("2026-09-15T00:00:00Z"), // after the cutoff
+		},
+	}
+
+	got, err := collectFirst(svc("1.0.0", "", ""), cutoff, reg.registry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Tag != "1.2.0" {
+		t.Errorf("first check reported %v, want just the tag the window found", got)
+	}
+}
+
+// The include pattern still decides what qualifies. A fallback that ignored it
+// would report a tag the service has said it does not follow.
+func TestAFirstCheckStillHonoursTheIncludePattern(t *testing.T) {
+	reg := &fakeRegistry{
+		tags:         []string{"1.2.0", "2.0.0-rc1"},
+		datedListing: true,
+		published: map[string]time.Time{
+			"1.2.0":     at("2026-01-01T00:00:00Z"),
+			"2.0.0-rc1": at("2026-02-01T00:00:00Z"), // newer, but excluded
+		},
+	}
+
+	got, err := collectFirst(svc("1.0.0", `^\d+\.\d+\.\d+$`, ""), cutoff, reg.registry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Tag != "1.2.0" {
+		t.Errorf("first check reported %v, want the newest tag the include allows", got)
+	}
+}
+
+// A repository with no qualifying tag reports nothing rather than inventing
+// one.
+func TestAFirstCheckWithNothingToFindReportsNothing(t *testing.T) {
+	reg := &fakeRegistry{tags: []string{"latest"}, datedListing: true,
+		published: map[string]time.Time{"latest": at("2026-01-01T00:00:00Z")}}
+
+	got, err := collectFirst(svc("1.0.0", `^\d+\.\d+\.\d+$`, ""), cutoff, reg.registry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Errorf("first check reported %v, want nothing -- no tag qualifies", got)
+	}
+}

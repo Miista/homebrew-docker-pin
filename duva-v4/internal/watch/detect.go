@@ -130,6 +130,30 @@ type Finding struct {
 // Findings arrive in whatever order the registry listed them. Sorting would
 // mean collecting first, which is the thing this signature exists to avoid.
 func Since(svc Service, cutoff time.Time, reg Registry, found func(Finding)) error {
+	return since(svc, cutoff, false, reg, found)
+}
+
+// AtLeastOne is Since, except that a service it has never checked reports its
+// newest qualifying tag even when that tag is older than the cutoff.
+//
+// The window exists so a first run is not buried in every tag ever published.
+// But a service whose last release was eight days ago then reports nothing,
+// which reads as "up to date" when it is not -- and stays that way until
+// someone publishes again, which for a quiet project may be never.
+//
+// Only where a window can hide something. A moving tag is answered by
+// comparing digests and never consults the cutoff at all, so it already
+// always reports; this is for version tags alone.
+//
+// At most one, and only when the window found nothing: a service that is
+// genuinely current reports the tag it is already running, which the queue
+// recognises and ignores. That comparison lives there, where the version
+// knowledge is -- a second copy here would be one that could disagree.
+func AtLeastOne(svc Service, cutoff time.Time, reg Registry, found func(Finding)) error {
+	return since(svc, cutoff, true, reg, found)
+}
+
+func since(svc Service, cutoff time.Time, atLeastOne bool, reg Registry, found func(Finding)) error {
 	// A service following a stream has already chosen what it follows. The
 	// only question is whether that stream now points somewhere else, which
 	// is one request -- and listing the repository's other tags would only
@@ -143,6 +167,14 @@ func Since(svc Service, cutoff time.Time, reg Registry, found func(Finding)) err
 		return fmt.Errorf("listing tags for %s: %w", svc.Image, err)
 	}
 
+	// The newest qualifying tag, whatever its age, kept in case the cutoff
+	// discards everything. Tracked as it goes rather than by sorting
+	// afterwards, which would mean collecting first -- the thing this
+	// signature exists to avoid.
+	var newest Finding
+	var newestAt time.Time
+
+	var reported int
 	for _, t := range tags {
 		if !qualifies(t.Name, svc) {
 			continue
@@ -165,16 +197,28 @@ func Since(svc Service, cutoff time.Time, reg Registry, found func(Finding)) err
 			}
 		}
 
-		if !published.After(cutoff) {
-			continue
-		}
-		found(Finding{
+		f := Finding{
 			Service:   svc.Name,
 			Container: svc.Container,
 			Image:     svc.Image,
 			Tag:       t.Name,
 			Published: published,
-		})
+		}
+		if published.After(newestAt) {
+			newest, newestAt = f, published
+		}
+		if !published.After(cutoff) {
+			continue
+		}
+		reported++
+		found(f)
+	}
+
+	// Nothing was new enough, and this service has never been checked. Report
+	// the newest there is, so a first run says what exists rather than
+	// nothing.
+	if atLeastOne && reported == 0 && !newestAt.IsZero() {
+		found(newest)
 	}
 	return nil
 }

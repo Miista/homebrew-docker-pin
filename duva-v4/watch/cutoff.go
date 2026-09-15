@@ -77,6 +77,24 @@ type memory struct {
 	why string
 }
 
+// FirstCheck reports whether this service has never been checked completely.
+//
+// Not the same as "the state file is new": a service added to the compose file
+// today is on its first check whatever else has been recorded, and it is the
+// one this matters for -- it has no history, so the window is the only thing
+// standing between it and being reported at all.
+//
+// An override is not a first check. DUVA_WATCH_SINCE asks a question against
+// a window someone chose, and answering a different one would make the flag
+// mean something other than what it says.
+func (m *memory) FirstCheck(service string) bool {
+	if m.override {
+		return false
+	}
+	s, ok := m.services[service]
+	return !ok || s.Cutoff.IsZero()
+}
+
 // Cutoff is how far back to look for one service.
 func (m *memory) Cutoff(service string) time.Time {
 	if !m.override {

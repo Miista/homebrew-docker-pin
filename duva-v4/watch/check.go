@@ -57,7 +57,14 @@ func checkAll(
 		began := time.Now()
 
 		before := found
-		err := watch.Since(svc, mem.Cutoff(svc.Name), reg, func(f watch.Finding) {
+		// A service never checked before reports its newest tag even if that
+		// tag predates the window, so a first run says what exists rather
+		// than nothing. Every check after this one uses the window alone.
+		look := watch.Since
+		if mem.FirstCheck(svc.Name) {
+			look = watch.AtLeastOne
+		}
+		err := look(svc, mem.Cutoff(svc.Name), reg, func(f watch.Finding) {
 			found++
 			// Printed as it is discovered, not after the service finishes.
 			// Info, not warn: a published tag is the ordinary output of this

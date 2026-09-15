@@ -302,3 +302,34 @@ func TestProjectFileRefusesToEscape(t *testing.T) {
 		}
 	}
 }
+
+// A service with no recorded cutoff is on its first check, and one that has
+// been checked is not.
+func TestFirstCheckIsOnlyForAServiceWithNoHistory(t *testing.T) {
+	m := &memory{services: map[string]serviceState{
+		"checked": {Cutoff: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)},
+		// Recorded, but never completed a check: its cutoff is zero, so it is
+		// still owed a first one.
+		"held": {Pending: map[string]watch.Finding{"1.0.0": {}}},
+	}}
+
+	if m.FirstCheck("checked") {
+		t.Error("a service with a recorded cutoff was called a first check")
+	}
+	if !m.FirstCheck("held") {
+		t.Error("a service with findings but no completed check is still owed a first one")
+	}
+	if !m.FirstCheck("brand-new") {
+		t.Error("a service never seen before is a first check")
+	}
+}
+
+// An override is not a first check: DUVA_WATCH_SINCE asks a question against a
+// window someone chose, and widening it would make the flag mean something
+// else.
+func TestAnOverrideIsNeverAFirstCheck(t *testing.T) {
+	m := &memory{services: map[string]serviceState{}, override: true}
+	if m.FirstCheck("anything") {
+		t.Error("DUVA_WATCH_SINCE was treated as a first check, so it would report more than it was asked for")
+	}
+}
