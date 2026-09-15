@@ -1,6 +1,7 @@
 package queue
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -321,5 +322,62 @@ func TestADigestMoveAlwaysTakesTheLatest(t *testing.T) {
 
 	if e, _ := q.Get("app"); e.To != "sha256:bbb" {
 		t.Errorf("queued %s, want what the tag points at now", e.To)
+	}
+}
+
+// permutations returns every ordering of xs, Haskell's Data.List.permutations.
+//
+// Written out rather than three nested loops, so a case with four candidates
+// needs no new helper.
+func permutations(xs []string) [][]string {
+	if len(xs) <= 1 {
+		return [][]string{append([]string(nil), xs...)}
+	}
+	var out [][]string
+	for i := range xs {
+		rest := make([]string, 0, len(xs)-1)
+		rest = append(rest, xs[:i]...)
+		rest = append(rest, xs[i+1:]...)
+		for _, p := range permutations(rest) {
+			out = append(out, append([]string{xs[i]}, p...))
+		}
+	}
+	return out
+}
+
+// Whatever order candidates arrive in, the queue ends up holding the same one.
+//
+// The property, stated as a property: the watcher reports every tag published
+// since the cutoff in whatever order the registry listed them, so the queue's
+// answer must not depend on that order. Every permutation, not a few chosen
+// ones -- the test this replaces fed 1.1.0 then 1.2.0, ascending, where
+// "keeps the newest" and "keeps the last to arrive" give the same answer and
+// the bug was invisible.
+func TestTheOutcomeIsTheSameWhateverTheOrder(t *testing.T) {
+	tags := []string{"2.1.0", "2.3.0", "2.2.0"}
+	const want = "2.3.0"
+
+	perms := permutations(tags)
+	if len(perms) != 6 {
+		t.Fatalf("got %d permutations of 3, want 6", len(perms))
+	}
+
+	for _, order := range perms {
+		t.Run(strings.Join(order, ","), func(t *testing.T) {
+			q := NewPending()
+			for _, to := range order {
+				q.Put(entry("app", "2.0.0", to), now)
+			}
+			if q.Len() != 1 {
+				t.Fatalf("got %d entries, want one -- candidates supersede rather than queue beside", q.Len())
+			}
+			got, ok := q.Get("app")
+			if !ok {
+				t.Fatal("nothing queued")
+			}
+			if got.To != want {
+				t.Errorf("queued %s, want %s whatever the arrival order", got.To, want)
+			}
+		})
 	}
 }
