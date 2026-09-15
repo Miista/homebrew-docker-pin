@@ -46,8 +46,29 @@ var version = "dev"
 // addresses it.
 const addr = ":8080"
 
-// composeDir is the contract with whoever runs this.
-var composeDir = "/compose"
+// composeDir is where the compose project is mounted.
+//
+// /compose by default, and settable so it can be mounted at the SAME path it
+// has on the host. That matters for anything that hands a path back to the
+// daemon: a relative bind in the compose file resolves against this directory,
+// and the daemon then has to find that path on the host. With the two
+// differing there is no single answer -- a bind needs the host's path, an
+// `include:` needs this container's -- and with them equal both are the same
+// string.
+var composeDir = composeDirFromEnv()
+
+// composeDirFromEnv reads DUVA_UPDATE_COMPOSE_DIR, or /compose.
+//
+// Only this stage needs it. The watcher and the queue read the compose file
+// and nothing else, so where it is mounted is their own business; this one
+// replaces containers, and a container's binds are paths the daemon resolves
+// on the host.
+func composeDirFromEnv() string {
+	if d := os.Getenv("DUVA_UPDATE_COMPOSE_DIR"); d != "" {
+		return d
+	}
+	return "/compose"
+}
 
 func main() {
 	if len(os.Args) > 1 {
