@@ -34,6 +34,14 @@ type applier struct {
 	// asking to watch never waits behind the work it is asking about.
 	watchers sync.Mutex
 	running  map[string]*live
+
+	// onFailure is told when an apply did not finish. Nil means nobody is.
+	//
+	// Only the failure: a successful apply is the policy working as
+	// configured, and announcing every routine patch is how a topic becomes
+	// something nobody reads. A failed one may have left the container down
+	// and the repository dirty, which is nobody's business but a person's.
+	onFailure func(decide.Entry, string)
 }
 
 // live is one apply in flight, and everyone currently watching it.
@@ -99,6 +107,7 @@ func (a *applier) apply(e decide.Entry, l *live) {
 	if err != nil {
 		a.log.Error().Msgf("%s: the actor would not take it — %v", e.Service, err)
 		l.write(actor.Terminal(actor.Failed, err.Error()))
+		a.failed(e, err.Error())
 		return
 	}
 
@@ -107,10 +116,19 @@ func (a *applier) apply(e decide.Entry, l *live) {
 	case err != nil:
 		a.log.Error().Msgf("%s: lost the actor's stream — %v", e.Service, err)
 		l.write(actor.Terminal(actor.Failed, err.Error()))
+		a.failed(e, err.Error())
 	case status == actor.Completed:
 		a.log.Info().Msgf("%s: %s -> %s applied", e.Service, e.From, e.To)
 	default:
 		a.log.Error().Msgf("%s: failed — %s", e.Service, reason)
+		a.failed(e, reason)
+	}
+}
+
+// failed tells whoever is listening that an apply did not finish.
+func (a *applier) failed(e decide.Entry, reason string) {
+	if a.onFailure != nil {
+		a.onFailure(e, reason)
 	}
 }
 

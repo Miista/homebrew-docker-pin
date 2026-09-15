@@ -15,11 +15,11 @@ import (
 func TestTheMessageIsTheServiceAndTheChange(t *testing.T) {
 	title, body := message("optiplex", decide.Entry{
 		Service: "whoami", From: "v1.10.4", To: "v1.12.0", Kind: ociversion.KindMinor,
-	})
+	}, queued, "")
 	if title != "whoami on optiplex" {
 		t.Errorf("title = %q, want the service and the host", title)
 	}
-	if body != "v1.10.4 → v1.12.0 (minor)" {
+	if body != "v1.10.4 → v1.12.0 (minor) — waiting for approval" {
 		t.Errorf("body = %q, want the version jump and the kind", body)
 	}
 }
@@ -30,15 +30,15 @@ func TestADigestMoveSaysWhatMoved(t *testing.T) {
 	_, body := message("optiplex", decide.Entry{
 		Service: "wiki", Tag: "latest",
 		Digest: "sha256:55d780f84cb69d6b13ae4783b660e3fda733fd25cc7f2a4f203798949a500227",
-	})
-	if body != "latest moved (sha256:55d780f84cb6)" {
+	}, queued, "")
+	if body != "latest moved (sha256:55d780f84cb6) — waiting for approval" {
 		t.Errorf("body = %q, want the tag and a short digest", body)
 	}
 }
 
 // A decider with no host still says something useful.
 func TestAMissingHostLeavesTheTitleAsTheService(t *testing.T) {
-	title, _ := message("", decide.Entry{Service: "whoami", From: "1.0", To: "1.1", Kind: ociversion.KindMinor})
+	title, _ := message("", decide.Entry{Service: "whoami", From: "1.0", To: "1.1", Kind: ociversion.KindMinor}, queued, "")
 	if title != "whoami" {
 		t.Errorf("title = %q, want just the service", title)
 	}
@@ -89,7 +89,7 @@ func TestAnAnnouncementCarriesTheTopicTitleAndButton(t *testing.T) {
 	}
 	n.announce("optiplex", decide.Entry{
 		Service: "whoami", From: "v1.10.4", To: "v1.12.0", Kind: ociversion.KindMinor,
-	})
+	}, queued, "")
 
 	if gotPath != "/duva" {
 		t.Errorf("path = %q, want the topic", gotPath)
@@ -108,7 +108,7 @@ func TestAnAnnouncementCarriesTheTopicTitleAndButton(t *testing.T) {
 	if gotActions != `view, Open duva, "http://192.0.2.10:8097/", clear=true` {
 		t.Errorf("Actions = %q", gotActions)
 	}
-	if gotBody != "v1.10.4 → v1.12.0 (minor)" {
+	if gotBody != "v1.10.4 → v1.12.0 (minor) — waiting for approval" {
 		t.Errorf("body = %q", gotBody)
 	}
 }
@@ -122,7 +122,7 @@ func TestAnUnreachableNotifierIsNotFatal(t *testing.T) {
 	if n == nil {
 		t.Fatal("no notifier was built")
 	}
-	n.announce("optiplex", decide.Entry{Service: "whoami", From: "1.0", To: "1.1", Kind: ociversion.KindMinor})
+	n.announce("optiplex", decide.Entry{Service: "whoami", From: "1.0", To: "1.1", Kind: ociversion.KindMinor}, queued, "")
 	// Reaching here without a panic is the assertion.
 }
 
@@ -133,5 +133,64 @@ func TestAViewActionQuotesTheURL(t *testing.T) {
 	want := `view, Open duva, "https://duva.example.com/?a=1,b=2", clear=true`
 	if got != want {
 		t.Errorf("viewAction = %q, want %q", got, want)
+	}
+}
+
+// A failed auto-apply reads as one, and carries the actor's reason.
+//
+// This is the case worth interrupting someone: policy changed a host and did
+// not finish, so the container may be down and the repository dirty.
+func TestAFailedAutoApplySaysSoAndCarriesTheReason(t *testing.T) {
+	title, body := message("optiplex", decide.Entry{
+		Service: "sonarr", From: "4.0.15", To: "4.0.16", Kind: ociversion.KindPatch,
+	}, failedApply, "recreating sonarr: exit status 1")
+
+	if title != "sonarr on optiplex" {
+		t.Errorf("title = %q", title)
+	}
+	want := "4.0.15 → 4.0.16 (patch) — auto-apply failed\nrecreating sonarr: exit status 1"
+	if body != want {
+		t.Errorf("body = %q, want %q", body, want)
+	}
+}
+
+// A failure with no reason still says it failed rather than rendering a
+// dangling blank line.
+func TestAFailureWithoutAReasonIsStillReadable(t *testing.T) {
+	_, body := message("optiplex", decide.Entry{
+		Service: "sonarr", From: "4.0.15", To: "4.0.16", Kind: ociversion.KindPatch,
+	}, failedApply, "")
+	if body != "4.0.15 → 4.0.16 (patch) — auto-apply failed" {
+		t.Errorf("body = %q", body)
+	}
+}
+
+// The two are tellable apart at a glance, and only the failure interrupts.
+func TestAFailureIsTaggedAndLoudWhileWaitingIsNot(t *testing.T) {
+	var gotTags, gotPriority string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotTags, gotPriority = r.Header.Get("Tags"), r.Header.Get("Priority")
+	}))
+	defer srv.Close()
+
+	os.Setenv("DECIDER_NOTIF_NTFY_ENDPOINT", srv.URL)
+	defer os.Unsetenv("DECIDER_NOTIF_NTFY_ENDPOINT")
+	t.Setenv("DECIDER_NOTIF_NTFY_TOPIC", "duva")
+	n := newNtfy(zerolog.Nop())
+
+	e := decide.Entry{Service: "sonarr", From: "4.0.15", To: "4.0.16", Kind: ociversion.KindPatch}
+
+	n.announce("optiplex", e, failedApply, "boom")
+	if gotTags != "warning" || gotPriority != "high" {
+		t.Errorf("failure: Tags = %q Priority = %q, want warning and high", gotTags, gotPriority)
+	}
+
+	n.announce("optiplex", e, queued, "")
+	if gotTags != "pause_button" {
+		t.Errorf("queued: Tags = %q, want pause_button", gotTags)
+	}
+	// Waiting for approval is not urgent -- it is waiting.
+	if gotPriority != "" {
+		t.Errorf("queued: Priority = %q, want none", gotPriority)
 	}
 }

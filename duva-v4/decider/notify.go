@@ -68,9 +68,27 @@ func newNtfy(log zerolog.Logger) *ntfy {
 	return n
 }
 
+// What a notification is about.
+//
+// Only two of the three things that can happen are announced. A successful
+// auto-apply is not: it is the policy working exactly as configured, and a
+// notification per routine patch is how a topic becomes something nobody
+// reads. The two that are announced both want a person: one to decide, one to
+// look at a host that may be left mid-change.
+type kind int
+
+const (
+	// queued: waiting for approval.
+	queued kind = iota
+	// failedApply: policy said apply, and it did not finish.
+	failedApply
+)
+
 // announce publishes one entry. Never fatal, never blocking the decision.
-func (n *ntfy) announce(host string, e decide.Entry) {
-	title, body := message(host, e)
+//
+// reason is the failure's, and empty for anything else.
+func (n *ntfy) announce(host string, e decide.Entry, k kind, reason string) {
+	title, body := message(host, e, k, reason)
 
 	req, err := http.NewRequest(http.MethodPost, n.endpoint+"/"+n.topic, bytes.NewBufferString(body))
 	if err != nil {
@@ -80,6 +98,18 @@ func (n *ntfy) announce(host string, e decide.Entry) {
 	req.Header.Set("Title", title)
 	if n.token != "" {
 		req.Header.Set("Authorization", "Bearer "+n.token)
+	}
+	// A glance at a list of notifications should separate the two without
+	// reading them.
+	switch k {
+	case failedApply:
+		req.Header.Set("Tags", "warning")
+		// The one case worth interrupting someone: policy changed a host and
+		// did not finish, so the container may be down and the repository
+		// dirty. Waiting for approval is not urgent -- it is waiting.
+		req.Header.Set("Priority", "high")
+	default:
+		req.Header.Set("Tags", "pause_button")
 	}
 	if n.clickURL != "" {
 		// A button, not Click. Click makes the whole notification a link, so
@@ -116,21 +146,39 @@ func viewAction(label, url string) string {
 // The title is what identifies the thing, because ntfy groups by it and two
 // services of the same name on different hosts must not collapse together.
 // The body is the change.
-func message(host string, e decide.Entry) (title, body string) {
+func message(host string, e decide.Entry, k kind, reason string) (title, body string) {
 	title = e.Service
 	if host != "" {
 		title = fmt.Sprintf("%s on %s", e.Service, host)
 	}
 
+	body = change(e)
+	switch k {
+	case failedApply:
+		body += " — auto-apply failed"
+		// The actor's own words. Why an apply failed is its business, and a
+		// sentence composed here would be one this notifier had to keep in
+		// agreement with an actor it knows nothing about.
+		if reason != "" {
+			body += "\n" + reason
+		}
+	default:
+		body += " — waiting for approval"
+	}
+	return title, body
+}
+
+// change is the update itself, without what is being done about it.
+func change(e decide.Entry) string {
 	// A digest move has no version pair -- Kind is empty for exactly that
 	// reason -- so there is no "x to y" to write. What moved is the tag.
 	if e.Kind == "" {
 		if e.Digest != "" {
-			return title, fmt.Sprintf("%s moved (%s)", e.Tag, shortDigest(e.Digest))
+			return fmt.Sprintf("%s moved (%s)", e.Tag, shortDigest(e.Digest))
 		}
-		return title, fmt.Sprintf("%s moved", e.Tag)
+		return fmt.Sprintf("%s moved", e.Tag)
 	}
-	return title, fmt.Sprintf("%s → %s (%s)", e.From, e.To, e.Kind)
+	return fmt.Sprintf("%s → %s (%s)", e.From, e.To, e.Kind)
 }
 
 // shortDigest is the first 12 hex characters, the length docker itself shows.

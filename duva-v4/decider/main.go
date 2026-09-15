@@ -127,13 +127,18 @@ func run(log zerolog.Logger) error {
 
 	queue := decide.NewPending()
 
-	var applier decide.Applier
+	// The concrete one, so a notifier can be attached to it below: the
+	// Applier interface deliberately says nothing about failures -- the
+	// handler does not need to know -- but the thing being notified does.
+	var live *applier
+	var applying decide.Applier
 	if cfg.ActorURL != "" {
-		applier = newApplier(
+		live = newApplier(
 			&actor.Client{BaseURL: cfg.ActorURL, Token: cfg.ActorToken},
 			cfg.ApplyTimeout,
 			log,
 		)
+		applying = live
 		log.Info().Msgf("applying through the actor at %s", cfg.ActorURL)
 	} else {
 		// Legitimate, not broken: a decider with no actor queues everything
@@ -145,21 +150,29 @@ func run(log zerolog.Logger) error {
 	handler := &decide.Handler{
 		Lookup:  decide.Lookup{Root: root},
 		Queue:   queue,
-		Applier: applier,
+		Applier: applying,
 		Log:     log,
 	}
 	// Nil when no endpoint is configured, and then nobody is told. Left as a
 	// nil Announce rather than a no-op function, so the handler's own guard
 	// is what decides and there is one answer to "is anyone notified".
 	if n := newNtfy(log); n != nil {
-		handler.Announce = func(e decide.Entry) { n.announce(cfg.Host, e) }
+		handler.Announce = func(e decide.Entry) { n.announce(cfg.Host, e, queued, "") }
+		// A successful auto-apply says nothing: it is the policy working as
+		// configured. A failed one may have left the container down and the
+		// repository dirty, which wants a person.
+		if live != nil {
+			live.onFailure = func(e decide.Entry, reason string) {
+				n.announce(cfg.Host, e, failedApply, reason)
+			}
+		}
 	}
 
 	srv := &http.Server{
 		Addr: addr,
 		Handler: (&decide.Server{
 			Queue:   queue,
-			Applier: applier,
+			Applier: applying,
 			Host:    cfg.Host,
 			Version: version,
 			Token:   cfg.Token,

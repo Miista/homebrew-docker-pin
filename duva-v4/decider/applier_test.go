@@ -344,3 +344,60 @@ func TestSplitLinesDropsTheTrailingEmpty(t *testing.T) {
 		t.Errorf("got %v, want one line", got)
 	}
 }
+
+// A successful auto-apply tells nobody.
+//
+// That is the policy working exactly as configured, and a notification per
+// routine patch is how a topic becomes something nobody reads. This is the
+// assertion that keeps it that way.
+func TestASuccessfulApplyNotifiesNobody(t *testing.T) {
+	s := &stubActor{lines: []string{"pulling", actor.Terminal(actor.Completed, "")}}
+	a := newTestApplier(t, s)
+
+	var told []string
+	a.onFailure = func(e decide.Entry, reason string) { told = append(told, e.Service) }
+
+	if err := a.Start(entryFor("app")); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	waitIdle(t, a)
+
+	if len(told) != 0 {
+		t.Errorf("notified %v about an apply that succeeded", told)
+	}
+}
+
+// A failed one does, and carries the actor's reason rather than a sentence
+// composed here.
+func TestAFailedApplyNotifiesWithTheActorsReason(t *testing.T) {
+	s := &stubActor{lines: []string{"pulling", actor.Terminal(actor.Failed, "recreating app: exit status 1")}}
+	a := newTestApplier(t, s)
+
+	var gotService, gotReason string
+	a.onFailure = func(e decide.Entry, reason string) { gotService, gotReason = e.Service, reason }
+
+	if err := a.Start(entryFor("app")); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	waitIdle(t, a)
+
+	if gotService != "app" {
+		t.Errorf("notified about %q, want app", gotService)
+	}
+	if gotReason != "recreating app: exit status 1" {
+		t.Errorf("reason = %q, want the actor's own words", gotReason)
+	}
+}
+
+// An applier with nobody listening still applies.
+func TestNoFailureListenerIsNotFatal(t *testing.T) {
+	s := &stubActor{lines: []string{actor.Terminal(actor.Failed, "boom")}}
+	a := newTestApplier(t, s)
+	a.onFailure = nil
+
+	if err := a.Start(entryFor("app")); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	waitIdle(t, a)
+	// Reaching here without a panic is the assertion.
+}
