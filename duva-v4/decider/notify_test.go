@@ -181,13 +181,13 @@ func TestAFailureIsTaggedAndLoudWhileWaitingIsNot(t *testing.T) {
 	e := decide.Entry{Service: "sonarr", From: "4.0.15", To: "4.0.16", Kind: ociversion.KindPatch}
 
 	n.announce("optiplex", e, failedApply, "boom")
-	if gotTags != "warning" || gotPriority != "high" {
-		t.Errorf("failure: Tags = %q Priority = %q, want warning and high", gotTags, gotPriority)
+	if gotTags != "rotating_light" || gotPriority != "high" {
+		t.Errorf("failure: Tags = %q Priority = %q, want rotating_light and high", gotTags, gotPriority)
 	}
 
 	n.announce("optiplex", e, queued, "")
-	if gotTags != "pause_button" {
-		t.Errorf("queued: Tags = %q, want pause_button", gotTags)
+	if gotTags != "package" {
+		t.Errorf("queued: Tags = %q, want package", gotTags)
 	}
 	// Waiting for approval is not urgent -- it is waiting.
 	if gotPriority != "" {

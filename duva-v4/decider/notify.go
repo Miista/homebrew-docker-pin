@@ -103,13 +103,16 @@ func (n *ntfy) announce(host string, e decide.Entry, k kind, reason string) {
 	// reading them.
 	switch k {
 	case failedApply:
-		req.Header.Set("Tags", "warning")
+		// rotating_light is 🚨. ntfy maps tags to emoji by name, so these are
+		// the shortcodes, not the characters.
+		req.Header.Set("Tags", "rotating_light")
 		// The one case worth interrupting someone: policy changed a host and
 		// did not finish, so the container may be down and the repository
 		// dirty. Waiting for approval is not urgent -- it is waiting.
 		req.Header.Set("Priority", "high")
 	default:
-		req.Header.Set("Tags", "pause_button")
+		// package is 📦, the same icon diun uses for an available update.
+		req.Header.Set("Tags", "package")
 	}
 	if n.clickURL != "" {
 		// A button, not Click. Click makes the whole notification a link, so
