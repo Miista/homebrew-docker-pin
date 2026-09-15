@@ -21,6 +21,14 @@ type Handler struct {
 	// is ever applied without being approved -- which is a legitimate way to
 	// run a decider, not a broken one.
 	Applier Applier
+	// Announce tells someone a candidate is waiting. Nil means nobody is
+	// told, which is how a decider runs with no notifier configured.
+	//
+	// It is called only where enqueue reports the entry was new, so a
+	// protocol that re-notifies every run does not notify a person every
+	// run. Errors are the announcer's to log: failing to tell someone is
+	// not failing to queue, and must not change what the detector is told.
+	Announce func(Entry)
 	// Now is the clock, injected so a caller can pin it.
 	Now func() time.Time
 	// Log records what was decided. The zero value discards, so a handler
@@ -98,8 +106,17 @@ func (h *Handler) Handle(n Notice) Result {
 }
 
 // enqueue records an entry, reporting whether it was new.
+//
+// New is also when anyone is told. Put already distinguishes a fresh candidate
+// from the same one arriving again -- which it does for exactly this reason --
+// so the announcement rides on that rather than on a second notion of newness
+// that could disagree with the queue.
 func (h *Handler) enqueue(e Entry) bool {
-	return h.Queue.Put(e, h.now())
+	added := h.Queue.Put(e, h.now())
+	if added && h.Announce != nil {
+		h.Announce(e)
+	}
+	return added
 }
 
 func (h *Handler) now() time.Time {

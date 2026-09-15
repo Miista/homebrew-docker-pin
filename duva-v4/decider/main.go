@@ -148,6 +148,12 @@ func run(log zerolog.Logger) error {
 		Applier: applier,
 		Log:     log,
 	}
+	// Nil when no endpoint is configured, and then nobody is told. Left as a
+	// nil Announce rather than a no-op function, so the handler's own guard
+	// is what decides and there is one answer to "is anyone notified".
+	if n := newNtfy(log); n != nil {
+		handler.Announce = func(e decide.Entry) { n.announce(cfg.Host, e) }
+	}
 
 	srv := &http.Server{
 		Addr: addr,

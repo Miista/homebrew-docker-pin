@@ -312,3 +312,41 @@ func TestHandleWithoutALog(t *testing.T) {
 	h := &Handler{Lookup: project(t, pinnedProject), Queue: NewPending()}
 	h.Handle(Notice{Container: "ghost"})
 }
+
+// Someone is told once, when the candidate is new.
+//
+// The detector re-notifies every run until something is done, so the naive
+// wiring would buzz a phone daily for one queued update. Put already tells a
+// fresh candidate from a repeat -- it exists for that -- so the announcement
+// rides on it rather than on a second notion of newness.
+func TestOnlyANewCandidateIsAnnounced(t *testing.T) {
+	h, _ := handlerOver(t, pinnedProject, &fakeApplier{})
+	var told []string
+	h.Announce = func(e Entry) { told = append(told, e.To) }
+
+	n := Notice{Container: "my-app", Image: "example.com/app:1.1.0", Digest: "sha256:new"}
+	h.Handle(n)
+	h.Handle(n) // the same candidate again, as the detector will send it
+	h.Handle(n)
+
+	if len(told) != 1 {
+		t.Fatalf("announced %v, want exactly one for one candidate", told)
+	}
+
+	// A superseding candidate is news again.
+	h.Handle(Notice{Container: "my-app", Image: "example.com/app:1.2.0", Digest: "sha256:newer"})
+	if len(told) != 2 {
+		t.Errorf("announced %v, want a second for a different candidate", told)
+	}
+}
+
+// A decider with nobody to tell still queues.
+func TestNoAnnouncerStillQueues(t *testing.T) {
+	h, q := handlerOver(t, pinnedProject, &fakeApplier{})
+	h.Announce = nil
+
+	h.Handle(Notice{Container: "my-app", Image: "example.com/app:1.1.0", Digest: "sha256:new"})
+	if _, ok := q.Get("app"); !ok {
+		t.Error("nothing was queued when no announcer was configured")
+	}
+}
