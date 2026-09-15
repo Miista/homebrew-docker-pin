@@ -45,7 +45,7 @@
           text-transform: uppercase; color: var(--fg); }
   .host { font-size: 1.1rem; font-weight: 400; color: var(--muted);
           letter-spacing: -.01em; }
-  .count { margin-left: auto; font-size: .78rem; color: var(--faint);
+  .count { font-size: .78rem; color: var(--faint); font-weight: 400;
            font-variant-numeric: tabular-nums; }
 
   /* ---------- result banner ---------- */
@@ -210,7 +210,6 @@
   <div class="top">
     <img class="logo" src="/logo.png" alt="" width="24" height="24">
     <span class="mark">duva</span>
-    <span class="count" v-if="rows.length">{{ rows.length }} in queue</span>
   </div>
 
   <!-- Two kinds of blocked, and what a person should do about them differs.
@@ -239,7 +238,7 @@
   </div>
 
   <template v-if="rows.length">
-  <h1>Queue</h1>
+  <h1>Queue <span class="count">({{ rows.length }})</span></h1>
   <div class="head" aria-hidden="true">
     <span>Service</span><span>Change</span><span>Kind</span><span></span>
   </div>
