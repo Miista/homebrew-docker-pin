@@ -571,3 +571,55 @@ func TestARejectableMessageIsRefusedBeforeAnythingHappens(t *testing.T) {
 		t.Errorf("work started anyway: pulled=%v recreated=%v", w.pulled, w.recreated)
 	}
 }
+
+// A built image's digest is local to this daemon, so pinning one writes a
+// reference no other host can pull -- into a file that is committed and
+// shared. `docker pin --dry-run` refuses these; nothing in v4 did until now.
+func TestABuiltServiceIsRefused(t *testing.T) {
+	const builtPin = `services:
+  app:
+    build: ./app
+    image: example.com/app:1.0.0@sha256:olddigest
+`
+	w := newWorld(t, builtPin)
+	req := versionRequest()
+	req.File = w.file
+	step, _ := steps()
+
+	status, reason := transaction(req, step, w.docker(), w.git(), false, "")
+
+	if status != actor.Failed {
+		t.Errorf("status = %q, want failed", status)
+	}
+	if !strings.Contains(reason, "built locally") {
+		t.Errorf("reason = %q, want it to say the image is built locally", reason)
+	}
+	if len(w.pulled) != 0 || len(w.recreated) != 0 {
+		t.Errorf("work started anyway: pulled=%v recreated=%v", w.pulled, w.recreated)
+	}
+}
+
+// And an unexpanded variable, which the detector and decider already refuse --
+// reaching here means something upstream changed.
+func TestAnUnexpandedVariableIsRefused(t *testing.T) {
+	const varPin = `services:
+  app:
+    image: example.com/app:${TAG}@sha256:olddigest
+`
+	w := newWorld(t, varPin)
+	req := versionRequest()
+	req.File = w.file
+	step, _ := steps()
+
+	status, reason := transaction(req, step, w.docker(), w.git(), false, "")
+
+	if status != actor.Failed {
+		t.Errorf("status = %q, want failed", status)
+	}
+	if !strings.Contains(reason, "unexpanded variable") {
+		t.Errorf("reason = %q, want it to name the variable", reason)
+	}
+	if len(w.pulled) != 0 {
+		t.Errorf("pulled %v; nothing should have been attempted", w.pulled)
+	}
+}

@@ -373,8 +373,35 @@ func precheck(req actor.Request, d Docker, tmpl string) error {
 	// Can this file be rewritten? The preflight checks /compose is writable;
 	// this checks *this* file, which can be read-only, missing, or shaped in
 	// a way the rewrite does not recognise.
-	if _, err := compose.RawImage(req.File, req.Service); err != nil {
+	raw, err := compose.RawImage(req.File, req.Service)
+	if err != nil {
 		return fmt.Errorf("reading %s from %s: %w", req.Service, req.File, err)
+	}
+
+	// The same three the `docker pin --dry-run` path refuses, because they
+	// are the same write and fail the same way.
+	//
+	// A built image's digest is local to this daemon -- no registry serves it
+	// -- so pinning one writes a reference no other host can pull, into a file
+	// that is committed and shared. Nothing upstream filters this: the
+	// detector and the decider both skip unexpanded variables, but neither
+	// looks at `build:`, so a service carrying both `build:` and a pinned
+	// `image:` reaches here.
+	if built, err := compose.IsBuilt(req.File, req.Service); err != nil {
+		return fmt.Errorf("reading %s from %s: %w", req.Service, req.File, err)
+	} else if built {
+		return fmt.Errorf("%s is built locally (build:), so its digest is local to this "+
+			"daemon and no other host could pull what would be written", req.Service)
+	}
+
+	// Belt and braces: the detector and the decider both refuse these, so
+	// reaching here means something upstream changed. The pull would fail at
+	// the daemon with "invalid reference format" after this had already
+	// decided to act.
+	if compose.HasUnexpandedVariable(raw) {
+		return fmt.Errorf("%s has an unexpanded variable in its image (%s), "+
+			"which is read as written and is not a reference anything can pull",
+			req.Service, raw)
 	}
 
 	// Would the commit be accepted? The same question readiness asks, asked
