@@ -257,9 +257,9 @@
             :title="r.kind === 'unknown' ? 'duva could not compare these tags — not a semantic version' : ''">{{ r.kind }}</span>
 
       <button class="apply" v-if="canApply"
-              :disabled="!r.can_apply || !!steps[r.key] || busyHost(r.host)"
+              :disabled="!r.can_apply || running(r.key) || busyHost(r.host)"
               :title="buttonReason(r)"
-              @click="apply(r)">{{ steps[r.key] ? "Updating…" : "Update" }}</button>
+              @click="apply(r)">{{ running(r.key) ? "Updating…" : "Update" }}</button>
 
       <div class="steps" v-if="steps[r.key] || finished[r.key]">
         <div v-for="line in (steps[r.key] || [])">{{ line }}</div>
@@ -329,6 +329,18 @@ createApp({
         }
       },
 
+      // Is this row being applied right now?
+      //
+      // Having steps is not the same as running: the panel keeps its lines
+      // after the actor is done, because a finished apply is worth reading and
+      // a failed one is worth reading most of all. A terminal status is what
+      // ends the run, so that -- not the presence of lines -- is what the
+      // button and the host lock ask about. Without this the row said
+      // "Updating…" forever and, through busyHost, held the whole host greyed.
+      running(key) {
+        return !!this.steps[key] && !this.finished[key]
+      },
+
       // Is another service on this host already being applied?
       //
       // The decider serialises applies across every service it owns -- one
@@ -338,13 +350,13 @@ createApp({
       // nothing, for as long as the first apply takes. Greying the rest is
       // what makes the page agree with what the decider will actually do.
       busyHost(host) {
-        return this.rows.some(r => r.host === host && this.steps[r.key])
+        return this.rows.some(r => this.running(r.key) && r.host === host)
       },
 
       buttonReason(r) {
         if (r.stale) return r.host + " is not answering, so this cannot be confirmed or applied"
-        if (this.busyHost(r.host) && !this.steps[r.key]) {
-          const busy = this.rows.find(o => o.host === r.host && this.steps[o.key])
+        if (this.busyHost(r.host) && !this.running(r.key)) {
+          const busy = this.rows.find(o => this.running(o.key) && o.host === r.host)
           return r.host + " is applying " + (busy ? busy.service : "another service") +
                  "; one at a time per host"
         }
@@ -358,6 +370,10 @@ createApp({
 
       async apply(r) {
         this.result = {}
+        // Clear the previous run's outcome, or running() would see a stale
+        // terminal status and call the new apply finished before it began.
+        const { [r.key]: _done, ...others } = this.finished
+        this.finished = others
         this.steps = { ...this.steps, [r.key]: [] }
         const res = await (await fetch("/api/apply/" + r.key, { method: "POST" })).json()
         if (res.message) {
@@ -397,7 +413,17 @@ createApp({
           this.finished = { ...this.finished, [key]: "failed: lost the connection while it ran" }
         }
         // The queue has changed underneath: an applied entry has left it.
-        this.poll()
+        await this.poll()
+
+        // A succeeded apply has left the queue, so the poll above already took
+        // its row away. A failed one has not: the entry is still pending, and
+        // its panel is the only account of what went wrong, so that stays
+        // until the person does something about it.
+        if ((this.finished[key] || "").startsWith("failed")) return
+        const { [key]: _s, ...steps } = this.steps
+        const { [key]: _f, ...finished } = this.finished
+        this.steps = steps
+        this.finished = finished
       },
     }
   },

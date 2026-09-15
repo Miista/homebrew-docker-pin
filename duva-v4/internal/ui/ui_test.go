@@ -134,7 +134,7 @@ func TestOtherRowsOnABusyHostAreDisabled(t *testing.T) {
 	}
 	// Scoped to the host, not the whole page: two hosts apply independently,
 	// and one decider's lock says nothing about another's.
-	if !strings.Contains(body, "r.host === host && this.steps[r.key]") {
+	if !strings.Contains(body, "this.running(r.key) && r.host === host") {
 		t.Error("busyHost is not scoped to the host, so one host's apply would grey out every other host too")
 	}
 }
@@ -379,5 +379,44 @@ func TestStateSendsTheTagForADigestMove(t *testing.T) {
 	}
 	if first["kind"] != "digest" {
 		t.Errorf("kind = %v, want digest", first["kind"])
+	}
+}
+
+// A finished apply must stop reading as one in flight.
+//
+// The button and the host lock used to ask whether a row had any steps, and
+// nothing ever removed them -- so a completed apply left the row saying
+// "Updating…" forever and, through busyHost, held every button on that host
+// grey. A terminal status is what ends a run, so that is what they ask about.
+func TestAFinishedApplyIsNotStillRunning(t *testing.T) {
+	s := &Server{
+		Source:   &fakeSource{pending: []Hosted{entry("authelia", "4.39.20", "4.39.26", version.KindPatch)}},
+		Approver: &fakeApprover{},
+	}
+	_, body := get(t, s, "/")
+
+	if !strings.Contains(body, "return !!this.steps[key] && !this.finished[key]") {
+		t.Error("running() does not treat a terminal status as the end of a run")
+	}
+	// The stale tests it replaced, in every place that decided "in flight".
+	for _, stale := range []string{`!!steps[r.key] || busyHost`, `steps[r.key] ? "Updating…"`} {
+		if strings.Contains(body, stale) {
+			t.Errorf("a row still reads %q as running, so it stays stuck after it finishes", stale)
+		}
+	}
+}
+
+// A failed apply keeps its panel: the entry is still pending and that panel is
+// the only account of what went wrong. A succeeded one is cleared, because its
+// row has already left the queue.
+func TestOnlyASucceededApplyClearsItsPanel(t *testing.T) {
+	s := &Server{
+		Source:   &fakeSource{pending: []Hosted{entry("authelia", "4.39.20", "4.39.26", version.KindPatch)}},
+		Approver: &fakeApprover{},
+	}
+	_, body := get(t, s, "/")
+
+	if !strings.Contains(body, `if ((this.finished[key] || "").startsWith("failed")) return`) {
+		t.Error("a failed apply does not keep its panel, so its explanation is thrown away")
 	}
 }
