@@ -15,8 +15,26 @@ import (
 	"sort"
 )
 
-// suiteImage is the duva image every scenario in this package refers to.
+// suiteImage is the duva image the pin scenarios refer to. It is v3's, which
+// is also where the `docker pin` CLI lives.
 const suiteImage = "duva:integration"
+
+// The v4 pipeline: three images, because it is three processes. A scenario
+// declares whichever of them it is about -- the watcher alone is a legitimate
+// world, and so is a queue with nothing to apply with.
+const (
+	watchImage  = "duva-watch:integration"
+	queueImage  = "duva-queue:integration"
+	updateImage = "duva-update:integration"
+)
+
+// v4Images maps each image to the Dockerfile that builds it, so adding a
+// stage is one line rather than a fourth near-identical function.
+var v4Images = map[string]string{
+	watchImage:  filepath.Join("duva-v4", "watch", "Dockerfile"),
+	queueImage:  filepath.Join("duva-v4", "queue", "Dockerfile"),
+	updateImage: filepath.Join("duva-v4", "update", "Dockerfile"),
+}
 
 // receiverImage stands in for ntfy, for the scenarios that assert on what
 // duva announced.
@@ -80,6 +98,27 @@ func buildImage(root string) error {
 	return nil
 }
 
+// buildV4 builds the three pipeline images, from the shipped Dockerfiles for
+// the same reason buildImage does: a suite that builds its own artifact tests
+// one nobody ships.
+func buildV4(root string) error {
+	for image, dockerfile := range v4Images {
+		args := []string{"build", "-q", "--label", label + "=integration",
+			"-f", dockerfile, "-t", image}
+		if os.Getenv("GOCOVERDIR") != "" {
+			args = append(args, "--build-arg", "COVER=1")
+		}
+		args = append(args, root)
+
+		cmd := exec.Command("docker", args...)
+		cmd.Dir = root
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("building %s: %w\n%s", image, err, out)
+		}
+	}
+	return nil
+}
+
 func findRoot() (string, error) {
 	out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
 	if err != nil {
@@ -106,6 +145,9 @@ func Setup() (string, error) {
 	}
 	if err := buildReceiver(root); err != nil {
 		return "", fmt.Errorf("building %s: %w", receiverImage, err)
+	}
+	if err := buildV4(root); err != nil {
+		return "", err
 	}
 	// Generates the certificate beside the registry's compose file, then
 	// brings the registry up and waits for it to accept pushes.

@@ -15,6 +15,7 @@ package integration
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -121,6 +122,7 @@ func Up(t T, name string) *Scenario {
 	}
 
 	s.copyCerts()
+	s.writeEnv()
 	s.initRepo()
 
 	// The registry is shared and already up, but its contents are this
@@ -187,6 +189,35 @@ func (s *Scenario) Start(services ...string) {
 	}
 }
 
+// writeEnv writes the two values a fixture cannot know: who this host runs
+// as, and what its docker group is.
+//
+// Compose reads .env from the project directory on its own, so a fixture names
+// ${UID} and ${DOCKER_GID} and needs nothing else. They cannot be baked in:
+// the update stage must run as the user that owns the repository -- root would
+// leave root-owned files in it and lose the commit identity -- and the docker
+// group's id differs per host.
+func (s *Scenario) writeEnv() {
+	s.t.Helper()
+	// Asked of the daemon rather than of this host, because those differ and
+	// only one of them is the answer. Under Docker Desktop the socket on the
+	// host is a shim -- stat reports nothing useful -- while the daemon's own
+	// socket, which is the one a container mounts, is group 991. Reading the
+	// host's would silently produce 0, and the update stage would fail to
+	// open the socket after everything else had gone right.
+	out, err := exec.Command("docker", "run", "--rm",
+		"-v", "/var/run/docker.sock:/var/run/docker.sock",
+		"busybox", "stat", "-c", "%g", "/var/run/docker.sock").Output()
+	if err != nil {
+		s.t.Fatalf("asking the daemon for the docker socket's group: %v", err)
+	}
+	gid := strings.TrimSpace(string(out))
+	body := fmt.Sprintf("UID=%d\nGID=%d\nDOCKER_GID=%s\n", os.Getuid(), os.Getgid(), gid)
+	if err := os.WriteFile(filepath.Join(s.Dir, ".env"), []byte(body), 0o644); err != nil {
+		s.t.Fatalf("writing the scenario's .env: %v", err)
+	}
+}
+
 // duvaServices is every service in the fixture that runs duva.
 //
 // Asked of compose rather than assumed: a scenario decides what it is made
@@ -203,16 +234,18 @@ func (s *Scenario) duvaServices() []string {
 		if !strings.HasPrefix(name, "duva") {
 			continue
 		}
-		// A hub checks nothing -- it has no schedule, no registry and no
-		// compose file -- so there is no check to wait for. Waiting on one
-		// would time out on a service that is working correctly.
-		if strings.Contains(name, "hub") {
+		// Only the stage that checks is waited for. A queue and an updater
+		// answer requests -- they have no schedule and no registry, so there
+		// is no check to wait for, and waiting on one would time out on a
+		// service that is working correctly. Same for a v3 hub.
+		if strings.Contains(name, "hub") ||
+			strings.Contains(name, "queue") || strings.Contains(name, "update") {
 			continue
 		}
 		duvas = append(duvas, name)
 	}
 	if len(duvas) == 0 {
-		s.t.Fatalf("the fixture for %s declares no duva service", s.Name)
+		s.t.Fatalf("the fixture for %s declares nothing that checks", s.Name)
 	}
 	return duvas
 }

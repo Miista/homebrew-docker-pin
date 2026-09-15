@@ -44,6 +44,13 @@ func trimmed(b []byte) string { return strings.TrimSpace(string(b)) }
 func (s *Scenario) initRepo() {
 	s.t.Helper()
 	s.git("init", "-q")
+	// Written into .git/config rather than passed per command, because that
+	// is what the update stage reads: it refuses to start against a
+	// repository with no identity, since the commit at the end of an apply
+	// would fail after a container had already been replaced. A real
+	// repository has one; one built only from `git -c` does not.
+	s.git("config", "user.name", "test")
+	s.git("config", "user.email", "test@localhost")
 	s.Commit("the scenario as it starts")
 }
 

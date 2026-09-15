@@ -1,0 +1,102 @@
+# The receiver that stands in for ntfy, shared by every scenario that asserts
+# on what was announced.
+include:
+  - common/ntfy.yml
+
+# The v4 pipeline, end to end: watch finds the tag, queue decides, update
+# applies it.
+#
+# A patch is available and duva.auto allows patches, so nothing waits for a
+# person: the queue hands it straight to update, which pulls, repins,
+# recreates and commits.
+#
+# The image carries no digest: the suite pins it with docker pin before any of
+# this runs, so the starting state is produced the same way a real stack's is.
+#
+# Every path is relative to this file, so the fixture needs no variables and
+# says the same thing wherever the repo lives.
+services:
+  app:
+    image: localhost:5555/app:1.0.0
+    # Required, not decoration: v4 indexes services by container_name and
+    # watches only the ones that have it, since that is the name it has to
+    # replace a container by.
+    container_name: app
+    labels:
+      duva.include: '^1\.0\.\d+$'
+      duva.auto: patch
+
+  # Stage one. Asks the registry what exists and posts findings to the queue.
+  # Holds no socket and no git: it only reads the compose file.
+  duva-watch:
+    image: duva-watch:integration
+    command: ["serve"]
+    environment:
+      DUVA_WATCH_HOST: integration
+      # serve is what ships. It checks once at startup, so restarting the
+      # container is what triggers a check; this schedule never fires.
+      DUVA_WATCH_SCHEDULE: "0 3 * * *"
+      DUVA_WATCH_WEBHOOK_URL: http://duva-queue:8080/v1/notify
+      # Debug, so a scenario that finds nothing says which service it skipped
+      # and why -- the difference between a failing test and a puzzle.
+      DUVA_WATCH_LOG_LEVEL: debug
+    volumes:
+      - .:/compose:ro
+      - ./watch-data:/data
+      # Only here because the suite's registry is self-signed.
+      - ./certs/cert.pem:/etc/ssl/certs/ca-certificates.crt:ro
+    extra_hosts:
+      # The image is localhost:5555/app, and that name has to mean the
+      # registry in two places: here, where the watcher lists tags over
+      # HTTPS, and on the host's daemon, where the pull happens. A real
+      # registry resolves the same everywhere, so neither this nor the
+      # certificate mount exists there.
+      - localhost:host-gateway
+    depends_on:
+      duva-queue:
+        condition: service_healthy
+
+  # Stage two. Decides what a finding means and either queues it for a person
+  # or hands it to update. Holds no socket either -- it reads the compose file
+  # and talks over the network.
+  duva-queue:
+    image: duva-queue:integration
+    environment:
+      DUVA_QUEUE_HOST: integration
+      DUVA_QUEUE_TOKEN: integration-token
+      DUVA_QUEUE_UPDATE_URL: http://duva-update:8080
+      DUVA_QUEUE_UPDATE_TOKEN: integration-token
+      # The receiver stands in for ntfy, so a test can assert on what was
+      # announced rather than on what a log line said.
+      DUVA_QUEUE_NTFY_ENDPOINT: http://ntfy:8080
+      DUVA_QUEUE_NTFY_TOPIC: duva
+    volumes:
+      - .:/compose:ro
+      # The queue survives its own restart, and a test reads it from here.
+      - ./queue-data:/data
+    depends_on:
+      - duva-update
+
+  # Stage three. The only one with any privilege: it pulls, rewrites the pin,
+  # replaces the container and commits.
+  duva-update:
+    image: duva-update:integration
+    # The user that owns the repository, and the docker group on this host.
+    # Written to .env by the harness, because a fixture cannot know either:
+    # running as root would leave root-owned files in /compose and lose the
+    # commit identity its .git/config carries, and the group's id differs per
+    # host. The update stage refuses to start otherwise, which is the whole
+    # point of its preflight.
+    user: "${UID}:${GID}"
+    group_add:
+      - "${DOCKER_GID}"
+    environment:
+      DUVA_UPDATE_TOKEN: integration-token
+      DUVA_UPDATE_COMMIT_TEMPLATE: "pin {{.Container}} to {{if eq .OldVersion .NewVersion}}{{.NewDigest}}{{else}}{{.NewVersion}}{{end}}"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Read-write, unlike the other two: rewriting the pin is its whole job.
+      - .:/compose
+      - ./certs/cert.pem:/etc/ssl/certs/ca-certificates.crt:ro
+    extra_hosts:
+      - localhost:host-gateway

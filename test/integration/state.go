@@ -152,7 +152,7 @@ func (s *Scenario) BindSource(container, dest string) string {
 // made these tests flaky.
 func (s *Scenario) Queued() []string {
 	s.t.Helper()
-	pending := s.state().Pending
+	pending := s.state()
 	names := make([]string, 0, len(pending))
 	for name := range pending {
 		names = append(names, name)
@@ -182,43 +182,42 @@ func (s *Scenario) Notifications() []string {
 	return sent
 }
 
-// Notified is the tag duva last announced for a service, from its state.
+// queueEntry is one entry as the queue writes it to /data/queue.json.
 //
-// A constrained service records the tag it announced; a moving tag records
-// the digest it is measured against. Both live under the same key, because
-// what a service "remembers" is whichever of the two applies to it.
-func (s *Scenario) Notified(service string) string {
-	s.t.Helper()
-	return s.state().Notified[service]
+// A subset of the real one: what a test asserts on, not everything the queue
+// records. The field names are the wire names, so a rename in the queue shows
+// up here as a test reading an empty string rather than as a compile error --
+// which is the reason Queued() asserts on more than presence.
+type queueEntry struct {
+	Service   string `json:"service"`
+	From      string `json:"from"`
+	To        string `json:"to"`
+	Tag       string `json:"tag"`
+	Digest    string `json:"digest"`
+	Kind      string `json:"kind"`
+	Why       string `json:"why"`
+	Auto      string `json:"auto"`
+	FirstSeen string `json:"first_seen"`
 }
 
-// Baseline is the digest duva measures a moving tag against.
-func (s *Scenario) Baseline(service string) string {
+// state is the queue, keyed by service.
+//
+// Read from the file the queue keeps rather than from its log: it is written
+// on every change and survives the process, so there is no window to guess
+// at. Reading output instead means deciding which run a line belonged to,
+// which is what made the v3 suite flaky.
+func (s *Scenario) state() map[string]queueEntry {
 	s.t.Helper()
-	return s.state().Baseline[service]
-}
-
-// duvaState is what duva writes to /data/duva.json.
-type duvaState struct {
-	Baseline map[string]string `json:"baseline"`
-	Notified map[string]string `json:"notified"`
-	Pending  map[string]struct {
-		Candidate string `json:"candidate"`
-		Why       string `json:"why"`
-		Bump      string `json:"bump"`
-		Auto      string `json:"auto"`
-	} `json:"pending"`
-}
-
-func (s *Scenario) state() duvaState {
-	s.t.Helper()
-	var st duvaState
-	raw, err := os.ReadFile(filepath.Join(s.Dir, "data", "duva.json"))
+	raw, err := os.ReadFile(filepath.Join(s.Dir, "queue-data", "queue.json"))
 	if err != nil {
-		return st // duva has recorded nothing yet
+		return map[string]queueEntry{} // nothing queued yet
 	}
+	var st map[string]queueEntry
 	if err := json.Unmarshal(raw, &st); err != nil {
-		s.t.Fatalf("reading duva's state: %v", err)
+		s.t.Fatalf("reading the queue: %v", err)
+	}
+	if st == nil {
+		st = map[string]queueEntry{}
 	}
 	return st
 }
@@ -230,14 +229,20 @@ func (s *Scenario) state() duvaState {
 // something should have been applied or ignored instead.
 func (s *Scenario) Pending(service string) PendingRow {
 	s.t.Helper()
-	row, ok := s.state().Pending[service]
+	row, ok := s.state()[service]
 	if !ok {
 		return PendingRow{}
 	}
+	// A digest move has no version pair, so what it is a candidate for is the
+	// digest it moved to.
+	candidate := row.To
+	if row.Kind == "" && row.Digest != "" {
+		candidate = row.Digest
+	}
 	return PendingRow{
-		Candidate: row.Candidate,
+		Candidate: candidate,
 		Why:       row.Why,
-		Bump:      row.Bump,
+		Bump:      row.Kind,
 		Auto:      row.Auto,
 	}
 }
