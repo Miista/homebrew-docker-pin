@@ -310,6 +310,26 @@ type Streamer interface {
 	Stream(key string, w http.ResponseWriter, r *http.Request) error
 }
 
+// shortImage drops the registry host from an image shown to a person.
+//
+// Every row carries one and almost every one is docker.io or ghcr.io, so the
+// prefix distinguishes nothing while costing the width that the repository
+// and the tag actually need. Docker Hub images are already written both ways
+// in this project -- deluan/navidrome and docker.io/happierdev/relay-server --
+// so stripping it also makes those agree.
+//
+// Only those two. A private registry is kept: registry.example.com/hemma-agent
+// is not the same thing as hemma-agent, and that is worth seeing. This is
+// display only; nothing pulls or pins from what comes back.
+func shortImage(image string) string {
+	for _, host := range []string{"docker.io/", "ghcr.io/"} {
+		if strings.HasPrefix(image, host) {
+			return strings.TrimPrefix(image, host)
+		}
+	}
+	return image
+}
+
 // toRow is the one place a Hosted becomes a row, shared by the template and
 // the JSON so the two cannot drift.
 func toRow(e Hosted) row {
@@ -317,7 +337,7 @@ func toRow(e Hosted) row {
 		Service:    e.Service,
 		Host:       e.Host,
 		Key:        Key(e.Host, e.Service),
-		Image:      e.Image,
+		Image:      shortImage(e.Image),
 		CurrentTag: e.From,
 		Candidate:  display(e.Entry),
 		Moved:      isDigestMove(e.Entry),

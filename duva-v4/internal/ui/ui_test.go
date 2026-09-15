@@ -420,3 +420,27 @@ func TestOnlyASucceededApplyClearsItsPanel(t *testing.T) {
 		t.Error("a failed apply does not keep its panel, so its explanation is thrown away")
 	}
 }
+
+// The registry host is dropped from an image shown to a person.
+//
+// Almost every image is docker.io or ghcr.io, so the prefix distinguishes
+// nothing while costing width the repository and tag need. A private registry
+// is kept: registry.example.com/hemma-agent is not hemma-agent.
+func TestTheRegistryHostIsStrippedFromWhatIsShown(t *testing.T) {
+	for _, c := range []struct{ in, want string }{
+		{"ghcr.io/linuxserver/radarr", "linuxserver/radarr"},
+		{"docker.io/happierdev/relay-server", "happierdev/relay-server"},
+		// Already short, and must not be mangled.
+		{"deluan/navidrome", "deluan/navidrome"},
+		// A private registry is the point of its own name.
+		{"registry.example.com/hemma-agent", "registry.example.com/hemma-agent"},
+		// Only a prefix. A mirror that carries the host mid-path is a
+		// different image, and cutting the middle out of it would name one
+		// that does not exist.
+		{"mirror.example.com/ghcr.io/linuxserver/radarr", "mirror.example.com/ghcr.io/linuxserver/radarr"},
+	} {
+		if got := shortImage(c.in); got != c.want {
+			t.Errorf("shortImage(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
