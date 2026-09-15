@@ -325,10 +325,11 @@ func TestADigestMoveAlwaysTakesTheLatest(t *testing.T) {
 	}
 }
 
-// permutations returns every ordering of xs, Haskell's Data.List.permutations.
+// permutations returns every ordering of xs.
 //
-// Written out rather than three nested loops, so a case with four candidates
-// needs no new helper.
+// Hand-written: Go has no equivalent, in slices, sort or anywhere else in the
+// standard library. Recursive rather than three nested loops, so a case with
+// four candidates needs no new helper.
 func permutations(xs []string) [][]string {
 	if len(xs) <= 1 {
 		return [][]string{append([]string(nil), xs...)}
