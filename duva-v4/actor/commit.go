@@ -25,16 +25,9 @@ import (
 // An env var would be a second place to say the same thing, and two places to
 // get it wrong.
 //
-// Its own mount rather than a file inside /compose: the template describes how
-// the actor behaves, not what the stack is, and keeping it separate means the
-// default works with nothing mounted at all.
-
-// commitTemplatePath is where a template is read from, if one is mounted.
-//
-// A variable rather than a constant so tests can point it at a file they
-// wrote; nothing else changes it, the same way composeDir and stateFile are
-// the contract everywhere but a test.
-var commitTemplatePath = "/etc/duva/commit-template"
+// ACTOR_COMMIT_TEMPLATE rather than a mounted file: it is one line, it is not
+// a secret, and it does not change without a restart, so it belongs beside
+// ACTOR_TOKEN and ACTOR_GIT_PUSH rather than being a mount to arrange.
 
 // defaultCommitTemplate is used when nothing is mounted -- which is the
 // common case, and should need no configuration.
@@ -102,21 +95,25 @@ func commitSubject(tmpl string, f commitFields) (string, error) {
 	return subject, nil
 }
 
-// loadCommitTemplate reads the mounted template, or returns the default.
+// loadCommitTemplate reads ACTOR_COMMIT_TEMPLATE, or returns the default.
 //
-// A missing file is the normal case rather than a problem: most stacks want
-// the default and mount nothing.
+// An environment variable rather than a mounted file, which is what v3 had.
+// It is one line, it is not a secret, and it does not change without a
+// restart -- so a file would be a mount to arrange and a second mechanism
+// beside ACTOR_TOKEN and ACTOR_GIT_PUSH, for no benefit. It also reads where
+// an operator looks for it: next to the rest of the service's configuration.
+//
+// Unset is the normal case rather than a problem: most stacks want the
+// default and configure nothing. Set-but-empty is an error, because someone
+// meant to say something and said nothing.
 func loadCommitTemplate() (string, error) {
-	raw, err := os.ReadFile(commitTemplatePath)
-	if os.IsNotExist(err) {
+	raw, ok := os.LookupEnv("ACTOR_COMMIT_TEMPLATE")
+	if !ok {
 		return defaultCommitTemplate, nil
 	}
-	if err != nil {
-		return "", fmt.Errorf("reading %s: %w", commitTemplatePath, err)
-	}
-	tmpl := strings.TrimSpace(string(raw))
+	tmpl := strings.TrimSpace(raw)
 	if tmpl == "" {
-		return "", fmt.Errorf("%s is empty", commitTemplatePath)
+		return "", fmt.Errorf("ACTOR_COMMIT_TEMPLATE is set but empty")
 	}
 	return tmpl, nil
 }

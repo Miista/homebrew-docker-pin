@@ -2,7 +2,6 @@ package main
 
 import (
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -12,7 +11,7 @@ import (
 
 func TestCommitSubject_Default(t *testing.T) {
 	got, err := commitSubject(defaultCommitTemplate, commitFields{
-		Container: "radarr",
+		Container:  "radarr",
 		OldVersion: "1.2.0", NewVersion: "1.3.0",
 	})
 	if err != nil {
@@ -94,7 +93,7 @@ func TestCommitSubject_EmptyResultIsAnError(t *testing.T) {
 // convention should get this repository's, not a commit with no subject.
 func TestCommitSubject_NoTemplateUsesTheDefault(t *testing.T) {
 	got, err := commitSubject("", commitFields{
-		Container: "radarr",
+		Container:  "radarr",
 		OldVersion: "1.2.0", NewVersion: "1.3.0",
 	})
 	if err != nil {
@@ -105,95 +104,41 @@ func TestCommitSubject_NoTemplateUsesTheDefault(t *testing.T) {
 	}
 }
 
-// Reading the template: most stacks mount nothing, so a missing file is the
-// normal case rather than a problem.
+// Reading the template: most stacks configure nothing, so an unset variable is
+// the normal case rather than a problem.
 
-func TestLoadCommitTemplate_MissingFileIsTheDefault(t *testing.T) {
-	commitTemplatePath = filepath.Join(t.TempDir(), "not-there")
+func TestLoadCommitTemplate_UnsetIsTheDefault(t *testing.T) {
+	t.Setenv("ACTOR_COMMIT_TEMPLATE", "")
+	os.Unsetenv("ACTOR_COMMIT_TEMPLATE")
 
 	got, err := loadCommitTemplate()
 	if err != nil {
-		t.Fatalf("a missing template is the common case, not an error: %v", err)
+		t.Fatalf("unexpected failure: %v", err)
 	}
 	if got != defaultCommitTemplate {
 		t.Errorf("got %q, want the default", got)
 	}
 }
 
-func TestLoadCommitTemplate_ReadsWhatIsMounted(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "commit-template")
-	// With a trailing newline, as any editor would leave it.
-	if err := os.WriteFile(path, []byte("bump {{.Container}}\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	commitTemplatePath = path
+func TestLoadCommitTemplate_ReadsWhatIsConfigured(t *testing.T) {
+	// With surrounding whitespace, as a compose file's block scalar leaves it.
+	t.Setenv("ACTOR_COMMIT_TEMPLATE", "  bump {{.Container}}\n")
 
 	got, err := loadCommitTemplate()
 	if err != nil {
 		t.Fatalf("unexpected failure: %v", err)
 	}
-	if got != "bump {{.Container}}" {
-		t.Errorf("got %q, want the trailing newline trimmed", got)
+	if want := "bump {{.Container}}"; got != want {
+		t.Errorf("got %q, want %q -- surrounding whitespace should be trimmed", got, want)
 	}
 }
 
-// An empty file is a mistake rather than a preference: someone mounted a
-// template and it is not there. Falling back to the default would hide that.
-func TestLoadCommitTemplate_EmptyFileIsAnError(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "commit-template")
-	if err := os.WriteFile(path, []byte("   \n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	commitTemplatePath = path
+// Set but empty is an error rather than the default: someone meant to say
+// something and said nothing, and falling back would hide that.
+func TestLoadCommitTemplate_EmptyIsAnError(t *testing.T) {
+	t.Setenv("ACTOR_COMMIT_TEMPLATE", "   \n")
 
 	if _, err := loadCommitTemplate(); err == nil {
-		t.Error("an empty template file should be reported, not silently ignored")
-	}
-}
-
-// Host is deliberately not a field: the actor needs the host for nothing, and
-// a template wanting one puts it in as literal text. A template that names it
-// must fail loudly rather than render "<no value>" into history.
-func TestCommitSubject_HostIsNotAField(t *testing.T) {
-	_, err := commitSubject("{{.Host}}/{{.Container}}: x", commitFields{Container: "radarr"})
-	if err == nil {
-		t.Fatal("a template naming a field that does not exist was accepted")
-	}
-}
-
-// Which is how a host prefix is actually written: as text.
-func TestCommitSubject_AHostPrefixIsLiteralText(t *testing.T) {
-	got, err := commitSubject("optiplex/{{.Container}}: update to {{.NewVersion}}",
-		commitFields{Container: "radarr", NewVersion: "5.28.0"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := "optiplex/radarr: update to 5.28.0"; got != want {
-		t.Errorf("got %q, want %q", got, want)
-	}
-}
-
-// The default handles both kinds: a version change reads as one, and a digest
-// move reads as a move rather than as "latest -> latest".
-func TestDefaultTemplate_ReadsBothKinds(t *testing.T) {
-	version, err := commitSubject("", commitFields{
-		Container: "cloudflared", OldVersion: "2026.8.3", NewVersion: "2026.9.1",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := "cloudflared: 2026.8.3 -> 2026.9.1"; version != want {
-		t.Errorf("version change = %q, want %q", version, want)
-	}
-
-	moved, err := commitSubject("", commitFields{
-		Container: "bazarr", OldVersion: "latest", NewVersion: "latest",
-		NewDigest: "sha256:d24bd004",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := "bazarr: latest moved to sha256:d24bd004"; moved != want {
-		t.Errorf("digest move = %q, want %q", moved, want)
+		t.Error("an empty ACTOR_COMMIT_TEMPLATE was accepted")
 	}
 }

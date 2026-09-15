@@ -85,6 +85,9 @@ duva-actor:
   group_add: ["989"]
   environment:
     ACTOR_TOKEN: ${DUVA_ACTOR_TOKEN}
+    # What a change is committed under. The host prefix is literal text --
+    # this repository's commit-msg hook requires <box>/<service>.
+    ACTOR_COMMIT_TEMPLATE: "optiplex/{{.Container}}: update to {{if eq .OldVersion .NewVersion}}{{.NewDigest}}{{else}}{{.NewVersion}}{{end}}"
     # Commits stay local. Turning this on pushes unattended.
     ACTOR_GIT_PUSH: "false"
   volumes:
@@ -137,7 +140,23 @@ schedule, or `run` for one pass.
 Set `DECIDER_TOKEN` rather than letting it mint one: a minted token changes on
 every restart, and anything holding it goes stale.
 
-**actor** — `ACTOR_TOKEN`, `ACTOR_GIT_PUSH`.
+**actor** — `ACTOR_TOKEN`, `ACTOR_GIT_PUSH`, `ACTOR_COMMIT_TEMPLATE`.
+
+The template is what a change is committed under, rendered with `.Container`,
+`.Image`, `.OldVersion`, `.NewVersion`, `.OldDigest`, `.NewDigest`. Unset gets
+a sensible default; set-but-empty is an error.
+
+There is no `.Host` field and no `ACTOR_HOST`: the actor needs the host for
+nothing, and the template is per host anyway, so a host prefix goes in as
+literal text. This repository's `commit-msg` hook requires one:
+
+```yaml
+ACTOR_COMMIT_TEMPLATE: "optiplex/{{.Container}}: update to {{if eq .OldVersion .NewVersion}}{{.NewDigest}}{{else}}{{.NewVersion}}{{end}}"
+```
+
+A template that does not parse, or names a field that does not exist, refuses
+to start — rather than being discovered by an apply, after a container has
+already been replaced.
 
 **ui** — `DUVA_UI_DECIDERS` (`host=url,host=url`), `DUVA_UI_TOKEN`,
 `DUVA_UI_TOKEN_<HOST>` where they differ, `DUVA_UI_READ_ONLY`.
