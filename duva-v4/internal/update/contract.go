@@ -51,10 +51,16 @@ import (
 type Request struct {
 	// Service is the compose service name.
 	Service string `json:"service"`
-	// File is the compose file it is declared in — not necessarily the
-	// project root, since include: is resolved. Carried because the updater
-	// should not have to re-derive it, and because the queue already knows.
-	File string `json:"file"`
+	// File was the compose file the service is declared in. It is gone: the
+	// path was rooted where the queue mounted the project, and an updater
+	// mounts it somewhere else -- it holds the repository, at the path the
+	// host has, because it commits and because a relative bind it hands the
+	// daemon has to resolve there. A path across that difference means
+	// nothing.
+	//
+	// An updater answers the question itself, from the service name, which is
+	// the same on both sides. That it can is not an assumption: it has the
+	// project mounted, since it has to write to it.
 	// Image is the base reference, without tag or digest.
 	Image string `json:"image"`
 	// From and To are the change. For a version change these are tags; for a

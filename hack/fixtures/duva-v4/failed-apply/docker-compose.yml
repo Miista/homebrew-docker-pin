@@ -26,7 +26,11 @@ services:
     # Required, not decoration: v4 indexes services by container_name and
     # watches only the ones that have it, since that is the name it has to
     # replace a container by.
-    container_name: app
+    # Its own name, not app. A container_name is global to the daemon rather
+    # than scoped to a compose project, and this scenario deliberately leaves
+    # one that failed to start -- a stopped container still holds its name, so
+    # sharing it meant the next scenario could not create its own.
+    container_name: broken-app
     labels:
       duva.include: '^1\.0\.\d+$'
       duva.auto: patch
@@ -97,11 +101,16 @@ services:
       - "${DOCKER_GID}"
     environment:
       DUVA_UPDATE_TOKEN: integration-token
+      # Where to read the project from. It is mounted at the path it has on
+      # the host, so a relative bind in the compose file resolves to a string
+      # the daemon can also find -- which is what recreating a container with
+      # one needs.
+      DUVA_UPDATE_COMPOSE_DIR: ${PROJECT_DIR}
       DUVA_UPDATE_COMMIT_TEMPLATE: "pin {{.Container}} to {{if eq .OldVersion .NewVersion}}{{.NewDigest}}{{else}}{{.NewVersion}}{{end}}"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       # Read-write, unlike the other two: rewriting the pin is its whole job.
-      - .:/compose
+      - ${PROJECT_DIR}:${PROJECT_DIR}
       - ./certs/cert.pem:/etc/ssl/certs/ca-certificates.crt:ro
     extra_hosts:
       - localhost:host-gateway

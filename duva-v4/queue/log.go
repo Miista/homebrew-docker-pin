@@ -20,7 +20,7 @@ import (
 // is exactly where that question gets asked.
 
 // newLogger builds the process-wide logger. Level comes from
-// DUVA_QUEUE_LOG_LEVEL, so verbosity can be turned up on a running host without
+// DUVA_LOG_LEVEL, so verbosity can be turned up on a running host without
 // a redeploy -- which matters for a tool that queues and applies updates.
 func newLogger(levelStr string) zerolog.Logger {
 	// ParseLevel("") returns NoLevel with no error, which as a threshold

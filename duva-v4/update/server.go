@@ -94,8 +94,8 @@ func (s *Server) apply(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unreadable request: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	if req.Service == "" || req.File == "" {
-		http.Error(w, "a request needs a service and a file", http.StatusBadRequest)
+	if req.Service == "" {
+		http.Error(w, "a request needs a service", http.StatusBadRequest)
 		return
 	}
 

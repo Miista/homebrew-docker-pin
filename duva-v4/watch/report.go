@@ -74,7 +74,7 @@ func newReporter(url, host string, log zerolog.Logger) *reporter {
 		// Legitimate, not broken. A watcher with nowhere to publish is one
 		// being read through its log -- which is exactly how you point it at
 		// a real project without wiring anything to it.
-		log.Info().Msg("no DUVA_WATCH_WEBHOOK_URL: findings will be logged and not published anywhere")
+		log.Info().Msg("no DUVA_WEBHOOK_URL: findings will be logged and not published anywhere")
 	}
 	r := &reporter{
 		url:  url,

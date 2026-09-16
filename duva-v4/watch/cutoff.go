@@ -69,7 +69,7 @@ type memory struct {
 	services map[string]serviceState
 	// fallback is the cutoff for a service with none recorded.
 	fallback time.Time
-	// override is set when DUVA_WATCH_SINCE forced the cutoff. Nothing is
+	// override is set when DUVA_SINCE forced the cutoff. Nothing is
 	// recorded in that case: an override asks a question, it does not change
 	// what the watcher believes.
 	override bool
@@ -84,7 +84,7 @@ type memory struct {
 // one this matters for -- it has no history, so the window is the only thing
 // standing between it and being reported at all.
 //
-// An override is not a first check. DUVA_WATCH_SINCE asks a question against
+// An override is not a first check. DUVA_SINCE asks a question against
 // a window someone chose, and answering a different one would make the flag
 // mean something other than what it says.
 func (m *memory) FirstCheck(service string) bool {
@@ -169,18 +169,18 @@ func loadMemory(log zerolog.Logger) (*memory, error) {
 	// An override wins, for asking "what appeared in the last week" without
 	// disturbing what is recorded -- which is how you re-run a check after a
 	// failure without having to reason about state.
-	if raw := os.Getenv("DUVA_WATCH_SINCE"); raw != "" {
+	if raw := os.Getenv("DUVA_SINCE"); raw != "" {
 		m := &memory{services: map[string]serviceState{}, override: true}
 		if d, err := time.ParseDuration(raw); err == nil {
-			m.fallback, m.why = time.Now().Add(-d), fmt.Sprintf("DUVA_WATCH_SINCE=%s", raw)
+			m.fallback, m.why = time.Now().Add(-d), fmt.Sprintf("DUVA_SINCE=%s", raw)
 			return m, nil
 		}
 		t, err := time.Parse(time.RFC3339, raw)
 		if err != nil {
 			return nil, fmt.Errorf(
-				"DUVA_WATCH_SINCE=%q is neither a duration (168h) nor an RFC 3339 time", raw)
+				"DUVA_SINCE=%q is neither a duration (168h) nor an RFC 3339 time", raw)
 		}
-		m.fallback, m.why = t, "DUVA_WATCH_SINCE"
+		m.fallback, m.why = t, "DUVA_SINCE"
 		return m, nil
 	}
 

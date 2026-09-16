@@ -40,6 +40,13 @@ func newWorld(t *testing.T, composeContent string) *world {
 	if err := os.WriteFile(file, []byte(composeContent), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// The transaction looks up which file declares a service against its own
+	// project, rather than trusting the path in the request. Pointed at this
+	// world's file, which is the whole project a unit test has.
+	prev := resolveFile
+	resolveFile = func(string) (string, error) { return file, nil }
+	t.Cleanup(func() { resolveFile = prev })
+
 	return &world{file: file, clean: true, digest: "sha256:newdigest"}
 }
 
@@ -88,7 +95,6 @@ services:
 func versionRequest() update.Request {
 	return update.Request{
 		Service: "app",
-		File:    "", // filled in per test
 		Image:   "example.com/app",
 		From:    "1.0.0",
 		To:      "1.1.0",
@@ -114,7 +120,6 @@ func steps() (func(string, ...any), *[]string) {
 func TestVersionChangeIsAppliedAndCommitted(t *testing.T) {
 	w := newWorld(t, versionPin)
 	req := versionRequest()
-	req.File = w.file
 	step, lines := steps()
 
 	status, reason := transaction(req, step, w.docker(), w.git(), false, "")
@@ -147,7 +152,7 @@ services:
     container_name: the-app
 `)
 	req := update.Request{
-		Service: "app", File: w.file, Image: "example.com/app",
+		Service: "app", Image: "example.com/app",
 		From: "sha256:olddigest", To: "sha256:newdigest",
 		Tag: "latest", Digest: "sha256:newdigest",
 	}
@@ -172,7 +177,6 @@ services:
 func TestBeingToldTwiceIsIdempotent(t *testing.T) {
 	w := newWorld(t, versionPin)
 	req := versionRequest()
-	req.File = w.file
 	step, _ := steps()
 
 	transaction(req, step, w.docker(), w.git(), false, "")
@@ -197,7 +201,6 @@ func TestAFailedPullChangesNothing(t *testing.T) {
 	w := newWorld(t, versionPin)
 	w.pullErr = errors.New("no such image")
 	req := versionRequest()
-	req.File = w.file
 	before := w.image(t)
 	step, _ := steps()
 
@@ -228,7 +231,6 @@ func TestAFailedRecreateIsNotUndone(t *testing.T) {
 	w := newWorld(t, versionPin)
 	w.recreateErr = errors.New("the container would not start")
 	req := versionRequest()
-	req.File = w.file
 	before := w.image(t)
 	step, _ := steps()
 
@@ -258,7 +260,6 @@ func TestAFailedRecreateSaysWhatItLeftBehind(t *testing.T) {
 	w := newWorld(t, versionPin)
 	w.recreateErr = errors.New("the container would not start")
 	req := versionRequest()
-	req.File = w.file
 	step, lines := steps()
 
 	_, reason := transaction(req, step, w.docker(), w.git(), false, "")
@@ -280,7 +281,6 @@ func TestADirtyRepositoryRefusesBeforeAnythingHappens(t *testing.T) {
 	w := newWorld(t, versionPin)
 	w.clean = false
 	req := versionRequest()
-	req.File = w.file
 	step, _ := steps()
 
 	status, reason := transaction(req, step, w.docker(), w.git(), false, "")
@@ -300,7 +300,6 @@ func TestABusyRepositoryIsToldToTryAgain(t *testing.T) {
 	w := newWorld(t, versionPin)
 	w.cleanErr = errRepoBusy
 	req := versionRequest()
-	req.File = w.file
 	step, _ := steps()
 
 	status, reason := transaction(req, step, w.docker(), w.git(), false, "")
@@ -319,7 +318,6 @@ func TestAFailedCommitStillCompletes(t *testing.T) {
 	g := w.git()
 	g.Commit = func(dir, msg string) error { return errors.New("no identity") }
 	req := versionRequest()
-	req.File = w.file
 	step, lines := steps()
 
 	status, _ := transaction(req, step, w.docker(), g, false, "")
@@ -336,7 +334,6 @@ func TestAFailedCommitStillCompletes(t *testing.T) {
 func TestPushIsOffByDefault(t *testing.T) {
 	w := newWorld(t, versionPin)
 	req := versionRequest()
-	req.File = w.file
 	step, _ := steps()
 
 	transaction(req, step, w.docker(), w.git(), false, "")
@@ -353,7 +350,6 @@ func TestPushRebasesFirst(t *testing.T) {
 	g.Push = func(dir string) error { order = append(order, "push"); return nil }
 
 	req := versionRequest()
-	req.File = w.file
 	step, _ := steps()
 
 	transaction(req, step, w.docker(), g, true, "")
@@ -371,7 +367,6 @@ func TestAConflictedRebaseIsAbortedAndNotPushed(t *testing.T) {
 	g.RebaseAbort = func(dir string) error { aborted = true; return nil }
 
 	req := versionRequest()
-	req.File = w.file
 	step, _ := steps()
 
 	status, _ := transaction(req, step, w.docker(), g, true, "")
@@ -393,7 +388,6 @@ func TestAFailedPushStillCompletes(t *testing.T) {
 	g.Push = func(dir string) error { return errors.New("no remote") }
 
 	req := versionRequest()
-	req.File = w.file
 	step, lines := steps()
 
 	status, _ := transaction(req, step, w.docker(), g, true, "")
@@ -462,7 +456,6 @@ func TestGitFailuresAreNeverSilent(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			w := newWorld(t, versionPin)
 			req := versionRequest()
-			req.File = w.file
 			step, lines := steps()
 
 			g := w.git()
@@ -496,7 +489,6 @@ func TestGitFailuresAreNeverSilent(t *testing.T) {
 func TestACleanApplyCarriesNoReason(t *testing.T) {
 	w := newWorld(t, versionPin)
 	req := versionRequest()
-	req.File = w.file
 	step, _ := steps()
 
 	status, reason := transaction(req, step, w.docker(), w.git(), false, "")
@@ -513,7 +505,6 @@ func TestACleanApplyCarriesNoReason(t *testing.T) {
 func TestARefusedCommitSaysTheHostIsBlocked(t *testing.T) {
 	w := newWorld(t, versionPin)
 	req := versionRequest()
-	req.File = w.file
 	step, _ := steps()
 
 	g := w.git()
@@ -541,7 +532,6 @@ func TestARefusedCommitSaysTheHostIsBlocked(t *testing.T) {
 func TestAMissingContainerIsRefusedBeforeAnythingHappens(t *testing.T) {
 	w := newWorld(t, versionPin)
 	req := versionRequest()
-	req.File = w.file
 	step, _ := steps()
 
 	before, _ := os.ReadFile(w.file)
@@ -586,8 +576,12 @@ func TestARejectableMessageIsRefusedBeforeAnythingHappens(t *testing.T) {
 		[]byte("#!/bin/sh\ngrep -q '^[a-z]*/' \"$1\" || exit 1\n"), 0o755)
 
 	w := &world{file: file, clean: true, digest: "sha256:newdigest"}
+	// Built without newWorld, so the lookup seam is pinned here too.
+	prev := resolveFile
+	resolveFile = func(string) (string, error) { return file, nil }
+	t.Cleanup(func() { resolveFile = prev })
+
 	req := versionRequest()
-	req.File = file
 	step, _ := steps()
 
 	status, reason := transaction(req, step, w.docker(), w.git(), false, "")
@@ -614,7 +608,6 @@ func TestABuiltServiceIsRefused(t *testing.T) {
 `
 	w := newWorld(t, builtPin)
 	req := versionRequest()
-	req.File = w.file
 	step, _ := steps()
 
 	status, reason := transaction(req, step, w.docker(), w.git(), false, "")
@@ -639,7 +632,6 @@ func TestAnUnexpandedVariableIsRefused(t *testing.T) {
 `
 	w := newWorld(t, varPin)
 	req := versionRequest()
-	req.File = w.file
 	step, _ := steps()
 
 	status, reason := transaction(req, step, w.docker(), w.git(), false, "")
@@ -664,7 +656,6 @@ func TestAnUnexpandedVariableIsRefused(t *testing.T) {
 func TestTheStepsNameTheActAndNothingElse(t *testing.T) {
 	w := newWorld(t, versionPin)
 	req := versionRequest()
-	req.File = w.file
 	step, lines := steps()
 
 	status, reason := transaction(req, step, w.docker(), w.git(), false, "")
@@ -710,7 +701,6 @@ func TestTheStepsNameTheActAndNothingElse(t *testing.T) {
 func TestThePinIsWrittenBeforeTheRecreate(t *testing.T) {
 	w := newWorld(t, versionPin)
 	req := versionRequest()
-	req.File = w.file
 	step, lines := steps()
 
 	status, _ := transaction(req, step, w.docker(), w.git(), false, "")

@@ -17,7 +17,7 @@ import (
 // that prefixes with a ticket, or writes conventional commits, should not have
 // to accept anyone else's shape.
 //
-// There is deliberately no Host field and no DUVA_UPDATE_HOST. The updater needs the
+// There is deliberately no Host field and no DUVA_HOST. The updater needs the
 // host for nothing else -- it pulls, writes a pin, recreates and commits, none
 // of which care which box they are on -- and the template is already mounted
 // per host, so the host belongs *in* it:
@@ -27,9 +27,9 @@ import (
 // An env var would be a second place to say the same thing, and two places to
 // get it wrong.
 //
-// DUVA_UPDATE_COMMIT_TEMPLATE rather than a mounted file: it is one line, it is not
+// DUVA_COMMIT_TEMPLATE rather than a mounted file: it is one line, it is not
 // a secret, and it does not change without a restart, so it belongs beside
-// DUVA_UPDATE_TOKEN and DUVA_UPDATE_GIT_PUSH rather than being a mount to arrange.
+// DUVA_UPDATE_TOKEN and DUVA_GIT_PUSH rather than being a mount to arrange.
 
 // defaultCommitTemplate is used when nothing is mounted -- which is the
 // common case, and should need no configuration.
@@ -97,25 +97,25 @@ func commitSubject(tmpl string, f commitFields) (string, error) {
 	return subject, nil
 }
 
-// loadCommitTemplate reads DUVA_UPDATE_COMMIT_TEMPLATE, or returns the default.
+// loadCommitTemplate reads DUVA_COMMIT_TEMPLATE, or returns the default.
 //
 // An environment variable rather than a mounted file, which is what v3 had.
 // It is one line, it is not a secret, and it does not change without a
 // restart -- so a file would be a mount to arrange and a second mechanism
-// beside DUVA_UPDATE_TOKEN and DUVA_UPDATE_GIT_PUSH, for no benefit. It also reads where
+// beside DUVA_UPDATE_TOKEN and DUVA_GIT_PUSH, for no benefit. It also reads where
 // an operator looks for it: next to the rest of the service's configuration.
 //
 // Unset is the normal case rather than a problem: most stacks want the
 // default and configure nothing. Set-but-empty is an error, because someone
 // meant to say something and said nothing.
 func loadCommitTemplate() (string, error) {
-	raw, ok := os.LookupEnv("DUVA_UPDATE_COMMIT_TEMPLATE")
+	raw, ok := os.LookupEnv("DUVA_COMMIT_TEMPLATE")
 	if !ok {
 		return defaultCommitTemplate, nil
 	}
 	tmpl := strings.TrimSpace(raw)
 	if tmpl == "" {
-		return "", fmt.Errorf("DUVA_UPDATE_COMMIT_TEMPLATE is set but empty")
+		return "", fmt.Errorf("DUVA_COMMIT_TEMPLATE is set but empty")
 	}
 	return tmpl, nil
 }

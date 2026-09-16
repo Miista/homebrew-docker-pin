@@ -70,7 +70,9 @@ func TestApplyRefusesAnIncompleteRequest(t *testing.T) {
 		t.Error("the transaction ran on an incomplete request")
 		return update.Completed, ""
 	})
-	for _, body := range []string{`{}`, `{"service":"app"}`, `{"file":"/x.yml"}`} {
+	// A service is the whole of it now: which file declares it is this stage's
+	// own lookup, since a path from the queue is rooted at the queue's mount.
+	for _, body := range []string{`{}`, `{"service":""}`, `{"image":"example.com/app"}`} {
 		if resp := post(t, srv.URL+"/v1/apply", "", body); resp.StatusCode != http.StatusBadRequest {
 			t.Errorf("%s -> %d, want 400", body, resp.StatusCode)
 		}

@@ -1,3 +1,11 @@
-# Pushed by the test rather than declared here: this scenario's newer tag has
-# to be built unrunnable, which only PushUnrunnable can do.
-updates: {}
+# The newer tag this scenario means duva to find -- and fail on.
+#
+# Unrunnable rather than updates: it is FROM scratch with no entrypoint, so it
+# pulls fine and then cannot start, which is what makes the apply get as far as
+# replacing the container and then fail.
+#
+# Declared here rather than pushed by the test, so `go run ./test/sandbox
+# duva-v4/failed-apply` stands up exactly what the test sees.
+unrunnable:
+  broken-app:
+    - 1.0.1

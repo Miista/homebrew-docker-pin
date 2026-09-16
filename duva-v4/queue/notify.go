@@ -43,22 +43,22 @@ type ntfy struct {
 // the default: this host had no notifier before and must not gain one by
 // upgrading.
 func newNtfy(log zerolog.Logger) *ntfy {
-	endpoint := strings.TrimSuffix(os.Getenv("DUVA_QUEUE_NTFY_ENDPOINT"), "/")
+	endpoint := strings.TrimSuffix(os.Getenv("DUVA_NTFY_ENDPOINT"), "/")
 	if endpoint == "" {
 		return nil
 	}
-	topic := os.Getenv("DUVA_QUEUE_NTFY_TOPIC")
+	topic := os.Getenv("DUVA_NTFY_TOPIC")
 	if topic == "" {
 		// An endpoint with no topic is a half-configuration, and publishing
 		// to a guessed topic would be worse than saying so.
-		log.Warn().Msg("DUVA_QUEUE_NTFY_ENDPOINT is set but DUVA_QUEUE_NTFY_TOPIC is not, so nothing will be notified")
+		log.Warn().Msg("DUVA_NTFY_ENDPOINT is set but DUVA_NTFY_TOPIC is not, so nothing will be notified")
 		return nil
 	}
 	n := &ntfy{
 		endpoint: endpoint,
 		topic:    topic,
 		token:    os.Getenv("NTFY_TOKEN"),
-		clickURL: os.Getenv("DUVA_QUEUE_NTFY_CLICK"),
+		clickURL: os.Getenv("DUVA_NTFY_CLICK"),
 		// Short: a notification nobody is waiting on must not hold a
 		// watcher's request open.
 		client: &http.Client{Timeout: 10 * time.Second},

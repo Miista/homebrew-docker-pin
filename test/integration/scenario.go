@@ -212,7 +212,11 @@ func (s *Scenario) writeEnv() {
 		s.t.Fatalf("asking the daemon for the docker socket's group: %v", err)
 	}
 	gid := strings.TrimSpace(string(out))
-	body := fmt.Sprintf("UID=%d\nGID=%d\nDOCKER_GID=%s\n", os.Getuid(), os.Getgid(), gid)
+	// PROJECT_DIR is where the testbed is on this host, for the fixture that
+	// mounts it at its own path rather than at /compose. A fixture cannot
+	// write it: it is wherever the repository happens to be checked out.
+	body := fmt.Sprintf("UID=%d\nGID=%d\nDOCKER_GID=%s\nPROJECT_DIR=%s\n",
+		os.Getuid(), os.Getgid(), gid, s.Dir)
 	if err := os.WriteFile(filepath.Join(s.Dir, ".env"), []byte(body), 0o644); err != nil {
 		s.t.Fatalf("writing the scenario's .env: %v", err)
 	}

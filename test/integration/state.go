@@ -340,9 +340,15 @@ func (s *Scenario) WriteCompose(content string) {
 // arrive after pinning, not before.
 func (s *Scenario) PushUpdates() {
 	s.t.Helper()
-	for repo, tags := range s.manifest().Updates {
+	m := s.manifest()
+	for repo, tags := range m.Updates {
 		for _, tag := range tags {
 			s.Push(repo, tag)
+		}
+	}
+	for repo, tags := range m.Unrunnable {
+		for _, tag := range tags {
+			s.PushUnrunnable(repo, tag)
 		}
 	}
 }
@@ -362,6 +368,14 @@ type manifest struct {
 	// its own releases -- a stack with a database and a web service does not
 	// version them together.
 	Updates map[string][]string `yaml:"updates"`
+	// Unrunnable are newer tags that pull but cannot start, by repository.
+	//
+	// Separate from Updates because they are built differently -- FROM scratch
+	// with no entrypoint -- and because a scenario declaring one is saying
+	// something about what it tests: that an apply gets as far as replacing a
+	// container and then fails. Declared rather than pushed by the test, so
+	// the sandbox can stand the scenario up exactly as a test sees it.
+	Unrunnable map[string][]string `yaml:"unrunnable"`
 }
 
 func (s *Scenario) manifest() manifest {

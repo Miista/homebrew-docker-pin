@@ -70,7 +70,7 @@ func TestApplySendsTheRequestAndReturnsTheStream(t *testing.T) {
 	c := clientFor(t, f)
 
 	acc, err := c.Apply(context.Background(), Request{
-		Service: "authelia", File: "/compose/pi/docker-compose.yml",
+		Service: "authelia",
 		From: "4.39.20", To: "4.39.25", Tag: "4.39.25",
 	})
 	if err != nil {

@@ -22,6 +22,12 @@ services:
     # watches only the ones that have it, since that is the name it has to
     # replace a container by.
     container_name: app
+    # A relative bind, which is what the host-path mount exists for: the daemon
+    # resolves the source against the HOST, so the replacement container only
+    # gets this if the updater read the project from a path the host also has.
+    # Mounted at /compose it would be handed /compose/payload, which is nowhere.
+    volumes:
+      - ./payload:/payload:ro
     labels:
       duva.include: '^1\.0\.\d+$'
       duva.auto: patch
@@ -92,11 +98,16 @@ services:
       - "${DOCKER_GID}"
     environment:
       DUVA_UPDATE_TOKEN: integration-token
+      # Where to read the project from. It is mounted at the path it has on
+      # the host, so a relative bind in the compose file resolves to a string
+      # the daemon can also find -- which is what recreating a container with
+      # one needs.
+      DUVA_UPDATE_COMPOSE_DIR: ${PROJECT_DIR}
       DUVA_UPDATE_COMMIT_TEMPLATE: "pin {{.Container}} to {{if eq .OldVersion .NewVersion}}{{.NewDigest}}{{else}}{{.NewVersion}}{{end}}"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       # Read-write, unlike the other two: rewriting the pin is its whole job.
-      - .:/compose
+      - ${PROJECT_DIR}:${PROJECT_DIR}
       - ./certs/cert.pem:/etc/ssl/certs/ca-certificates.crt:ro
     extra_hosts:
       - localhost:host-gateway

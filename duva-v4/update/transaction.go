@@ -125,13 +125,49 @@ func runGit(cmd *exec.Cmd) error {
 	return nil
 }
 
+// resolveFile is which compose file declares a service, looked up against this
+// stage's own project.
+//
+// A seam, so a test can point it at a temporary project rather than at the
+// mount a container would have. The production one is projectFile plus
+// compose.ResolveServiceIn.
+var resolveFile = func(service string) (string, error) {
+	root, err := projectFile()
+	if err != nil {
+		return "", fmt.Errorf("finding the compose project: %w", err)
+	}
+	file, err := compose.ResolveServiceIn(root, service)
+	if err != nil {
+		return "", fmt.Errorf("finding %s: %w", service, err)
+	}
+	return file, nil
+}
+
 // transaction carries out one request.
 //
 // The signature is the updater contract's, not duva's: what comes in says what
 // should become true, and what goes out is a status and a reason. Nothing
 // about duva's Finding, its policy, or its queue appears here.
 func transaction(req update.Request, step func(string, ...any), d Docker, g Git, push bool, tmpl string) (update.Status, string) {
-	dir := dirOf(req.File)
+	// Which file declares this service is answered here, not taken from the
+	// request.
+	//
+	// The queue sends a path, and that path is rooted where the QUEUE mounted
+	// the project -- which is not where this stage mounts it, and cannot be:
+	// this one holds the repository, at the path the host has, because it
+	// commits and because a relative bind it hands the daemon has to resolve
+	// there. A path from the other side of that difference means nothing here.
+	//
+	// The service name does mean the same thing on both sides, and the project
+	// is mounted, so the file is a lookup rather than something to be told.
+	// `include:` is followed, which is the only reason the file was ever worth
+	// carrying: a service can live in one.
+	file, err := resolveFile(req.Service)
+	if err != nil {
+		return update.Failed, err.Error()
+	}
+
+	dir := dirOf(file)
 
 	// A clean repository is a precondition, not a setting: this commits, and
 	// committing on top of someone's half-finished edit is never wanted.
@@ -171,7 +207,7 @@ func transaction(req update.Request, step func(string, ...any), d Docker, g Git,
 	// by giving it one. A failed pull has written nothing. A failed recreate
 	// is the one outcome this cannot clean up after, which is why so much is
 	// answered here instead.
-	if err := precheck(req, d, tmpl); err != nil {
+	if err := precheck(req, file, d, tmpl); err != nil {
 		return update.Failed, err.Error()
 	}
 
@@ -193,7 +229,7 @@ func transaction(req update.Request, step func(string, ...any), d Docker, g Git,
 	// pulled. For a digest move that tag is unchanged and the digest is what
 	// moved; for a version change the tag is the new one. Either way the
 	// digest comes from the image that was just pulled.
-	out, err := writePin(req, req.Image+":"+req.Tag, d)
+	out, err := writePin(req, file, req.Image+":"+req.Tag, d)
 	if err != nil {
 		return update.Failed, fmt.Sprintf("writing the pin: %v", err)
 	}
@@ -207,7 +243,7 @@ func transaction(req update.Request, step func(string, ...any), d Docker, g Git,
 	step("pinning image")
 
 	step("recreating")
-	if err := d.Recreate(req.File, req.Service); err != nil {
+	if err := d.Recreate(file, req.Service); err != nil {
 		// Left as it is, deliberately. See the note at the top of this file:
 		// what happened to the container is not knowable from here, so the
 		// file is not touched and the state is handed to a person instead.
@@ -247,7 +283,7 @@ func transaction(req update.Request, step func(string, ...any), d Docker, g Git,
 		return done(step, "the change is live but the commit message could not be built: %v", err)
 	}
 	step("committing")
-	if err := g.Add(dir, req.File); err != nil {
+	if err := g.Add(dir, file); err != nil {
 		return done(step, "the change is live but could not be staged: %v", err)
 	}
 	if err := g.Commit(dir, msg); err != nil {
@@ -297,7 +333,7 @@ func transaction(req update.Request, step func(string, ...any), d Docker, g Git,
 //
 // It used to also return the line as it stood before, for the rollback. There
 // is no rollback, so there is nothing to hold it for.
-func writePin(req update.Request, tagRef string, d Docker) (out pin.Outcome, err error) {
+func writePin(req update.Request, file, tagRef string, d Docker) (out pin.Outcome, err error) {
 	// The digest of what was pulled, not of the tag: a digest move pulled a
 	// specific digest, and asking about the tag again could answer with
 	// whatever it points at now rather than what was decided about.
@@ -305,7 +341,7 @@ func writePin(req update.Request, tagRef string, d Docker) (out pin.Outcome, err
 	if req.Digest != "" {
 		getDigest = func(string) (string, error) { return req.Digest, nil }
 	}
-	out, err = pin.Compute(req.File, req.Service, tagRef, pin.Docker{
+	out, err = pin.Compute(file, req.Service, tagRef, pin.Docker{
 		GetDigest: getDigest,
 		Pull:      d.Pull,
 	})
@@ -320,7 +356,7 @@ func writePin(req update.Request, tagRef string, d Docker) (out pin.Outcome, err
 	if !out.Changed {
 		return out, nil
 	}
-	if err := pin.Apply(req.File, req.Service, out); err != nil {
+	if err := pin.Apply(file, req.Service, out); err != nil {
 		return pin.Outcome{}, err
 	}
 	return out, nil
@@ -380,7 +416,7 @@ func done(step func(string, ...any), format string, args ...any) (update.Status,
 // pin.Compute is the same function the write uses, so a file it cannot parse,
 // a service it cannot find, or an image line it cannot rewrite is discovered
 // here rather than after a pull.
-func precheck(req update.Request, d Docker, tmpl string) error {
+func precheck(req update.Request, file string, d Docker, tmpl string) error {
 	// Is there a container to replace? A service in the compose file with
 	// nothing running is the failure that leaves a pin claiming an image that
 	// does not run anywhere.
@@ -416,23 +452,23 @@ func precheck(req update.Request, d Docker, tmpl string) error {
 	// compose-file question, not a pinning one. Left to Compute it would be
 	// pulled as a literal and fail at the registry, describing a tag nobody
 	// wrote. Checked first because it is the cheapest and reads the same file.
-	if raw, err := compose.RawImage(req.File, req.Service); err == nil &&
+	if raw, err := compose.RawImage(file, req.Service); err == nil &&
 		compose.HasUnexpandedVariable(raw) {
 		return fmt.Errorf(
 			"%s in %s still has an unexpanded variable (%s), so there is nothing to pin",
-			req.Service, req.File, raw)
+			req.Service, file, raw)
 	}
 
 	probeDigest := req.Digest
 	if probeDigest == "" {
 		probeDigest = "sha256:" + strings.Repeat("0", 64)
 	}
-	out, err := pin.Compute(req.File, req.Service, req.Image+":"+req.Tag, pin.Docker{
+	out, err := pin.Compute(file, req.Service, req.Image+":"+req.Tag, pin.Docker{
 		GetDigest: func(string) (string, error) { return probeDigest, nil },
 		Pull:      func(string) error { return nil }, // not reached: the digest is given
 	})
 	if err != nil {
-		return fmt.Errorf("%s cannot be pinned in %s: %w", req.Service, req.File, err)
+		return fmt.Errorf("%s cannot be pinned in %s: %w", req.Service, file, err)
 	}
 	// Built is not an error from Compute -- it is a successful outcome saying
 	// there is nothing to pin, which the caller is expected to act on. Checked
@@ -452,7 +488,7 @@ func precheck(req update.Request, d Docker, tmpl string) error {
 	// again with this service's real values -- readiness uses a representative
 	// message, and a template that renders differently for a real service
 	// would otherwise be found out after the container was replaced.
-	if err := checkMessageAccepted(dirOf(req.File), tmpl); err != nil {
+	if err := checkMessageAccepted(dirOf(file), tmpl); err != nil {
 		return err
 	}
 	return nil

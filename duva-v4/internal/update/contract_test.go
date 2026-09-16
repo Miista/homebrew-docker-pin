@@ -88,7 +88,6 @@ func TestReasonKeepsLaterColons(t *testing.T) {
 func TestRequestJSONShape(t *testing.T) {
 	raw, err := json.Marshal(Request{
 		Service: "authelia",
-		File:    "/compose/pi/docker-compose.yml",
 		Image:   "docker.io/authelia/authelia",
 		From:    "4.39.20",
 		To:      "4.39.25",
@@ -101,10 +100,18 @@ func TestRequestJSONShape(t *testing.T) {
 	if err := json.Unmarshal(raw, &got); err != nil {
 		t.Fatal(err)
 	}
-	for _, field := range []string{"service", "file", "image", "from", "to", "tag"} {
+	for _, field := range []string{"service", "image", "from", "to", "tag"} {
 		if _, ok := got[field]; !ok {
 			t.Errorf("the payload is missing %q: %s", field, raw)
 		}
+	}
+	// No file. The path was rooted where the queue mounted the project, and an
+	// updater mounts it elsewhere -- it holds the repository at the host's own
+	// path, because it commits and because a bind it hands the daemon has to
+	// resolve there. An updater answers which file from the service name,
+	// which is the same on both sides.
+	if _, ok := got["file"]; ok {
+		t.Errorf("the payload still carries a file: %s", raw)
 	}
 	// Digest is omitted when empty: a version change has none, and sending
 	// "digest": "" would invite an updater to pin nothing.

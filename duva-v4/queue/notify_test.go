@@ -47,7 +47,7 @@ func TestAMissingHostLeavesTheTitleAsTheService(t *testing.T) {
 // No endpoint is the default and means nobody is told: this host had no
 // notifier before and must not gain one by upgrading.
 func TestNoEndpointMeansNoNotifier(t *testing.T) {
-	t.Setenv("DUVA_QUEUE_NTFY_ENDPOINT", "")
+	t.Setenv("DUVA_NTFY_ENDPOINT", "")
 	if n := newNtfy(zerolog.Nop()); n != nil {
 		t.Error("a queue with no endpoint configured built a notifier")
 	}
@@ -56,8 +56,8 @@ func TestNoEndpointMeansNoNotifier(t *testing.T) {
 // An endpoint with no topic is a half-configuration. Publishing to a guessed
 // topic would be worse than refusing and saying so.
 func TestAnEndpointWithoutATopicNotifiesNobody(t *testing.T) {
-	t.Setenv("DUVA_QUEUE_NTFY_ENDPOINT", "https://notify.example.com")
-	t.Setenv("DUVA_QUEUE_NTFY_TOPIC", "")
+	t.Setenv("DUVA_NTFY_ENDPOINT", "https://notify.example.com")
+	t.Setenv("DUVA_NTFY_TOPIC", "")
 	if n := newNtfy(zerolog.Nop()); n != nil {
 		t.Error("a queue with no topic built a notifier and would publish somewhere unintended")
 	}
@@ -77,11 +77,11 @@ func TestAnAnnouncementCarriesTheTopicTitleAndButton(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	os.Setenv("DUVA_QUEUE_NTFY_ENDPOINT", srv.URL)
-	t.Setenv("DUVA_QUEUE_NTFY_TOPIC", "duva")
+	os.Setenv("DUVA_NTFY_ENDPOINT", srv.URL)
+	t.Setenv("DUVA_NTFY_TOPIC", "duva")
 	t.Setenv("NTFY_TOKEN", "tk_secret")
-	t.Setenv("DUVA_QUEUE_NTFY_CLICK", "http://192.0.2.10:8097/")
-	defer os.Unsetenv("DUVA_QUEUE_NTFY_ENDPOINT")
+	t.Setenv("DUVA_NTFY_CLICK", "http://192.0.2.10:8097/")
+	defer os.Unsetenv("DUVA_NTFY_ENDPOINT")
 
 	n := newNtfy(zerolog.Nop())
 	if n == nil {
@@ -116,8 +116,8 @@ func TestAnAnnouncementCarriesTheTopicTitleAndButton(t *testing.T) {
 // A notifier that cannot reach its server must not take the decision down with
 // it: the entry is queued either way, and the watcher's request is answered.
 func TestAnUnreachableNotifierIsNotFatal(t *testing.T) {
-	t.Setenv("DUVA_QUEUE_NTFY_ENDPOINT", "http://127.0.0.1:1")
-	t.Setenv("DUVA_QUEUE_NTFY_TOPIC", "duva")
+	t.Setenv("DUVA_NTFY_ENDPOINT", "http://127.0.0.1:1")
+	t.Setenv("DUVA_NTFY_TOPIC", "duva")
 	n := newNtfy(zerolog.Nop())
 	if n == nil {
 		t.Fatal("no notifier was built")
@@ -173,9 +173,9 @@ func TestAFailureIsTaggedAndLoudWhileWaitingIsNot(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	os.Setenv("DUVA_QUEUE_NTFY_ENDPOINT", srv.URL)
-	defer os.Unsetenv("DUVA_QUEUE_NTFY_ENDPOINT")
-	t.Setenv("DUVA_QUEUE_NTFY_TOPIC", "duva")
+	os.Setenv("DUVA_NTFY_ENDPOINT", srv.URL)
+	defer os.Unsetenv("DUVA_NTFY_ENDPOINT")
+	t.Setenv("DUVA_NTFY_TOPIC", "duva")
 	n := newNtfy(zerolog.Nop())
 
 	e := queue.Entry{Service: "sonarr", From: "4.0.15", To: "4.0.16", Kind: ociversion.KindPatch}

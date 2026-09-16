@@ -108,8 +108,8 @@ func TestCommitSubject_NoTemplateUsesTheDefault(t *testing.T) {
 // the normal case rather than a problem.
 
 func TestLoadCommitTemplate_UnsetIsTheDefault(t *testing.T) {
-	t.Setenv("DUVA_UPDATE_COMMIT_TEMPLATE", "")
-	os.Unsetenv("DUVA_UPDATE_COMMIT_TEMPLATE")
+	t.Setenv("DUVA_COMMIT_TEMPLATE", "")
+	os.Unsetenv("DUVA_COMMIT_TEMPLATE")
 
 	got, err := loadCommitTemplate()
 	if err != nil {
@@ -122,7 +122,7 @@ func TestLoadCommitTemplate_UnsetIsTheDefault(t *testing.T) {
 
 func TestLoadCommitTemplate_ReadsWhatIsConfigured(t *testing.T) {
 	// With surrounding whitespace, as a compose file's block scalar leaves it.
-	t.Setenv("DUVA_UPDATE_COMMIT_TEMPLATE", "  bump {{.Container}}\n")
+	t.Setenv("DUVA_COMMIT_TEMPLATE", "  bump {{.Container}}\n")
 
 	got, err := loadCommitTemplate()
 	if err != nil {
@@ -136,9 +136,9 @@ func TestLoadCommitTemplate_ReadsWhatIsConfigured(t *testing.T) {
 // Set but empty is an error rather than the default: someone meant to say
 // something and said nothing, and falling back would hide that.
 func TestLoadCommitTemplate_EmptyIsAnError(t *testing.T) {
-	t.Setenv("DUVA_UPDATE_COMMIT_TEMPLATE", "   \n")
+	t.Setenv("DUVA_COMMIT_TEMPLATE", "   \n")
 
 	if _, err := loadCommitTemplate(); err == nil {
-		t.Error("an empty DUVA_UPDATE_COMMIT_TEMPLATE was accepted")
+		t.Error("an empty DUVA_COMMIT_TEMPLATE was accepted")
 	}
 }

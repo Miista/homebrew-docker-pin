@@ -97,7 +97,6 @@ func (a *applier) apply(e queue.Entry, l *live) {
 
 	acc, err := a.client.Apply(ctx, update.Request{
 		Service: e.Service,
-		File:    e.File,
 		Image:   e.Image,
 		From:    e.From,
 		To:      e.To,

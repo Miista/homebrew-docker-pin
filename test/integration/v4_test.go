@@ -3,6 +3,7 @@
 package integration
 
 import (
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -43,6 +44,29 @@ func TestV4AppliesWhatPolicyAllows(t *testing.T) {
 		}
 	})
 
+	t.Run("the relative bind survived the recreate", func(t *testing.T) {
+		// The reason the project is mounted at its own path. The daemon
+		// resolves a bind's source against the HOST, so the replacement
+		// container only carries ./payload if the updater read the project
+		// from a path the host also has -- from /compose it would have asked
+		// for /compose/payload, which exists nowhere.
+		// Asked of the daemon rather than of the container: the test image is
+		// FROM scratch and has no shell to exec into.
+		out, err := exec.Command("docker", "inspect", "app",
+			"--format", "{{range .Mounts}}{{.Source}}->{{.Destination}} {{end}}").CombinedOutput()
+		if err != nil {
+			t.Fatalf("inspecting the replacement: %v\n%s", err, out)
+		}
+		got := strings.TrimSpace(string(out))
+		if !strings.Contains(got, "/payload") {
+			t.Fatalf("the replacement lost its bind:\n  got %s", got)
+		}
+		// And the source is a path the HOST has, not one inside the updater.
+		if strings.Contains(got, "/compose/payload") {
+			t.Errorf("the bind points inside the updater, where the daemon cannot follow it:\n  got %s", got)
+		}
+	})
+
 	t.Run("nothing is left waiting for a person", func(t *testing.T) {
 		if got := s.Queued(); len(got) != 0 {
 			t.Errorf("queue is %v, want empty -- policy allowed this one", got)
@@ -58,8 +82,9 @@ func TestV4AppliesWhatPolicyAllows(t *testing.T) {
 // path between them, which is what this is for.
 func TestV4AFailedAutoApplyIsAnnounced(t *testing.T) {
 	s := Up(t, "duva-v4/failed-apply")
-	// Pulls, pins, and then will not start: FROM scratch with no entrypoint.
-	s.PushUnrunnable("broken-app", "1.0.1")
+	// The unrunnable 1.0.1 comes from the scenario's manifest, so the sandbox
+	// stands up the same world this asserts on.
+	s.PushUpdates()
 	s.Pin("app")
 	s.Start()
 
@@ -82,7 +107,7 @@ func TestV4AFailedAutoApplyIsAnnounced(t *testing.T) {
 		// Not which image it was created with -- docker reports that whether
 		// or not it ever ran, which is what made the first version of this
 		// assertion wrong. Whether it is up is the question.
-		if s.running("app") {
+		if s.running("broken-app") {
 			t.Error("the container is running, so nothing failed to start and this tests nothing")
 		}
 	})
