@@ -258,9 +258,10 @@
   </div>
 
   <div class="banner banner-error" v-if="unreachable.length">
-    <span class="who">unreachable</span> &mdash;
-    <span v-for="u in unreachable"><span class="mono">{{ u.Host }}</span> ({{ u.Err }}) </span>
-    <br>What they last reported is shown below, faded, and cannot be approved until they answer again.
+    <span v-for="u in unreachable">
+      <span class="who mono">{{ u.Host }}</span> is {{ u.Err }}.
+    </span>
+    <br>What it last reported is shown below, faded, and cannot be approved until it answers again.
   </div>
 
   <div class="banner" :class="result.level === 'error' ? 'banner-error' : ''" v-if="result.message">

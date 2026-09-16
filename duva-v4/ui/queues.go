@@ -47,12 +47,12 @@ func parseQueues(raw string, token func(host string) string) ([]ui.Upstream, err
 	return out, nil
 }
 
-// tokenEnv is the variable a host's token comes from: DUVA_UI_TOKEN_<HOST>,
+// tokenEnv is the variable a host's token comes from: DUVA_QUEUE_TOKEN_<HOST>,
 // upper-cased with anything that cannot appear in an environment variable
 // name replaced by an underscore, since a host name may contain "-" or ".".
 func tokenEnv(host string) string {
 	var b strings.Builder
-	b.WriteString("DUVA_UI_TOKEN_")
+	b.WriteString("DUVA_QUEUE_TOKEN_")
 	for _, r := range strings.ToUpper(host) {
 		switch {
 		case r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_':
@@ -64,15 +64,18 @@ func tokenEnv(host string) string {
 	return b.String()
 }
 
-// tokenFromEnv is the per-host token, falling back to a shared one.
+// tokenFromEnv is a host's queue token.
 //
-// The shared fallback exists because the common case is one operator with one
-// token they set on every queue; requiring a variable per host to express
-// that would be ceremony. Per-host wins where both are set, so adding a host
-// with its own token does not mean re-tokening the others.
+// Per host, with no shared fallback. There used to be one, for the operator
+// with a single token set on every queue -- but each queue mints its own when
+// none is injected, so in practice every host has a different one, and the
+// "shared" variable ended up holding whichever host was configured first. A
+// default that is really one host's secret is worse than no default: the
+// others fail with a token mismatch rather than with "no token for that host".
+//
+// The name is the queue's own -- DUVA_QUEUE_TOKEN_<HOST>, matching the
+// DUVA_QUEUE_TOKEN that host's queue reads -- because what is being named is
+// the door, not the process holding the key.
 func tokenFromEnv(host string) string {
-	if t := os.Getenv(tokenEnv(host)); t != "" {
-		return t
-	}
-	return os.Getenv("DUVA_UI_TOKEN")
+	return os.Getenv(tokenEnv(host))
 }

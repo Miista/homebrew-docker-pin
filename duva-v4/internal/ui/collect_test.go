@@ -2,6 +2,7 @@ package ui
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -211,5 +212,52 @@ func TestAnUnreachableQueueKeepsItsLastQueue(t *testing.T) {
 	}
 	if len(c.Unreachable()) != 1 {
 		t.Error("the queue is not reported unreachable")
+	}
+}
+
+// An unreachable queue is described in terms of what went wrong, not in terms
+// of what Go saw.
+//
+// The raw transport error carries the method, the full URL and the resolver's
+// address and port -- none of which a person can act on. Four things actually
+// go wrong here and each has a different answer, so the page says which.
+func TestUnreachableSaysWhatWentWrong(t *testing.T) {
+	for _, tc := range []struct{ name, raw, want string }{
+		{
+			// The one from the screenshot.
+			"name does not resolve",
+			`Get "http://duva-queue:8080/v1/snapshot": dial tcp: lookup duva-queue on 127.0.0.11:53: no such host`,
+			"not running, or its name is wrong",
+		},
+		{
+			"nothing listening",
+			`Get "http://duva-queue:8080/v1/snapshot": dial tcp 172.18.0.5:8080: connect: connection refused`,
+			"not listening on that port",
+		},
+		{
+			"too slow",
+			`Get "http://192.0.2.11:8096/v1/snapshot": context deadline exceeded (Client.Timeout exceeded while awaiting headers)`,
+			"did not answer in time",
+		},
+		{
+			"token rejected",
+			"401 Unauthorized: unauthorized",
+			"refused the token",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := why(errors.New(tc.raw)); got != tc.want {
+				t.Errorf("why(%q)\n  = %q\n want %q", tc.raw, got, tc.want)
+			}
+		})
+	}
+}
+
+// Anything unrecognised keeps its meaning but loses the URL prefix Go puts in
+// front of every transport error.
+func TestAnUnrecognisedErrorLosesTheURL(t *testing.T) {
+	got := why(errors.New(`Get "http://duva-queue:8080/v1/snapshot": something new and strange`))
+	if got != "something new and strange" {
+		t.Errorf("why = %q, want the part after the URL", got)
 	}
 }

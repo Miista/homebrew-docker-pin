@@ -263,7 +263,7 @@ func (c *Collector) Unreachable() []Problem {
 	var out []Problem
 	for _, d := range c.Upstreams {
 		if s, ok := c.cache[d.Host]; ok && s.err != nil {
-			out = append(out, Problem{Host: d.Host, Err: s.err.Error()})
+			out = append(out, Problem{Host: d.Host, Err: why(s.err)})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Host < out[j].Host })
@@ -421,4 +421,42 @@ func (c *Collector) Stream(key string, w http.ResponseWriter, r *http.Request) e
 		}
 	}
 	return fmt.Errorf("no queue named %q", host)
+}
+
+// why turns a fetch failure into something worth reading.
+//
+// The raw error is a Go transport error -- the method, the full URL, the
+// resolver's address and port -- none of which is what a person needs. What
+// they need is which of four things went wrong, because the answer differs:
+// the queue is down, the name does not resolve, the token is wrong, or it
+// answered with something unexpected.
+//
+// The original is not discarded; it goes to the log, where someone debugging
+// can have all of it. This is the sentence on the page.
+func why(err error) string {
+	if err == nil {
+		return ""
+	}
+	s := err.Error()
+	switch {
+	case strings.Contains(s, "no such host"):
+		// Almost always a queue that is not running, since these are container
+		// names on a compose network: the name exists while the container
+		// does.
+		return "not running, or its name is wrong"
+	case strings.Contains(s, "connection refused"):
+		return "not listening on that port"
+	case strings.Contains(s, "Client.Timeout") || strings.Contains(s, "context deadline exceeded"):
+		return "did not answer in time"
+	case strings.Contains(s, "401") || strings.Contains(s, "403"):
+		return "refused the token"
+	case strings.Contains(s, "no route to host") || strings.Contains(s, "network is unreachable"):
+		return "cannot be reached from here"
+	}
+	// Anything else, trimmed of the URL prefix Go puts on transport errors:
+	// `Get "http://...": the part that matters`.
+	if i := strings.Index(s, `": `); i != -1 {
+		return s[i+3:]
+	}
+	return s
 }

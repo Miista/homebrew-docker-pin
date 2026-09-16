@@ -7,11 +7,10 @@
 //
 // Configuration:
 //
-//	DUVA_UI_QUEUES      the queues to serve, "host=url,host=url"
-//	DUVA_UI_TOKEN         the bearer token they require
-//	DUVA_UI_TOKEN_<HOST>  that host's token, when they differ
-//	DUVA_UI_READ_ONLY     serve the page without the Update button
-//	DUVA_UI_LOG_LEVEL     how much to say
+//	DUVA_QUEUES              the queues to serve, "host=url,host=url"
+//	DUVA_QUEUE_TOKEN_<HOST>  what that host's queue reads as DUVA_QUEUE_TOKEN
+//	DUVA_READ_ONLY           serve the page without the Update button
+//	DUVA_LOG_LEVEL           how much to say
 package main
 
 import (
@@ -62,7 +61,7 @@ func main() {
 			os.Exit(1)
 		}
 	}
-	log := newLogger(os.Getenv("DUVA_UI_LOG_LEVEL"))
+	log := newLogger(os.Getenv("DUVA_LOG_LEVEL"))
 	if err := run(log); err != nil {
 		log.Error().Msgf("%v", err)
 		os.Exit(1)
@@ -86,16 +85,16 @@ func health() int {
 }
 
 func run(log zerolog.Logger) error {
-	queues, err := parseQueues(os.Getenv("DUVA_UI_QUEUES"), tokenFromEnv)
+	queues, err := parseQueues(os.Getenv("DUVA_QUEUES"), tokenFromEnv)
 	if err != nil {
-		return fmt.Errorf("DUVA_UI_QUEUES: %w", err)
+		return fmt.Errorf("DUVA_QUEUES: %w", err)
 	}
 	// Refusing rather than serving an empty page: with no queues every
 	// reload would say "nothing waiting for approval", which is the single
 	// most misleading thing this program can display. It is also the exact
 	// sentence it shows when everything is genuinely fine.
 	if len(queues) == 0 {
-		return fmt.Errorf("no queues: set DUVA_UI_QUEUES to host=url[,host=url]")
+		return fmt.Errorf("no queues: set DUVA_QUEUES to host=url[,host=url]")
 	}
 
 	collector := ui.NewCollector(queues)
@@ -124,7 +123,8 @@ func run(log zerolog.Logger) error {
 				// Worth a line each: a queue that minted its own token
 				// answers nothing without it, and the symptom is a host that
 				// is simply always unreachable.
-				log.Warn().Msgf("no token for %s — set %s or DUVA_UI_TOKEN", d.Host, tokenEnv(d.Host))
+				log.Warn().Msgf("no token for %s — set %s to what that host's queue reads as DUVA_QUEUE_TOKEN",
+					d.Host, tokenEnv(d.Host))
 			}
 			log.Info().Msgf("serving the queue on %s at %s", d.Host, d.URL)
 		}
@@ -147,7 +147,7 @@ func run(log zerolog.Logger) error {
 // endpoint unregistered when there is none: a UI meant only to report should
 // not carry a route that triggers updates, even one that says no.
 func approver(c *ui.Collector, log zerolog.Logger) ui.Approver {
-	if !boolEnv("DUVA_UI_READ_ONLY", false) {
+	if !boolEnv("DUVA_READ_ONLY", false) {
 		return &loggedApprover{c: c, log: log}
 	}
 	log.Info().Msg("read-only: the page will show the queue and nothing can be approved through it")
