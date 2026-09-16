@@ -20,8 +20,8 @@ const (
 	// releases rather than dates reads the same way.
 	SchemeSemVer Scheme = "semver"
 	// SchemeCalVer is a version whose leading segment is a year: 2026.9.1,
-	// 2026.08.2, 24.04. Distinguishable from semver only by that magnitude,
-	// which is why the range is deliberately narrow.
+	// 2026.08.2. Distinguishable from semver only by that magnitude, so only
+	// the four-digit form is recognised -- see isCalVer.
 	SchemeCalVer Scheme = "calver"
 	// SchemeMoving is a tag that is not a version at all but a stream that
 	// gets repointed: latest, stable, edge, main. Following one is a decision
@@ -53,8 +53,8 @@ var movingTags = map[string]bool{
 // No software is on major version 1000. A leading segment at or above it is a
 // year (2026.9.1), or a date stamp, or a build counter -- and every one of
 // those is a different thing from a release count, so none of them should be
-// compared against one. Below it the two are genuinely ambiguous and the
-// second segment has to decide.
+// compared against one. Below it a leading segment is read as a release count,
+// including a two-digit year: see isCalVer for why that is deliberate.
 const bigLeadingSegment = 1000
 
 // SchemeOf reports which convention a tag follows.
@@ -92,42 +92,33 @@ func SchemeOf(tag string) Scheme {
 		}
 		return SchemeSemVer
 	}
-	if isCalVer(segments) {
+	if isCalVer(segments[0]) {
 		return SchemeCalVer
 	}
 	return SchemeSemVer
 }
 
-// isCalVer reports whether a segmented core is date-shaped.
+// isCalVer reports whether a version core's leading segment is date-shaped.
 //
-// Only the leading segment is consulted for the four-digit form: 2026.9.1 is a
-// year and a project is not on major version 2026. The two-digit form needs
-// corroboration from the second segment, since 24.04 and 24.0 are the same
-// shape and only one is a date.
-func isCalVer(segments []string) bool {
-	// A leading segment of 1000 or more is never a release count: no software
-	// is on major version 1000. Whatever it is -- a year, a date, a build id
-	// -- it is not a line that a semver tag is a point on, which is the
-	// distinction this draws.
-	if n, err := strconv.Atoi(segments[0]); err == nil && n >= bigLeadingSegment {
-		return true
-	}
-	if len(segments) < 2 || len(segments[0]) != 2 {
-		return false
-	}
-	year, err := strconv.Atoi(segments[0])
-	if err != nil || year < 20 || year > 99 {
-		return false
-	}
-	// The second segment must be a month. Two digits, because that is what a
-	// date-shaped tag writes -- `24.04` and `24.10` are both Ubuntu releases,
-	// while `24.0` and `24.1` are a major and its minors. The padding alone is
-	// not the signal (10 through 12 are not padded); the width is.
-	if len(segments[1]) != 2 {
-		return false
-	}
-	month, err := strconv.Atoi(segments[1])
-	return err == nil && month >= 1 && month <= 12
+// The leading segment alone decides, and only by magnitude: 2026.9.1 is a year
+// because no project is on major version 2026.
+//
+// Two-digit years are deliberately NOT recognised. Ubuntu tags 24.04 and 24.10,
+// which are a year and a month -- but 24.04 is also an entirely ordinary
+// major.minor, and nothing in the tag distinguishes them. Telling them apart
+// would mean encoding one vendor's convention as though it were the norm, and
+// then every project on major version 24 pays for it. Ubuntu departed from the
+// convention; the cost of that belongs with the tag, not with this rule.
+//
+// The consequence is bounded and in the safe direction: a two-digit calver tag
+// reads as semver, so it is compared against other semver tags. Both sides of
+// such a comparison come from the same repository, so they share whatever
+// convention it uses and the ordering still holds. What the rule protects
+// against -- comparing 0.3.22 against 2026.9.1 -- needs the four-digit form to
+// arise at all.
+func isCalVer(leading string) bool {
+	n, err := strconv.Atoi(leading)
+	return err == nil && n >= bigLeadingSegment
 }
 
 // SameScheme reports whether a candidate follows the same convention as the

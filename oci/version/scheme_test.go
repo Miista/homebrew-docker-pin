@@ -22,9 +22,10 @@ func TestSchemeOf(t *testing.T) {
 		{"2026.9.1", SchemeCalVer},
 		{"2026.08.2", SchemeCalVer},
 		{"2024.1.0", SchemeCalVer},
-		// Two-digit year with a zero-padded month: Ubuntu's convention.
-		{"24.04", SchemeCalVer},
-		{"22.04", SchemeCalVer},
+		// Ubuntu's 24.04 is a year and a month, and reads as semver here on
+		// purpose -- see TestTwoDigitYearsAreNotRecognised.
+		{"24.04", SchemeSemVer},
+		{"22.04", SchemeSemVer},
 
 		// Moving tags: a stream, not a version.
 		{"latest", SchemeMoving},
@@ -85,15 +86,28 @@ func TestABareBigNumberIsUnknown(t *testing.T) {
 	}
 }
 
-// The case that is genuinely ambiguous, and must not be guessed: an unpadded
-// two-digit leading segment is a year to Ubuntu and a major to Chrome, and the
-// tag carries nothing that distinguishes them.
-func TestUnpaddedTwoDigitIsNotAssumedToBeCalVer(t *testing.T) {
-	for _, tag := range []string{"24.0", "24.1", "99.9"} {
+// A two-digit leading segment is never read as a year, even when the rest of
+// the tag is shaped like a date.
+//
+// 24.04 is Ubuntu's year and month; it is also an ordinary major.minor, and
+// nothing in the tag says which. Recognising it would mean encoding one
+// vendor's convention as the norm, and charging every project on major version
+// 24 for it. Ubuntu is the one that departed from the convention.
+//
+// Safe in the direction it fails: such a tag reads as semver and is compared
+// against other semver tags from the same repository, which share whatever
+// convention it uses. The comparison this rule exists to prevent -- 0.3.22
+// against 2026.9.1 -- needs a four-digit year to arise at all.
+func TestTwoDigitYearsAreNotRecognised(t *testing.T) {
+	for _, tag := range []string{"24.04", "22.04", "24.10", "24.0", "24.1", "99.9"} {
 		if got := SchemeOf(tag); got != SchemeSemVer {
-			t.Errorf("SchemeOf(%q) = %s, want %s: an unpadded second segment is a minor, not a month",
-				tag, got, SchemeSemVer)
+			t.Errorf("SchemeOf(%q) = %s, want %s", tag, got, SchemeSemVer)
 		}
+	}
+	// And such tags still compare against each other, which is what keeps an
+	// Ubuntu-versioned image upgradable.
+	if ok, why := SameScheme("24.04", "24.10"); !ok {
+		t.Errorf("SameScheme(24.04, 24.10) = false (%s), want true", why)
 	}
 }
 
