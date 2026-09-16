@@ -537,11 +537,61 @@ func (s *Scenario) StartExpectingFailure(service string) {
 }
 
 // running reports whether a service's container is up.
+// running reports whether a compose SERVICE is up.
+//
+// The service, not the container_name -- they differ in fixtures that set
+// one, and `compose ps` only knows the former. A container_name passed here
+// matches no service, so compose answers with nothing and this would report
+// "not running" for a container that is running perfectly. Which is the
+// answer a test asserting something is down expects, so it would pass without
+// testing anything. Fatal rather than false: a name compose does not know is
+// a mistake in the test, not an observation about the world.
 func (s *Scenario) running(service string) bool {
 	s.t.Helper()
+	s.mustBeAService(service)
 	out, err := s.compose("ps", "-q", "--status", "running", service)
 	if err != nil {
 		return false
 	}
 	return strings.TrimSpace(out) != ""
+}
+
+// runningContainer reports whether a CONTAINER is up, by the name it carries
+// on the daemon.
+//
+// For fixtures whose container_name differs from their service name: the
+// daemon is the only thing that knows that name, so this asks the daemon
+// rather than compose.
+func (s *Scenario) runningContainer(name string) bool {
+	s.t.Helper()
+	out, err := exec.Command("docker", "inspect", name,
+		"--format", "{{.State.Running}}").Output()
+	if err != nil {
+		// No such container. Not running, and not an error: a scenario that
+		// failed to create it is exactly what some tests assert.
+		return false
+	}
+	return strings.TrimSpace(string(out)) == "true"
+}
+
+// mustBeAService fails the test when name is not a service in the fixture.
+//
+// The three names a fixture carries -- service, container_name and repository
+// -- are the same word in most of them and different in some, and the helpers
+// that take each look identical at the call site. Getting one wrong otherwise
+// produces a plausible answer rather than an error.
+func (s *Scenario) mustBeAService(name string) {
+	s.t.Helper()
+	out, err := s.compose("config", "--services")
+	if err != nil {
+		s.t.Fatalf("reading the fixture's services: %v\n%s", err, out)
+	}
+	for _, svc := range strings.Fields(out) {
+		if svc == name {
+			return
+		}
+	}
+	s.t.Fatalf("%q is not a service in this fixture (it has: %s)\n"+
+		"  If that is a container_name, use runningContainer instead.",
+		name, strings.Join(strings.Fields(out), ", "))
 }

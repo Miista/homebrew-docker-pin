@@ -98,8 +98,12 @@ func TestV4AFailedAutoApplyIsAnnounced(t *testing.T) {
 		if failure == "" {
 			t.Fatalf("no failure was announced:\n  %v", s.Notifications())
 		}
-		if !strings.Contains(failure, "app") {
-			t.Errorf("the announcement does not name the service:\n  %s", failure)
+		// The service, as the notification titles it. Not a bare "app"
+		// substring: this fixture's repository is broken-app, so that matches
+		// the body too and would pass on a notification that never named the
+		// service at all.
+		if !strings.Contains(failure, "app on integration") {
+			t.Errorf("the announcement does not name the service and host:\n  %s", failure)
 		}
 	})
 
@@ -107,7 +111,11 @@ func TestV4AFailedAutoApplyIsAnnounced(t *testing.T) {
 		// Not which image it was created with -- docker reports that whether
 		// or not it ever ran, which is what made the first version of this
 		// assertion wrong. Whether it is up is the question.
-		if s.running("broken-app") {
+		// By container name, via the daemon: this fixture's container_name
+		// differs from its service name, and compose ps only knows services.
+		// Asked of compose, an unknown name answers "nothing running" -- which
+		// is what this asserts, so it passed without observing anything.
+		if s.runningContainer("broken-app") {
 			t.Error("the container is running, so nothing failed to start and this tests nothing")
 		}
 	})
