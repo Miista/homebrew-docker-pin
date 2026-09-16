@@ -1229,3 +1229,63 @@ func TestContainerIndex_EmptyFile(t *testing.T) {
 		t.Errorf("got %+v, want empty", index)
 	}
 }
+
+// FileIn requires the compose file in the directory it is given, and says so
+// when there is none.
+//
+// The difference from FindFile is the whole point: a caller whose directory is
+// a mount must not be handed a file from outside it. Walking up would leave
+// the mount and answer with whatever it found out there -- a wrong answer
+// wearing the shape of a right one.
+func TestFileInDoesNotWalkUp(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "docker-compose.yml"), []byte("services: {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sub := filepath.Join(root, "empty")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// FindFile climbs out and finds the parent's.
+	if got, err := FindFile(sub); err != nil || got == "" {
+		t.Fatalf("FindFile(%s) = %q, %v -- it is expected to walk up", sub, got, err)
+	}
+	// FileIn does not.
+	if got, err := FileIn(sub); err == nil {
+		t.Errorf("FileIn(%s) = %q, want an error -- there is no compose file there", sub, got)
+	}
+}
+
+// And it finds one that is there.
+func TestFileInFindsTheFileInTheDirectory(t *testing.T) {
+	dir := t.TempDir()
+	want := filepath.Join(dir, "docker-compose.yml")
+	if err := os.WriteFile(want, []byte("services: {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := FileIn(dir)
+	if err != nil {
+		t.Fatalf("FileIn: %v", err)
+	}
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// The message names the directory and what was expected, because the fix is to
+// mount something else -- and a message that only said "not found" would leave
+// someone guessing which of the two mounts was wrong.
+func TestFileInSaysWhereItLooked(t *testing.T) {
+	dir := t.TempDir()
+	_, err := FileIn(dir)
+	if err == nil {
+		t.Fatal("no error for a directory with no compose file")
+	}
+	if !strings.Contains(err.Error(), dir) {
+		t.Errorf("the error does not name the directory: %v", err)
+	}
+	if !strings.Contains(err.Error(), "docker-compose.yml") {
+		t.Errorf("the error does not say what it expected: %v", err)
+	}
+}

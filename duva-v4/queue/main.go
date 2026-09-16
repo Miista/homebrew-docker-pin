@@ -13,12 +13,11 @@
 //
 // Configuration:
 //
-//	DUVA_QUEUE_HOST         what this queue calls itself, for a UI over several
+//	DUVA_HOST         what this queue calls itself, for a UI over several
 //	DUVA_QUEUE_TOKEN        the bearer token a UI must present
-//	DUVA_QUEUE_UPDATE_URL    where the updater is, e.g. http://actor:8080
-//	DUVA_QUEUE_UPDATE_TOKEN  the token the updater requires
-//	DUVA_QUEUE_UPDATE_TIMEOUT how long an apply may run before it is called failed
-//	DUVA_QUEUE_COMPOSE_SUBDIR  where the project lives within /compose
+//	DUVA_UPDATE_URL    where the updater is, e.g. http://actor:8080
+//	DUVA_UPDATE_TOKEN  the token the updater requires
+//	DUVA_UPDATE_TIMEOUT how long an apply may run before it is called failed
 package main
 
 import (
@@ -27,8 +26,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 	// The timezone database, embedded in the binary. Go reads TZ on its
@@ -85,7 +82,7 @@ func main() {
 			os.Exit(1)
 		}
 	}
-	log := newLogger(os.Getenv("DUVA_QUEUE_LOG_LEVEL"))
+	log := newLogger(os.Getenv("DUVA_LOG_LEVEL"))
 	if err := run(log); err != nil {
 		log.Error().Msgf("%v", err)
 		os.Exit(1)
@@ -144,7 +141,7 @@ func health() int {
 func run(log zerolog.Logger) error {
 	cfg := loadConfig()
 
-	root, err := projectFile(cfg.ComposeSubdir)
+	root, err := projectFile()
 	if err != nil {
 		return err
 	}
@@ -182,7 +179,7 @@ func run(log zerolog.Logger) error {
 		// Legitimate, not broken: a queue with no updater queues everything
 		// and applies nothing, which is what someone running it to watch
 		// rather than to act would want.
-		log.Info().Msg("no DUVA_QUEUE_UPDATE_URL: every decision will be queued and nothing applied")
+		log.Info().Msg("no DUVA_UPDATE_URL: every decision will be queued and nothing applied")
 	}
 
 	handler := &q.Handler{
@@ -254,22 +251,20 @@ func notifyHandler(h *q.Handler, log zerolog.Logger) func([]byte) (int, string) 
 }
 
 type config struct {
-	Host          string
-	Token         string
-	ActorURL      string
-	ActorToken    string
-	ApplyTimeout  time.Duration
-	ComposeSubdir string
+	Host         string
+	Token        string
+	ActorURL     string
+	ActorToken   string
+	ApplyTimeout time.Duration
 }
 
 func loadConfig() config {
 	c := config{
-		Host:          os.Getenv("DUVA_QUEUE_HOST"),
-		Token:         tokenFromEnv(),
-		ActorURL:      os.Getenv("DUVA_QUEUE_UPDATE_URL"),
-		ActorToken:    os.Getenv("DUVA_QUEUE_UPDATE_TOKEN"),
-		ComposeSubdir: os.Getenv("DUVA_QUEUE_COMPOSE_SUBDIR"),
-		ApplyTimeout:  defaultApplyTimeout,
+		Host:         os.Getenv("DUVA_HOST"),
+		Token:        tokenFromEnv(),
+		ActorURL:     os.Getenv("DUVA_UPDATE_URL"),
+		ActorToken:   os.Getenv("DUVA_UPDATE_TOKEN"),
+		ApplyTimeout: defaultApplyTimeout,
 	}
 	if c.Host == "" {
 		if h, err := os.Hostname(); err == nil && h != "" {
@@ -278,13 +273,13 @@ func loadConfig() config {
 			c.Host = "unknown-host"
 		}
 	}
-	if raw := os.Getenv("DUVA_QUEUE_UPDATE_TIMEOUT"); raw != "" {
+	if raw := os.Getenv("DUVA_UPDATE_TIMEOUT"); raw != "" {
 		d, err := time.ParseDuration(raw)
 		if err != nil {
 			// A timeout that does not parse is not one to fall back from:
 			// the fallback would be silently different from what was asked
 			// for, and nobody would know until an apply hung.
-			fmt.Fprintf(os.Stderr, "Error: DUVA_QUEUE_UPDATE_TIMEOUT=%q is not a duration\n", raw)
+			fmt.Fprintf(os.Stderr, "Error: DUVA_UPDATE_TIMEOUT=%q is not a duration\n", raw)
 			os.Exit(1)
 		}
 		c.ApplyTimeout = d
@@ -292,21 +287,15 @@ func loadConfig() config {
 	return c
 }
 
-// projectFile is the compose file to read, honouring the subdirectory.
-func projectFile(sub string) (string, error) {
-	dir := composeDir
-	if sub != "" {
-		if filepath.IsAbs(sub) {
-			return "", fmt.Errorf("DUVA_QUEUE_COMPOSE_SUBDIR must be relative to %s, got %q", composeDir, sub)
-		}
-		joined := filepath.Join(composeDir, sub)
-		// Join cleans ".." away rather than erroring, so a value trying to
-		// escape would otherwise resolve quietly to somewhere else.
-		rel, err := filepath.Rel(composeDir, joined)
-		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			return "", fmt.Errorf("DUVA_QUEUE_COMPOSE_SUBDIR %q escapes %s", sub, composeDir)
-		}
-		dir = joined
-	}
-	return compose.FindFile(dir)
+// projectFile is the compose file to read, which must be at the root of what
+// is mounted.
+//
+// No subdirectory, and no walking. This stage reads compose files and touches
+// no git, so it has no reason to see the repository around them -- the project
+// is what is mounted, and if it is not there that is a misconfiguration to say
+// out loud. FindFile would climb out of the mount looking for one and answer
+// with whatever it found, which is a wrong answer wearing the shape of a right
+// one.
+func projectFile() (string, error) {
+	return compose.FileIn(composeDir)
 }

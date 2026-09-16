@@ -13,8 +13,14 @@
 //
 // Configuration:
 //
+//	DUVA_REPO             the repository, mounted at the path it has on the
+//	                      host. Required: nothing can guess it.
+//	DUVA_COMPOSE_DIR      where the compose file is within it. Left out when
+//	                      it is at the repository root.
 //	DUVA_UPDATE_TOKEN     the bearer token the queue must present
-//	DUVA_UPDATE_GIT_PUSH  publish commits (default off)
+//	DUVA_COMMIT_TEMPLATE  what a change is committed under
+//	DUVA_GIT_PUSH         publish commits (default off)
+//	DUVA_LOG_LEVEL        trace/debug/info/warn/error
 package main
 
 import (
@@ -24,7 +30,9 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 	// The timezone database, embedded in the binary. Go reads TZ on its
@@ -36,6 +44,8 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"github.com/Miista/homebrew-docker-pin/compose"
+
 	"github.com/Miista/homebrew-docker-pin/duva-v4/internal/update"
 )
 
@@ -46,28 +56,55 @@ var version = "dev"
 // addresses it.
 const addr = ":8080"
 
-// composeDir is where the compose project is mounted.
+// repoDir is the repository this stage works in.
 //
-// /compose by default, and settable so it can be mounted at the SAME path it
-// has on the host. That matters for anything that hands a path back to the
-// daemon: a relative bind in the compose file resolves against this directory,
-// and the daemon then has to find that path on the host. With the two
-// differing there is no single answer -- a bind needs the host's path, an
-// `include:` needs this container's -- and with them equal both are the same
-// string.
-var composeDir = composeDirFromEnv()
+// The repository, not the project: this is the stage that commits, and a
+// commit needs the whole of it. The watcher and the queue mount the project
+// alone, because reading compose files is all they do.
+//
+// It must be mounted at the SAME path it has on the host. A relative bind in
+// the compose file resolves against it, and the daemon then has to find that
+// path on the host -- with the two differing there is no single answer, since
+// a bind needs the host's path and an `include:` needs this container's, and
+// with them equal both are the same string.
+var repoDir = os.Getenv("DUVA_REPO")
 
-// composeDirFromEnv reads DUVA_UPDATE_COMPOSE_DIR, or /compose.
-//
-// Only this stage needs it. The watcher and the queue read the compose file
-// and nothing else, so where it is mounted is their own business; this one
-// replaces containers, and a container's binds are paths the daemon resolves
-// on the host.
-func composeDirFromEnv() string {
-	if d := os.Getenv("DUVA_UPDATE_COMPOSE_DIR"); d != "" {
-		return d
+// projectFile is the compose file this stage works through: DUVA_REPO
+// is the repository, DUVA_COMPOSE_DIR is where within it the compose
+// file is, and it must be exactly there.
+func projectFile() (string, error) {
+	// The repository is required, with no default. Nothing can guess the path
+	// it has on the host, and an updater pointed at the wrong repository
+	// behaves exactly like one pointed at the right repository -- until a
+	// commit lands somewhere nobody expected.
+	if repoDir == "" {
+		return "", fmt.Errorf("DUVA_REPO is not set: it must be the repository, " +
+			"mounted at the same path it has on the host")
 	}
-	return "/compose"
+	// The path is {repo}/{compose dir}, and the compose directory is left out
+	// when the compose file is at the root of the repository -- which is the
+	// ordinary case for a repository that holds one project.
+	sub := os.Getenv("DUVA_COMPOSE_DIR")
+	if sub == "" {
+		return compose.FileIn(repoDir)
+	}
+	if filepath.IsAbs(sub) {
+		return "", fmt.Errorf("DUVA_COMPOSE_DIR must be relative to %s, got %q", repoDir, sub)
+	}
+	dir := filepath.Join(repoDir, sub)
+	// Join cleans ".." away rather than erroring, so a value trying to escape
+	// would otherwise resolve quietly to somewhere else.
+	rel, err := filepath.Rel(repoDir, dir)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("DUVA_COMPOSE_DIR %q escapes %s", sub, repoDir)
+	}
+	// Down only, never up. The subdirectory descends -- an absolute or
+	// ..-escaping value is refused above -- and FileIn consults no parent. A
+	// walk upwards would leave the project it was pointed at and find the
+	// repository root, or climb out of the mount entirely, and answer with a
+	// compose file belonging to something else. That answer looks like a
+	// right one, which is what makes it worth refusing.
+	return compose.FileIn(dir)
 }
 
 func main() {
@@ -81,7 +118,7 @@ func main() {
 			os.Exit(1)
 		}
 	}
-	log := newLogger(os.Getenv("DUVA_UPDATE_LOG_LEVEL"))
+	log := newLogger(os.Getenv("DUVA_LOG_LEVEL"))
 	if err := run(log); err != nil {
 		log.Error().Msgf("%v", err)
 		os.Exit(1)
@@ -93,11 +130,19 @@ func run(log zerolog.Logger) error {
 	// would take work, do most of it, and fail at the step that matters. The
 	// same reasoning as duva's preflight -- discovering it later means
 	// discovering it after a container was already replaced.
-	if err := preflight(composeDir); err != nil {
+	//
+	// Which is also why the project is resolved here rather than at the first
+	// apply: DUVA_REPO and DUVA_COMPOSE_DIR are both required,
+	// and a process that started happily and then refused every request is a
+	// worse way to learn that than one that never started.
+	if _, err := projectFile(); err != nil {
+		return err
+	}
+	if err := preflight(repoDir); err != nil {
 		return err
 	}
 
-	push := boolEnv("DUVA_UPDATE_GIT_PUSH", false)
+	push := boolEnv("DUVA_GIT_PUSH", false)
 	token := os.Getenv("DUVA_UPDATE_TOKEN")
 
 	// Loaded once, at startup, and a bad one refuses to start. A template
@@ -138,7 +183,7 @@ func run(log zerolog.Logger) error {
 			log.Warn().Msg("no DUVA_UPDATE_TOKEN: this actor will accept work from any caller that can reach it")
 		}
 		if !push {
-			log.Info().Msg("DUVA_UPDATE_GIT_PUSH is off: commits stay local")
+			log.Info().Msg("DUVA_GIT_PUSH is off: commits stay local")
 		}
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Error().Msgf("stopped serving: %v", err)
@@ -204,14 +249,14 @@ func boolEnv(key string, fallback bool) bool {
 // in a moment, and greying every button for that would be noise. The
 // transaction retries it by design.
 func readiness() update.Readiness {
-	clean, err := realGit.IsClean(composeDir)
+	clean, err := realGit.IsClean(repoDir)
 	switch {
 	case errors.Is(err, errRepoBusy):
 		return update.Readiness{Ready: true}
 	case err != nil:
 		return update.Readiness{
 			Ready:  false,
-			Reason: fmt.Sprintf("the repository at %s cannot be read: %v", composeDir, err),
+			Reason: fmt.Sprintf("the repository at %s cannot be read: %v", repoDir, err),
 		}
 	case !clean:
 		return update.Readiness{
@@ -226,7 +271,7 @@ func readiness() update.Readiness {
 	// container the repository does not record is the divergence this tool
 	// exists to prevent, and a rollback at that point would mean tearing down
 	// a healthy service over a commit message.
-	if err := checkMessageAccepted(composeDir, commitTemplate); err != nil {
+	if err := checkMessageAccepted(repoDir, commitTemplate); err != nil {
 		return update.Readiness{Ready: false, Reason: err.Error()}
 	}
 	return update.Readiness{Ready: true}

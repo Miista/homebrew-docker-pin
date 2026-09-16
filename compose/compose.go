@@ -21,6 +21,23 @@ func Locate() (string, error) {
 
 var composeNames = []string{"docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"}
 
+// FileIn is the compose file directly inside dir, and an error if there is
+// none.
+//
+// Unlike FindFile it does not walk: no parent is consulted, and no nearer or
+// topmost file is preferred. That is the point for a caller whose directory is
+// a mount -- walking up would leave the mount entirely and answer with
+// whatever it found out there, which is a wrong answer that looks like a right
+// one. A caller that means "the project is here" should be told plainly when
+// it is not.
+func FileIn(dir string) (string, error) {
+	if f, ok := composeFileIn(dir); ok {
+		return f, nil
+	}
+	return "", fmt.Errorf("no compose file in %s: expected one of %s directly there",
+		dir, strings.Join(composeNames, ", "))
+}
+
 // composeFileIn returns the compose file directly inside dir, if any,
 // preferring names earlier in composeNames.
 func composeFileIn(dir string) (string, bool) {

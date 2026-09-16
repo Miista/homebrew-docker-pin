@@ -72,7 +72,7 @@ func notRoot(string) error {
 		"files in the repository mounted at %s and lose the commit identity its "+
 		".git/config carries\n    Set `user: \"<uid>:<gid>\"` to the owner of that "+
 		"repository, and `group_add` to the docker group's GID on this host "+
-		"(`stat -c '%%g' %s`)", composeDir, dockerSocket)
+		"(`stat -c '%%g' %s`)", repoDir, dockerSocket)
 }
 
 // daemonReachable dials the docker socket.

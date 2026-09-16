@@ -101,14 +101,14 @@ func TestAnOldWholeRunCutoffSeedsEveryService(t *testing.T) {
 // disturbing what is recorded.
 func TestSinceOverrideAcceptsADuration(t *testing.T) {
 	useTempState(t)
-	t.Setenv("DUVA_WATCH_SINCE", "24h")
+	t.Setenv("DUVA_SINCE", "24h")
 
 	mem := loadOrFail(t)
 	got := mem.Cutoff("app")
 	if d := time.Since(got); d < 23*time.Hour || d > 25*time.Hour {
 		t.Errorf("cutoff is %v ago, want about 24h", d)
 	}
-	if !strings.Contains(mem.why, "DUVA_WATCH_SINCE") {
+	if !strings.Contains(mem.why, "DUVA_SINCE") {
 		t.Errorf("why = %q, want it to name the override", mem.why)
 	}
 }
@@ -116,7 +116,7 @@ func TestSinceOverrideAcceptsADuration(t *testing.T) {
 func TestSinceOverrideAcceptsATimestamp(t *testing.T) {
 	useTempState(t)
 	want := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
-	t.Setenv("DUVA_WATCH_SINCE", want.Format(time.RFC3339))
+	t.Setenv("DUVA_SINCE", want.Format(time.RFC3339))
 
 	if got := loadOrFail(t).Cutoff("app"); !got.Equal(want) {
 		t.Errorf("cutoff = %v, want %v", got, want)
@@ -134,14 +134,14 @@ func TestAnOverrideRecordsNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	t.Setenv("DUVA_WATCH_SINCE", "1h")
+	t.Setenv("DUVA_SINCE", "1h")
 	overridden := loadOrFail(t)
 	overridden.Checked("app", time.Now())
 	if err := overridden.save(); err != nil {
 		t.Fatal(err)
 	}
 
-	t.Setenv("DUVA_WATCH_SINCE", "")
+	t.Setenv("DUVA_SINCE", "")
 	if got := loadOrFail(t).Cutoff("app"); !got.Equal(recorded) {
 		t.Errorf("an override overwrote the recorded line: %v, want %v", got, recorded)
 	}
@@ -149,10 +149,10 @@ func TestAnOverrideRecordsNothing(t *testing.T) {
 
 func TestAMalformedSinceIsAnError(t *testing.T) {
 	useTempState(t)
-	t.Setenv("DUVA_WATCH_SINCE", "yesterday-ish")
+	t.Setenv("DUVA_SINCE", "yesterday-ish")
 
 	if _, err := loadMemory(zerolog.Nop()); err == nil {
-		t.Error("a malformed DUVA_WATCH_SINCE was accepted")
+		t.Error("a malformed DUVA_SINCE was accepted")
 	}
 }
 
@@ -269,37 +269,24 @@ func TestSaveLeavesNoTempFiles(t *testing.T) {
 
 // --- the project path --------------------------------------------------------
 
-func TestProjectFileHonoursASubdirectory(t *testing.T) {
+// What is mounted is the project, so there is no subdirectory to honour and
+// none to escape from. This stage reads compose files and touches no git, so
+// it has no reason to see the repository around them -- only the updater
+// mounts that, because committing needs it.
+func TestTheProjectIsWhatIsMounted(t *testing.T) {
 	dir := t.TempDir()
+	// A repository-shaped tree: the project in a subdirectory, which this
+	// stage must NOT go looking through.
 	sub := filepath.Join(dir, "pi")
 	os.MkdirAll(sub, 0o755)
-	want := filepath.Join(sub, "docker-compose.yml")
-	os.WriteFile(want, []byte("services: {}\n"), 0o644)
+	os.WriteFile(filepath.Join(sub, "docker-compose.yml"), []byte("services: {}\n"), 0o644)
 
 	old := composeDir
 	composeDir = dir
 	t.Cleanup(func() { composeDir = old })
 
-	got, err := projectFile("pi")
-	if err != nil {
-		t.Fatalf("projectFile: %v", err)
-	}
-	if got != want {
-		t.Errorf("got %q, want %q", got, want)
-	}
-}
-
-// A subdirectory that climbs out must be refused rather than silently
-// resolving somewhere else.
-func TestProjectFileRefusesToEscape(t *testing.T) {
-	old := composeDir
-	composeDir = t.TempDir()
-	t.Cleanup(func() { composeDir = old })
-
-	for _, sub := range []string{"../etc", "..", "/absolute"} {
-		if _, err := projectFile(sub); err == nil {
-			t.Errorf("projectFile(%q) was accepted", sub)
-		}
+	if _, err := projectFile(); err == nil {
+		t.Error("a project one directory down was found, so the mount is not the contract")
 	}
 }
 
@@ -324,12 +311,12 @@ func TestFirstCheckIsOnlyForAServiceWithNoHistory(t *testing.T) {
 	}
 }
 
-// An override is not a first check: DUVA_WATCH_SINCE asks a question against a
+// An override is not a first check: DUVA_SINCE asks a question against a
 // window someone chose, and widening it would make the flag mean something
 // else.
 func TestAnOverrideIsNeverAFirstCheck(t *testing.T) {
 	m := &memory{services: map[string]serviceState{}, override: true}
 	if m.FirstCheck("anything") {
-		t.Error("DUVA_WATCH_SINCE was treated as a first check, so it would report more than it was asked for")
+		t.Error("DUVA_SINCE was treated as a first check, so it would report more than it was asked for")
 	}
 }

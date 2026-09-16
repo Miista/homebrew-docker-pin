@@ -25,18 +25,17 @@
 //	run [service]  check everything, or just the named service (its service
 //	               name or its container name). A schedule always checks
 //	               everything; narrowing is for asking about one thing.
-//	serve          check on DUVA_WATCH_SCHEDULE
+//	serve          check on DUVA_SCHEDULE
 //	health         exit 0 if the webhook is reachable
 //
 // Configuration:
 //
-//	DUVA_WATCH_HOST            what this watcher calls itself
-//	DUVA_WATCH_COMPOSE_SUBDIR  where the project lives within /compose
-//	DUVA_WATCH_WEBHOOK_URL     where to publish findings; empty means log only
-//	DUVA_WATCH_SCHEDULE        a 5-field cron expression, for `serve`
-//	DUVA_WATCH_SINCE           override the cutoff for one run (RFC 3339, or a
+//	DUVA_HOST            what this watcher calls itself
+//	DUVA_WEBHOOK_URL     where to publish findings; empty means log only
+//	DUVA_SCHEDULE        a 5-field cron expression, for `serve`
+//	DUVA_SINCE           override the cutoff for one run (RFC 3339, or a
 //	                         duration like 168h meaning "the last week")
-//	DUVA_WATCH_LOG_LEVEL       trace/debug/info/warn/error
+//	DUVA_LOG_LEVEL       trace/debug/info/warn/error
 package main
 
 import (
@@ -44,7 +43,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -95,7 +93,7 @@ const slowCheck = 10 * time.Second
 // Daily because that is how often these registries actually publish. Hourly
 // would multiply the request count by twenty-four to learn the same thing.
 func scheduleFromEnv() string {
-	if s := os.Getenv("DUVA_WATCH_SCHEDULE"); s != "" {
+	if s := os.Getenv("DUVA_SCHEDULE"); s != "" {
 		return s
 	}
 	return defaultSchedule
@@ -137,7 +135,7 @@ func main() {
 		}
 	}
 
-	log := newLogger(os.Getenv("DUVA_WATCH_LOG_LEVEL"))
+	log := newLogger(os.Getenv("DUVA_LOG_LEVEL"))
 
 	var err error
 	if mode == "serve" {
@@ -158,7 +156,7 @@ func main() {
 // configuration as unhealthy would make the signal useless for everyone who
 // runs it that way.
 func health() int {
-	url := os.Getenv("DUVA_WATCH_WEBHOOK_URL")
+	url := os.Getenv("DUVA_WEBHOOK_URL")
 	if url == "" {
 		return 0
 	}
@@ -181,7 +179,7 @@ func serve(log zerolog.Logger) error {
 	// schedule that does not parse should stop this now, not in a day, with
 	// nothing in the log to say why nothing happened.
 	if _, err := croncal.Next(expr, time.Now()); err != nil {
-		return fmt.Errorf("DUVA_WATCH_SCHEDULE %q: %w", expr, err)
+		return fmt.Errorf("DUVA_SCHEDULE %q: %w", expr, err)
 	}
 	log.Info().Msgf("checking on schedule %q", expr)
 
@@ -224,7 +222,7 @@ func serve(log zerolog.Logger) error {
 }
 
 func run(log zerolog.Logger, only string) error {
-	host := os.Getenv("DUVA_WATCH_HOST")
+	host := os.Getenv("DUVA_HOST")
 	if host == "" {
 		if h, err := os.Hostname(); err == nil && h != "" {
 			host = h
@@ -233,7 +231,7 @@ func run(log zerolog.Logger, only string) error {
 		}
 	}
 
-	root, err := projectFile(os.Getenv("DUVA_WATCH_COMPOSE_SUBDIR"))
+	root, err := projectFile()
 	if err != nil {
 		return err
 	}
@@ -278,7 +276,7 @@ func run(log zerolog.Logger, only string) error {
 		TagDigest: registry.RemoteDigest,
 	}
 
-	reporter := newReporter(os.Getenv("DUVA_WATCH_WEBHOOK_URL"), host, log)
+	reporter := newReporter(os.Getenv("DUVA_WEBHOOK_URL"), host, log)
 
 	// The backlog first: a webhook that has come back should hear what earlier
 	// runs could not hand on before it hears anything new.
@@ -376,23 +374,17 @@ func readServices(root string, log zerolog.Logger) ([]watch.Service, error) {
 	return out, nil
 }
 
-// projectFile is the compose file to read, honouring the subdirectory.
-func projectFile(sub string) (string, error) {
-	dir := composeDir
-	if sub != "" {
-		if filepath.IsAbs(sub) {
-			return "", fmt.Errorf("DUVA_WATCH_COMPOSE_SUBDIR must be relative to %s, got %q", composeDir, sub)
-		}
-		joined := filepath.Join(composeDir, sub)
-		// Join cleans ".." away rather than erroring, so a value trying to
-		// escape would otherwise resolve quietly to somewhere else.
-		rel, err := filepath.Rel(composeDir, joined)
-		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			return "", fmt.Errorf("DUVA_WATCH_COMPOSE_SUBDIR %q escapes %s", sub, composeDir)
-		}
-		dir = joined
-	}
-	return compose.FindFile(dir)
+// projectFile is the compose file to read, which must be at the root of what
+// is mounted.
+//
+// No subdirectory, and no walking. This stage reads compose files and touches
+// no git, so it has no reason to see the repository around them -- the project
+// is what is mounted, and if it is not there that is a misconfiguration to say
+// out loud. FindFile would climb out of the mount looking for one and answer
+// with whatever it found, which is a wrong answer wearing the shape of a right
+// one.
+func projectFile() (string, error) {
+	return compose.FileIn(composeDir)
 }
 
 // digestOf is the @sha256:... a pinned image reference records.

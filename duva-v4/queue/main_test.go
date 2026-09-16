@@ -18,8 +18,8 @@ import (
 // --- config ------------------------------------------------------------------
 
 func TestConfigDefaults(t *testing.T) {
-	t.Setenv("DUVA_QUEUE_HOST", "")
-	t.Setenv("DUVA_QUEUE_UPDATE_TIMEOUT", "")
+	t.Setenv("DUVA_HOST", "")
+	t.Setenv("DUVA_UPDATE_TIMEOUT", "")
 	c := loadConfig()
 	if c.ApplyTimeout != defaultApplyTimeout {
 		t.Errorf("timeout = %v, want the default", c.ApplyTimeout)
@@ -32,11 +32,11 @@ func TestConfigDefaults(t *testing.T) {
 }
 
 func TestConfigReadsTheEnvironment(t *testing.T) {
-	t.Setenv("DUVA_QUEUE_HOST", "pi")
+	t.Setenv("DUVA_HOST", "pi")
 	t.Setenv("DUVA_QUEUE_TOKEN", "s3cret")
-	t.Setenv("DUVA_QUEUE_UPDATE_URL", "http://actor:8080")
-	t.Setenv("DUVA_QUEUE_UPDATE_TOKEN", "atoken")
-	t.Setenv("DUVA_QUEUE_UPDATE_TIMEOUT", "5m")
+	t.Setenv("DUVA_UPDATE_URL", "http://actor:8080")
+	t.Setenv("DUVA_UPDATE_TOKEN", "atoken")
+	t.Setenv("DUVA_UPDATE_TIMEOUT", "5m")
 
 	c := loadConfig()
 	if c.Host != "pi" || c.Token != "s3cret" {
@@ -61,7 +61,7 @@ func TestProjectFileFindsTheComposeFile(t *testing.T) {
 	composeDir = dir
 	t.Cleanup(func() { composeDir = old })
 
-	got, err := projectFile("")
+	got, err := projectFile()
 	if err != nil {
 		t.Fatalf("projectFile: %v", err)
 	}
@@ -70,38 +70,24 @@ func TestProjectFileFindsTheComposeFile(t *testing.T) {
 	}
 }
 
-func TestProjectFileHonoursASubdirectory(t *testing.T) {
+// What is mounted is the project, so there is no subdirectory to honour and
+// none to escape from. This stage reads compose files and touches no git, so
+// it has no reason to see the repository around them -- only the updater
+// mounts that, because committing needs it.
+func TestTheProjectIsWhatIsMounted(t *testing.T) {
 	dir := t.TempDir()
+	// A repository-shaped tree: the project in a subdirectory, which this
+	// stage must NOT go looking through.
 	sub := filepath.Join(dir, "pi")
 	os.MkdirAll(sub, 0o755)
-	want := filepath.Join(sub, "docker-compose.yml")
-	os.WriteFile(want, []byte("services: {}\n"), 0o644)
+	os.WriteFile(filepath.Join(sub, "docker-compose.yml"), []byte("services: {}\n"), 0o644)
 
 	old := composeDir
 	composeDir = dir
 	t.Cleanup(func() { composeDir = old })
 
-	got, err := projectFile("pi")
-	if err != nil {
-		t.Fatalf("projectFile: %v", err)
-	}
-	if got != want {
-		t.Errorf("got %q, want %q", got, want)
-	}
-}
-
-// A subdirectory that climbs out must be refused rather than silently
-// resolving somewhere else -- filepath.Join cleans ".." away without
-// complaining, which is exactly how it would go unnoticed.
-func TestProjectFileRefusesToEscape(t *testing.T) {
-	old := composeDir
-	composeDir = t.TempDir()
-	t.Cleanup(func() { composeDir = old })
-
-	for _, sub := range []string{"../etc", "..", "/absolute"} {
-		if _, err := projectFile(sub); err == nil {
-			t.Errorf("projectFile(%q) was accepted", sub)
-		}
+	if _, err := projectFile(); err == nil {
+		t.Error("a project one directory down was found, so the mount is not the contract")
 	}
 }
 

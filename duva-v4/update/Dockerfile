@@ -38,9 +38,12 @@ FROM alpine:3.22@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c4
 RUN apk add --no-cache git ca-certificates
 COPY --from=build /out/update /update
 
-# /compose is read-write here, unlike the queue's: rewriting the pin is the
-# whole point. Giving both the ability would make the split a convention
-# rather than a constraint.
-VOLUME ["/compose"]
+# No VOLUME. Where the project is mounted is the operator's choice --
+# DUVA_UPDATE_COMPOSE_DIR -- because this stage has to be able to read it from
+# the same path the host has, so a relative bind resolves to a string the
+# daemon can also find. Declaring /compose here would make docker invent an
+# empty anonymous volume there whenever the project is mounted anywhere else,
+# which is exactly what it did: the updater read that empty directory and
+# reported the repository as missing.
 EXPOSE 8080
 ENTRYPOINT ["/update"]
