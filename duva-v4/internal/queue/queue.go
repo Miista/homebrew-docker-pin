@@ -108,7 +108,7 @@ func (q *Pending) save() {
 // It is the delivery. The watcher's outbox drops a finding only when the POST
 // succeeded, so one that was received while the response was lost -- a
 // timeout, a restart mid-request -- is held and re-sent on the next run.
-// DUVA_WATCH_SINCE re-reports deliberately, which is the other way to see it.
+// DUVA_SINCE re-reports deliberately, which is the other way to see it.
 //
 // Reporting that nothing changed is how a caller avoids logging or notifying
 // twice about one candidate.
