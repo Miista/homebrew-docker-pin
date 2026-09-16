@@ -41,14 +41,14 @@ services:
     image: duva-watch:integration
     command: ["serve"]
     environment:
-      DUVA_WATCH_HOST: integration
+      DUVA_HOST: integration
       # serve is what ships. It checks once at startup, so restarting the
       # container is what triggers a check; this schedule never fires.
-      DUVA_WATCH_SCHEDULE: "0 3 * * *"
-      DUVA_WATCH_WEBHOOK_URL: http://duva-queue:8080/v1/notify
+      DUVA_SCHEDULE: "0 3 * * *"
+      DUVA_WEBHOOK_URL: http://duva-queue:8080/v1/notify
       # Debug, so a scenario that finds nothing says which service it skipped
       # and why -- the difference between a failing test and a puzzle.
-      DUVA_WATCH_LOG_LEVEL: debug
+      DUVA_LOG_LEVEL: debug
     volumes:
       - .:/compose:ro
       - ./watch-data:/data
@@ -71,14 +71,14 @@ services:
   duva-queue:
     image: duva-queue:integration
     environment:
-      DUVA_QUEUE_HOST: integration
+      DUVA_HOST: integration
       DUVA_QUEUE_TOKEN: integration-token
-      DUVA_QUEUE_UPDATE_URL: http://duva-update:8080
-      DUVA_QUEUE_UPDATE_TOKEN: integration-token
+      DUVA_UPDATE_URL: http://duva-update:8080
+      DUVA_UPDATE_TOKEN: integration-token
       # The receiver stands in for ntfy, so a test can assert on what was
       # announced rather than on what a log line said.
-      DUVA_QUEUE_NTFY_ENDPOINT: http://ntfy:8080
-      DUVA_QUEUE_NTFY_TOPIC: duva
+      DUVA_NTFY_ENDPOINT: http://ntfy:8080
+      DUVA_NTFY_TOPIC: duva
     volumes:
       - .:/compose:ro
       # The queue survives its own restart, and a test reads it from here.
@@ -105,8 +105,8 @@ services:
       # the host, so a relative bind in the compose file resolves to a string
       # the daemon can also find -- which is what recreating a container with
       # one needs.
-      DUVA_UPDATE_COMPOSE_DIR: ${PROJECT_DIR}
-      DUVA_UPDATE_COMMIT_TEMPLATE: "pin {{.Container}} to {{if eq .OldVersion .NewVersion}}{{.NewDigest}}{{else}}{{.NewVersion}}{{end}}"
+      DUVA_REPO: ${PROJECT_DIR}
+      DUVA_COMMIT_TEMPLATE: "pin {{.Container}} to {{if eq .OldVersion .NewVersion}}{{.NewDigest}}{{else}}{{.NewVersion}}{{end}}"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       # Read-write, unlike the other two: rewriting the pin is its whole job.
