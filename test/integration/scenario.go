@@ -134,14 +134,20 @@ func Up(t T, name string) *Scenario {
 	s.pushDeclaredImages()
 
 	s.volumesAtStart = danglingVolumes()
-	s.composeUp()
 
-	// The duvas are stopped again straight away. They come up with everything
-	// else -- a fixture declares them like any other service, and compose has
-	// no way to say "all but these" -- but a test is not finished building its
-	// world yet, and duva checking a half-built one is noise at best.
-	// Start() puts them back when the test is ready.
-	s.stop(s.duvaServices()...)
+	// Everything EXCEPT the duva services, which Start() brings up once the
+	// test has finished building its world.
+	//
+	// Not started-then-stopped, which is what this did: the watcher checks
+	// once at startup, and a watcher started here checks a world whose newer
+	// tags have not been pushed yet. That check is not merely noise -- it
+	// records a cutoff in /data, so the real check later reports "nothing
+	// published since the last check" and the pipeline correctly does
+	// nothing. The symptom is an update that never applies, in a test that
+	// passes alone (where the timing differs) and fails in the suite.
+	if others := s.nonDuvaServices(); len(others) > 0 {
+		s.composeUp(others...)
+	}
 
 	return s
 }
@@ -227,6 +233,34 @@ func (s *Scenario) writeEnv() {
 // Asked of compose rather than assumed: a scenario decides what it is made
 // of, and one that runs two duvas in different timezones names them
 // accordingly.
+// nonDuvaServices is every service Start() does not bring up.
+//
+// The complement of duvaServices, so the two cannot drift: what Up starts and
+// what Start starts must together be everything the fixture declares, and a
+// service missing from both would simply never run.
+//
+// This is everything but the watcher -- the queue and the updater are in it,
+// because they answer requests rather than acting on a schedule, so starting
+// them early builds the world rather than observing it.
+func (s *Scenario) nonDuvaServices() []string {
+	s.t.Helper()
+	out, err := s.compose("config", "--services")
+	if err != nil {
+		s.t.Fatalf("reading the fixture's services: %v\n%s", err, out)
+	}
+	deferred := make(map[string]bool)
+	for _, name := range s.duvaServices() {
+		deferred[name] = true
+	}
+	var rest []string
+	for _, name := range strings.Fields(out) {
+		if !deferred[name] {
+			rest = append(rest, name)
+		}
+	}
+	return rest
+}
+
 func (s *Scenario) duvaServices() []string {
 	s.t.Helper()
 	out, err := s.compose("config", "--services")
@@ -282,12 +316,16 @@ func (s *Scenario) stop(services ...string) {
 // scenario pushed, then the directory itself. It runs before a scenario as
 // well as after, so a run killed outright cannot influence the next one.
 func (s *Scenario) sweep() {
-	if _, err := os.Stat(filepath.Join(s.Dir, "docker-compose.yml")); err == nil {
-		cmd := exec.Command("docker", "compose", "down",
-			"--remove-orphans", "--volumes", "--timeout", "3")
-		cmd.Dir = s.Dir
-		_ = cmd.Run()
+	// By project name, and without needing the directory: a sandbox torn down
+	// twice, or a run killed after the directory went but before the
+	// containers did, must still remove them. `compose down -p` needs no
+	// compose file, so this is not guarded on one existing.
+	down := exec.Command("docker", "compose", "-p", projectName, "down",
+		"--remove-orphans", "--volumes", "--timeout", "3")
+	if _, err := os.Stat(s.Dir); err == nil {
+		down.Dir = s.Dir
 	}
+	_ = down.Run()
 
 	// The registry goes down with the project, taking what was pushed to it.
 	// The images themselves are on the HOST though: building one leaves it
@@ -368,8 +406,20 @@ func (s *Scenario) docker(args ...string) string {
 }
 
 // compose runs a compose command in this scenario's project.
+// projectName is what the testbed's compose project is called.
+//
+// Explicit rather than derived from the directory, which is what compose does
+// when nothing says otherwise. A project named after a directory can only be
+// addressed from that directory -- so once the directory is gone, `compose
+// down` has nothing to resolve and the containers it should have removed are
+// unreachable by that route. The fixtures set container_name, which is global
+// to the daemon rather than scoped to a project, so they are not addressable
+// by the project either. Naming the project makes teardown independent of the
+// filesystem.
+const projectName = "duva-testbed"
+
 func (s *Scenario) compose(args ...string) (string, error) {
-	cmd := exec.Command("docker", append([]string{"compose"}, args...)...)
+	cmd := exec.Command("docker", append([]string{"compose", "-p", projectName}, args...)...)
 	cmd.Dir = s.Dir
 	var out bytes.Buffer
 	cmd.Stdout = &out
