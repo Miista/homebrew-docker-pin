@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -92,22 +93,48 @@ func stopRegistry(root string) {
 	_ = os.RemoveAll(filepath.Join(infraDir(root), "certs"))
 }
 
-// emptyRegistry deletes everything pushed to the registry, leaving the
-// container running.
+// emptyRegistry deletes everything pushed to the registry.
 //
-// Between tests rather than a restart: what one test pushed must not be
-// visible to the next -- a "newer tag" an earlier test left behind is not a
-// discovery -- but restarting the container is the race this shared registry
-// exists to avoid.
+// Both halves are needed, and for a while this did only the first. registry:3
+// keeps an in-memory cache of blob descriptors, which `rm -rf` on its storage
+// does not touch: the registry then believes it still holds blobs that are no
+// longer on disk, and a later push of identical content is deduped against
+// them. The manifest is written, the blobs are not, and the tag is served as
+// though it existed -- so a pull gets the PREVIOUS test's image.
 //
-// The path is inside the container; docker exec is what makes that so.
+// What that looked like: the v4 pipeline reported no update, because the
+// 1.0.1 it pulled was byte-identical to the 1.0.0 already running. Only in
+// the suite, only after a pin test pushed its own app:1.0.1, and never when
+// the test ran alone -- which is the shape of every cache bug.
+//
+// Restarting drops the cache with the process. The race the previous approach
+// avoided is handled by waiting for the healthcheck, which is the same gate
+// `compose up --wait` uses at startup.
 func emptyRegistry() error {
 	out, err := exec.Command("docker", "exec", registryName,
 		"sh", "-c", "rm -rf "+registryStore+"/docker && mkdir -p "+registryStore).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("emptying the registry: %w\n%s", err, out)
 	}
-	return nil
+	if out, err := exec.Command("docker", "restart", registryName).CombinedOutput(); err != nil {
+		return fmt.Errorf("restarting the registry: %w\n%s", err, out)
+	}
+	return waitForRegistry()
+}
+
+// waitForRegistry blocks until the registry will accept pushes, which is what
+// its own healthcheck reports.
+func waitForRegistry() error {
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		out, err := exec.Command("docker", "inspect", registryName,
+			"--format", "{{.State.Health.Status}}").Output()
+		if err == nil && strings.TrimSpace(string(out)) == "healthy" {
+			return nil
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	return fmt.Errorf("the registry did not become healthy within 30s of being restarted")
 }
 
 // writeCertsTo generates the certificate the registry serves and duva trusts.
