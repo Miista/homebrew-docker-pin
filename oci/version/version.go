@@ -211,7 +211,18 @@ func IsVersion(tag string) bool {
 }
 
 // qualifierRe is a suffix that qualifies a release rather than naming a
-// stream: a flavour (-alpine, -slim), a prerelease (-rc1, -beta2), or a build
-// counter (-ls166). Deliberately narrow -- it must not match a branch name
-// like -agent-hub, which is the thing it exists to reject.
-var qualifierRe = regexp.MustCompile(`^-(alpine|slim|bookworm|bullseye|ubuntu|debian|distroless|rc\d*|beta\d*|alpha\d*|ls\d+)$`)
+// stream: a flavour (-alpine, -slim), a prerelease (-rc1, -beta2), a build
+// counter (-ls166), or a git-describe hash (-g803899b, as cloudflared
+// publishes). Deliberately narrow -- it must not match a branch name like
+// -agent-hub, which is the thing it exists to reject.
+//
+// The git-describe form requires the leading `g` and 7+ hex digits, which is
+// what distinguishes `2026.8.2-g803899b` from `1.2.3-agent-hub` (a branch
+// name, which is a stream rather than a point).
+//
+// It counts as a version here because this asks whether a tag is a POINT or a
+// STREAM, and a commit tag is the most fixed point there is: it names one
+// build and is never republished. That is a separate question from whether
+// anything supersedes it -- nothing does, and SameScheme is where that is
+// decided.
+var qualifierRe = regexp.MustCompile(`^-(alpine|slim|bookworm|bullseye|ubuntu|debian|distroless|rc\d*|beta\d*|alpha\d*|ls\d+|g[0-9a-f]{7,40})$`)

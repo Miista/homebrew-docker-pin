@@ -1,6 +1,7 @@
 package version
 
 import (
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -70,14 +71,32 @@ func SchemeOf(tag string) Scheme {
 	if m == nil {
 		return SchemeUnknown
 	}
-	core, suffix := m[1], m[2]
-	// The same qualifier rule IsVersion applies: a suffix that names a flavour
-	// or a prerelease still leaves a version, while anything else is a name
-	// that happens to start with digits.
-	if suffix != "" && !qualifierRe.MatchString(suffix) {
+	// The scheme is read off the numeric core alone; the suffix is enforced by
+	// SameScheme instead.
+	if suffix := m[2]; suffix != "" && !strings.HasPrefix(suffix, "-") {
 		return SchemeUnknown
 	}
-	segments := strings.Split(core, ".")
+	//
+	// The alternative was a list of suffixes known to qualify a release --
+	// -alpine, -rc1, -ls166 -- which is a list that is always missing one.
+	// cloudflared publishes 2026.8.2-g803899b and mariadb 10.11.11-ubu2604;
+	// both read as unrecognisable until someone notices the service has gone
+	// quiet and adds another alternation. The core is what carries the
+	// version, and it is the same core in every one of those cases.
+	//
+	// A suffix must be separated by `-`, which is what distinguishes a
+	// qualified version from a string that merely starts with digits.
+	// `1.2.3-rc1` is 1.2.3 qualified as rc1; `4bf4de2` is a git SHA whose
+	// first character happens to be a 4, and reading it as version 4 would put
+	// a commit on the page as an upgrade. That is ofelia's failure with a
+	// different tag shape.
+	//
+	// Discarding it is only safe because SameScheme then requires the two
+	// suffixes to be IDENTICAL: a candidate must be numerically greater AND
+	// carry the same suffix. So `1.2.3-agent-hub` classifies as semver here
+	// and is still refused against `1.2.4`, because a branch build and a
+	// release are not the same line even when their cores compare.
+	segments := strings.Split(m[1], ".")
 	if len(segments) == 1 {
 		// A single segment with no dot: `8` (postgres), `22` (node). A version
 		// by convention.
@@ -144,5 +163,80 @@ func SameScheme(current, candidate string) (bool, string) {
 	if c != n {
 		return false, candidate + " is " + string(n) + " but " + current + " is " + string(c)
 	}
+	// Same scheme is not enough: the suffix must match too.
+	//
+	// A suffix names which artifact of a release this is -- the flavour
+	// (-alpine, -slim), the branch it was built from (-agent-hub), the
+	// distribution it targets (-ubu2604). Two tags differing in it are not two
+	// points on one line however their cores compare: `1.47.0-alpine` to
+	// `1.48.0` drops the flavour, and applying it would swap the image out
+	// from under a service that asked for alpine.
+	//
+	// This is what makes discarding the suffix in SchemeOf safe. The core says
+	// which scheme; the suffix says which line within it; and a candidate has
+	// to match on both.
+	cs, ns := suffixOf(current), suffixOf(candidate)
+	if !sameSuffixShape(cs, ns) {
+		switch {
+		case cs == "":
+			return false, candidate + " carries " + ns + ", which " + current + " does not"
+		case ns == "":
+			return false, candidate + " drops the " + cs + " that " + current + " carries"
+		default:
+			return false, candidate + " carries " + ns + " but " + current + " carries " + cs
+		}
+	}
 	return true, ""
+}
+
+// sameSuffixShape reports whether two suffixes name the same line.
+//
+// Usually identity: -alpine follows -alpine, and a flavour that changes is a
+// different artifact. Counters are compared by shape rather than value, since
+// that is the whole point of a counter -- -ls43 to -ls44 is a step along
+// linuxserver's line, and requiring identity would freeze every service on it.
+//
+// A commit hash is NOT treated that way, though it looks similar. A tag like
+// 2026.8.2-g803899b names one commit and will never be republished, so there
+// is nothing for it to move to: it is the tag equivalent of a digest pin.
+// Measured, not assumed -- 2026.9.1 and 2026.9.1-ge0efe57 resolve to the SAME
+// digest on ghcr.io, so the suffixed form is an alias for the release rather
+// than a separate line. Matching -g803899b to -ge0efe57 would invent a
+// progression between two names for two different commits.
+//
+// The consequence for such a service is that nothing is ever offered, which is
+// correct and worth saying plainly: whoever pinned to a commit asked for that
+// commit. Following releases again means pinning to the bare tag.
+func sameSuffixShape(a, b string) bool {
+	if a == b {
+		return true
+	}
+	if a == "" || b == "" {
+		return false
+	}
+	return suffixShape(a) == suffixShape(b)
+}
+
+// digitRunRe is any run of digits, replaced to compare two suffixes by shape.
+var digitRunRe = regexp.MustCompile(`\d+`)
+
+// suffixShape reduces a suffix to what identifies its LINE rather than its
+// build: -ls43 and -ls44 are both -ls#, two points on linuxserver's counter.
+//
+// Digits only, deliberately. A commit hash is NOT reduced, because a tag
+// naming a commit is not a line at all -- see SameScheme.
+func suffixShape(s string) string {
+	return digitRunRe.ReplaceAllString(s, "#")
+}
+
+// suffixOf is what follows a tag's numeric core, or "" when it has none.
+//
+// Read through the same expression SchemeOf and Classify use, so the three
+// cannot disagree about where a core ends and a suffix begins.
+func suffixOf(tag string) string {
+	m := versionCoreRe.FindStringSubmatch(strings.TrimSpace(tag))
+	if m == nil {
+		return ""
+	}
+	return m[2]
 }

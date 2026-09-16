@@ -225,29 +225,41 @@ func TestAutoNoneQueuesEverySize(t *testing.T) {
 
 // --- what cannot be measured ------------------------------------------------
 
-// A change that cannot be classified ranks with major: if the size cannot be
-// measured, it is not one to make unattended. A flavour switch is the usual
-// cause, and taking one silently would swap alpine for slim without asking.
-func TestUnclassifiableQueuesBelowAutoMajor(t *testing.T) {
-	s := svc("1.0.0-alpine", "sha256:old", AutoMinor)
-	v := Decide(notice("example.com/app:1.1.0-slim", "sha256:new"), s, true)
-	if v.Outcome != Queue {
-		t.Errorf("outcome = %q, want queue", v.Outcome)
-	}
-	if v.Kind != version.KindUnknown {
-		t.Errorf("kind = %q, want unknown", v.Kind)
-	}
-	if !strings.Contains(v.Why, "could not be classified") {
-		t.Errorf("reason = %q, want it to say it could not be sized", v.Why)
+// A flavour switch is not an upgrade at any policy.
+//
+// -alpine and -slim are different lines: different base image, different libc.
+// 1.1.0-slim is not a newer 1.0.0-alpine, it is a different artifact whose
+// core happens to compare higher, so it is refused rather than sized.
+//
+// This used to reach the queue as "unclassifiable" and, at duva.auto: major,
+// apply -- silently swapping the base image out from under a service that
+// asked for alpine. duva.auto says how big a step may be taken unattended; it
+// does not say which line to follow, and the tag already said that.
+func TestAFlavourSwitchIsNeverACandidate(t *testing.T) {
+	for _, auto := range []Auto{AutoNone, AutoPatch, AutoMinor, AutoMajor} {
+		t.Run(string(auto), func(t *testing.T) {
+			s := svc("1.0.0-alpine", "sha256:old", auto)
+			v := Decide(notice("example.com/app:1.1.0-slim", "sha256:new"), s, true)
+			if v.Outcome != Ignore {
+				t.Errorf("outcome = %q, want ignore (%s)", v.Outcome, v.Why)
+			}
+			if !strings.Contains(v.Why, "slim") || !strings.Contains(v.Why, "alpine") {
+				t.Errorf("reason = %q, want it to name both flavours", v.Why)
+			}
+		})
 	}
 }
 
-// And the other direction: someone who set major asked for exactly this.
-func TestUnclassifiableAppliesAtAutoMajor(t *testing.T) {
-	s := svc("1.0.0-alpine", "sha256:old", AutoMajor)
-	v := Decide(notice("example.com/app:1.1.0-slim", "sha256:new"), s, true)
+// Within one flavour the sizing still applies, which is what keeps the rule
+// from simply switching updates off for every service on -alpine.
+func TestWithinAFlavourTheStepIsStillSized(t *testing.T) {
+	s := svc("1.0.0-alpine", "sha256:old", AutoMinor)
+	v := Decide(notice("example.com/app:1.1.0-alpine", "sha256:new"), s, true)
 	if v.Outcome != Apply {
 		t.Errorf("outcome = %q, want apply (%s)", v.Outcome, v.Why)
+	}
+	if v.Kind != version.KindMinor {
+		t.Errorf("kind = %q, want minor", v.Kind)
 	}
 }
 

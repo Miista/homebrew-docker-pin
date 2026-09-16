@@ -40,7 +40,9 @@ func TestSchemeOf(t *testing.T) {
 		{"sha-abc1234", SchemeUnknown},
 		{"12345678", SchemeUnknown}, // a build number, not a version
 		{"20260916", SchemeUnknown}, // a date stamp, same problem
-		{"1.2.3-agent-hub", SchemeUnknown},
+		// A branch build reads as semver: the scheme comes from the core, and
+		// the suffix is what SameScheme refuses it on.
+		{"1.2.3-agent-hub", SchemeSemVer},
 		{"", SchemeUnknown},
 	} {
 		t.Run(tc.tag, func(t *testing.T) {
@@ -117,7 +119,10 @@ func TestSameScheme(t *testing.T) {
 		want                     bool
 	}{
 		{"semver to semver", "0.3.22", "0.3.23", true},
-		{"semver across flavours", "1.47.0-alpine", "1.48.0", true},
+		// A flavour is a line of its own. Dropping it swaps the image out from
+		// under a service that asked for alpine.
+		{"semver across flavours", "1.47.0-alpine", "1.48.0", false},
+		{"semver within a flavour", "1.47.0-alpine", "1.48.0-alpine", true},
 		{"calver to calver", "2026.8.2", "2026.9.1", true},
 		{"ubuntu to ubuntu", "24.04", "24.10", true},
 
@@ -172,4 +177,90 @@ func contains(s, sub string) bool {
 			}
 			return false
 		}())
+}
+
+// The tags in use on the hosts this runs on, which is the only evidence that
+// matters for whether the rule is too strict.
+//
+// Every one of these was checked against the live compose files. A scheme rule
+// that reads a real pinned tag as unknown silently stops that service being
+// watched, which is the failure worth guarding against by name.
+func TestTagsActuallyInUseAreRecognised(t *testing.T) {
+	for _, tc := range []struct {
+		tag  string
+		want Scheme
+	}{
+		// Short cores. Nothing requires three segments: postgres publishes
+		// 17.10-alpine, redis 7-alpine, and both are ordinary versions.
+		{"7-alpine", SchemeSemVer},
+		{"7.4-alpine", SchemeSemVer},
+		{"18-alpine", SchemeSemVer},
+		{"17.10-alpine", SchemeSemVer},
+		{"4.33", SchemeSemVer},
+		{"3.20", SchemeSemVer},
+		{"2.11.4-alpine", SchemeSemVer},
+		{"v1.15.0-ls171", SchemeSemVer},
+		{"4.39.27", SchemeSemVer},
+
+		// CalVer, in the forms actually published.
+		{"2026.8", SchemeCalVer},
+		{"2026.8.3", SchemeCalVer},
+		{"2026.07.2", SchemeCalVer},
+		// cloudflared: a release plus the commit it was built from.
+		{"2026.8.2-g803899b", SchemeCalVer},
+
+		// Streams.
+		{"latest", SchemeMoving},
+		{"dev", SchemeMoving},
+
+		// Genuinely unrecognisable, and correctly so: a git SHA, a flavour
+		// name, a local build. All are pinned by digest, so they still receive
+		// digest moves -- the scheme rule only gates a change of tag.
+		{"4bf4de2", SchemeUnknown},
+		{"smb", SchemeUnknown},
+		{"seedcrit-native", SchemeUnknown},
+		{"local", SchemeUnknown},
+	} {
+		t.Run(tc.tag, func(t *testing.T) {
+			if got := SchemeOf(tc.tag); got != tc.want {
+				t.Errorf("SchemeOf(%q) = %s, want %s", tc.tag, got, tc.want)
+			}
+		})
+	}
+}
+
+// A tag naming a commit has nothing to upgrade to.
+//
+// cloudflared publishes both 2026.9.1 and 2026.9.1-ge0efe57, and they resolve
+// to the SAME digest on ghcr.io -- the suffixed form is an alias for the
+// release, not a separate line. So -g803899b does not progress to -ge0efe57:
+// those are two names for two different commits, and inventing a step between
+// them would offer an "upgrade" to an unrelated build.
+//
+// Nothing is offered for such a service, which is correct. Whoever pinned to a
+// commit asked for that commit; following releases again means pinning to the
+// bare tag.
+func TestACommitTagHasNothingToUpgradeTo(t *testing.T) {
+	for _, candidate := range []string{"2026.9.1", "2026.9.1-ge0efe57"} {
+		if ok, _ := SameScheme("2026.8.2-g803899b", candidate); ok {
+			t.Errorf("%s was offered to a tag pinned at a commit", candidate)
+		}
+	}
+	// It is still a version rather than a moving tag: it names one build and
+	// is never republished, so the watcher must not re-resolve it as a stream.
+	if !IsVersion("2026.8.2-g803899b") {
+		t.Error("a commit tag should read as a version, not a stream")
+	}
+}
+
+// A counter is the case where the suffix DOES progress: -ls43 to -ls44 is a
+// step along linuxserver's line, and requiring identity would freeze every
+// service that follows one.
+func TestACounterSuffixProgresses(t *testing.T) {
+	if ok, why := SameScheme("10.11.11-ls43", "10.11.12-ls44"); !ok {
+		t.Errorf("a build counter should progress: %s", why)
+	}
+	if ok, _ := SameScheme("1.2.3-alpine", "1.2.4-slim"); ok {
+		t.Error("a flavour change was accepted")
+	}
 }
