@@ -182,6 +182,21 @@ func tagChange(n Notice, svc Service, newTag string) Verdict {
 	kind := version.Classify(svc.Tag, newTag)
 	v := Verdict{Kind: kind, From: svc.Tag, To: newTag}
 
+	// A new version is never of a different scheme than the one in use. An
+	// upstream that publishes both 0.3.22 and a git SHA, or both 1.47.0 and
+	// 2026.9.1, is not offering two points on one line -- and comparing across
+	// them still produces an answer, because 2026 is greater than 0. That
+	// answer is what put `ofelia 0.3.22 -> a573727` on the page.
+	//
+	// Derived from the tag the file already declares, so the ordinary case
+	// needs no label. diun.include_tags remains the override for when this
+	// cannot tell -- which it says rather than guesses.
+	if ok, why := version.SameScheme(svc.Tag, newTag); !ok {
+		v.Outcome = Ignore
+		v.Why = why
+		return v
+	}
+
 	// Not every tag change is an upgrade. A watcher reporting an older tag,
 	// or one on a different flavour line, is not something to apply -- and
 	// Classify says so by refusing to compare them.

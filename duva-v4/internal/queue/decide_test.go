@@ -302,3 +302,75 @@ func TestTheCurrentTagWithANewDigestIsAMove(t *testing.T) {
 		t.Errorf("outcome = %q, want apply", v.Outcome)
 	}
 }
+
+// --- versioning schemes -----------------------------------------------------
+
+// A new version is never of a different scheme than the one in use. The scheme
+// is read off the tag the file already declares, so the ordinary case needs no
+// label at all.
+//
+// This is ofelia, which put `0.3.22 -> a573727` on the page: mcuadros/ofelia
+// publishes releases and git SHAs to the same repository, and a SHA is not a
+// newer version of 0.3.22 -- it is not a version.
+func TestACandidateOfADifferentSchemeIsIgnored(t *testing.T) {
+	for _, tc := range []struct{ name, current, candidate string }{
+		{"a git sha", "0.3.22", "a573727"},
+		{"calver against semver", "0.3.22", "2026.9.1"},
+		{"semver against calver", "2026.8.2", "0.3.22"},
+		{"a build number", "0.3.22", "12345678"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v := Decide(
+				notice("example.com/app:"+tc.candidate, ""),
+				svc(tc.current, "sha256:old", AutoNone),
+				true,
+			)
+			if v.Outcome != Ignore {
+				t.Errorf("%s -> %s: outcome %s, want %s (%s)",
+					tc.current, tc.candidate, v.Outcome, Ignore, v.Why)
+			}
+			// The reason is what a person reads when asking why an update they
+			// expected never appeared, so it must name the tag it refused.
+			if !strings.Contains(v.Why, tc.candidate) {
+				t.Errorf("the reason does not name %s: %q", tc.candidate, v.Why)
+			}
+		})
+	}
+}
+
+// The rule must not cost the ordinary upgrade it exists to protect.
+func TestSameSchemeStillUpgrades(t *testing.T) {
+	for _, tc := range []struct{ name, current, candidate string }{
+		{"semver patch", "0.3.22", "0.3.23"},
+		{"calver", "2026.8.2", "2026.9.1"},
+		{"single segment", "8", "9"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v := Decide(
+				notice("example.com/app:"+tc.candidate, ""),
+				svc(tc.current, "sha256:old", AutoNone),
+				true,
+			)
+			if v.Outcome != Queue {
+				t.Errorf("%s -> %s: outcome %s, want %s (%s)",
+					tc.current, tc.candidate, v.Outcome, Queue, v.Why)
+			}
+		})
+	}
+}
+
+// An unrecognisable tag in the compose file means nothing can be said about
+// what supersedes it -- so this says that, rather than comparing anyway.
+func TestAnUnknownCurrentSchemeSaysSo(t *testing.T) {
+	v := Decide(
+		notice("example.com/app:1.0.0", ""),
+		svc("a573727", "sha256:old", AutoNone),
+		true,
+	)
+	if v.Outcome != Ignore {
+		t.Fatalf("outcome = %s, want %s", v.Outcome, Ignore)
+	}
+	if !strings.Contains(v.Why, "a573727") {
+		t.Errorf("the reason does not name the tag in use: %q", v.Why)
+	}
+}
