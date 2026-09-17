@@ -557,7 +557,7 @@ func TestANormalRunNeedsNothingButAdvancesAnyway(t *testing.T) {
 	// Published long before the cutoff, so a normal run has nothing to say --
 	// and the service is not on it, so this is not the running-tag case.
 	reg := fakeReg{
-		tags:  map[string][]string{"example.com/app": {"1.0.0", "0.9.0"}},
+		tags: map[string][]string{"example.com/app": {"1.0.0", "0.9.0"}},
 		dates: map[string]time.Time{
 			"1.0.0": time.Now().Add(-300 * 24 * time.Hour),
 			"0.9.0": time.Now().Add(-400 * 24 * time.Hour),
