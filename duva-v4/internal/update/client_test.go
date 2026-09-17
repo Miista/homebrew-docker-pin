@@ -71,7 +71,7 @@ func TestApplySendsTheRequestAndReturnsTheStream(t *testing.T) {
 
 	acc, err := c.Apply(context.Background(), Request{
 		Service: "authelia",
-		From: "4.39.20", To: "4.39.25", Tag: "4.39.25",
+		From:    "4.39.20", To: "4.39.25", Tag: "4.39.25",
 	})
 	if err != nil {
 		t.Fatalf("Apply: %v", err)

@@ -13,8 +13,8 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"github.com/Miista/homebrew-docker-pin/duva-v4/internal/update"
 	"github.com/Miista/homebrew-docker-pin/duva-v4/internal/queue"
+	"github.com/Miista/homebrew-docker-pin/duva-v4/internal/update"
 )
 
 // stubUpdater is an HTTP server standing in for an updater, so the applier is

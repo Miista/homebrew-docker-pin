@@ -10,8 +10,8 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"github.com/Miista/homebrew-docker-pin/duva-v4/internal/update"
 	"github.com/Miista/homebrew-docker-pin/duva-v4/internal/queue"
+	"github.com/Miista/homebrew-docker-pin/duva-v4/internal/update"
 )
 
 // applier carries out an approved decision, one at a time.
