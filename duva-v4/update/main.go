@@ -45,6 +45,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/Miista/homebrew-docker-pin/compose"
+	"github.com/Miista/homebrew-docker-pin/dockerapi"
 
 	"github.com/Miista/homebrew-docker-pin/duva-v4/internal/update"
 )
@@ -161,10 +162,11 @@ func run(log zerolog.Logger) error {
 	srv := &http.Server{
 		Addr: addr,
 		Handler: (&Server{
-			Token:   token,
-			Version: version,
-			Log:     log,
-			Ready:   readiness,
+			Token:      token,
+			Version:    version,
+			Log:        log,
+			Ready:      readiness,
+			Applicable: applicable,
 			Apply: func(req update.Request, step func(string, ...any)) (update.Status, string) {
 				return transaction(req, step, realDocker, realGit, push, tmpl)
 			},
@@ -275,6 +277,37 @@ func readiness() update.Readiness {
 		return update.Readiness{Ready: false, Reason: err.Error()}
 	}
 	return update.Readiness{Ready: true}
+}
+
+// applicable reports whether this updater would act on one service.
+//
+// One reason, and it is this updater's: the container is not running. A
+// service somebody stopped is not one to update -- recreating it would start
+// it again, which is the service coming back on its own as a side effect of an
+// image update, and nobody asked for that.
+//
+// The finding is not lost. The queue declines to enqueue it while this says
+// no, and enqueues it -- announcing it -- the first time this says yes, so a
+// service that comes back reports what accumulated while it was down.
+//
+// A daemon that cannot be asked answers yes. The alternative would silently
+// stop queueing everything whenever the socket is unavailable, which is work
+// disappearing with nothing to say so; an updater that cannot reach its daemon
+// is already visible as not ready.
+// A variable so a test can answer it without a docker daemon, the same way
+// resolveFile is swapped for a lookup that needs no repository.
+var applicable = func(service string) update.Applicable {
+	running, err := dockerapi.Running(service)
+	if err != nil {
+		return update.Applicable{Applicable: true}
+	}
+	if !running {
+		return update.Applicable{
+			Applicable: false,
+			Reason:     "its container is not running, and updating it would start it",
+		}
+	}
+	return update.Applicable{Applicable: true}
 }
 
 // commitTemplate is what readiness checks against and what an apply commits

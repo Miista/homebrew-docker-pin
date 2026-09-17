@@ -385,3 +385,101 @@ func TestARestartDoesNotReAnnounceWhatWasAlreadyWaiting(t *testing.T) {
 		t.Errorf("announced %v across a restart, want still one", told)
 	}
 }
+
+// --- services that should not be acted on -----------------------------------
+
+// A service the updater will not act on is neither queued nor announced.
+//
+// The case: a container somebody stopped. The compose file still declares it,
+// so the watcher still checks it and the change still sizes correctly -- but
+// there is nothing to update, and applying would recreate the container, which
+// starts it. A row on the page and a notification would both be about a
+// service that is not running.
+func TestAnInapplicableServiceIsNeitherQueuedNorAnnounced(t *testing.T) {
+	h, q := handlerOver(t, pinnedProject, &fakeApplier{})
+	var announced []Entry
+	h.Announce = func(e Entry) { announced = append(announced, e) }
+	h.Applicable = func(string) (bool, string) {
+		return false, "its container is not running, and updating it would start it"
+	}
+
+	res := h.Handle(Notice{Container: "my-app", Image: "example.com/app:1.0.1", Digest: "sha256:new"})
+
+	if res.Outcome != Ignore {
+		t.Errorf("outcome = %q, want %q", res.Outcome, Ignore)
+	}
+	if !strings.Contains(res.Message, "not running") {
+		t.Errorf("message = %q, want the updater's reason", res.Message)
+	}
+	if q.Len() != 0 {
+		t.Errorf("queued %d entries, want none", q.Len())
+	}
+	if len(announced) != 0 {
+		t.Errorf("announced %d, want none", len(announced))
+	}
+}
+
+// And it is not applied either, whatever the policy says. pinnedProject sets
+// duva.auto: patch, which would otherwise apply this one unattended -- and
+// that means recreating, which starts a stopped container.
+func TestAnInapplicableServiceIsNotApplied(t *testing.T) {
+	app := &fakeApplier{}
+	h, _ := handlerOver(t, pinnedProject, app)
+	h.Applicable = func(string) (bool, string) { return false, "its container is not running" }
+
+	h.Handle(Notice{Container: "my-app", Image: "example.com/app:1.0.1", Digest: "sha256:new"})
+
+	if len(app.started) != 0 {
+		t.Errorf("applied %v, want nothing", app.started)
+	}
+}
+
+// When it comes back, the finding is offered and announced then.
+//
+// Nothing is remembered while it is down: the next notice is handled normally,
+// which is what makes a service that returns report what accumulated rather
+// than needing a record of what it missed.
+func TestAServiceThatComesBackIsQueuedAndAnnounced(t *testing.T) {
+	h, q := handlerOver(t, pinnedProject, nil)
+	var announced []Entry
+	h.Announce = func(e Entry) { announced = append(announced, e) }
+
+	stopped := true
+	h.Applicable = func(string) (bool, string) {
+		if stopped {
+			return false, "its container is not running"
+		}
+		return true, ""
+	}
+
+	notice := Notice{Container: "my-app", Image: "example.com/app:1.0.1", Digest: "sha256:new"}
+	h.Handle(notice)
+	if q.Len() != 0 || len(announced) != 0 {
+		t.Fatalf("while stopped: queued %d, announced %d, want none of either", q.Len(), len(announced))
+	}
+
+	stopped = false
+	h.Handle(notice)
+
+	if q.Len() != 1 {
+		t.Errorf("after it came back: queued %d, want 1", q.Len())
+	}
+	if len(announced) != 1 {
+		t.Fatalf("after it came back: announced %d, want 1", len(announced))
+	}
+	if announced[0].To != "1.0.1" {
+		t.Errorf("announced %s, want 1.0.1", announced[0].To)
+	}
+}
+
+// No check configured means every service is applicable: a queue running
+// without an updater must keep queueing, since there is nothing to refuse on
+// behalf of.
+func TestWithoutAnApplicableCheckEverythingIsQueued(t *testing.T) {
+	h, q := handlerOver(t, pinnedProject, nil)
+	h.Applicable = nil
+	h.Handle(Notice{Container: "my-app", Image: "example.com/app:1.0.1", Digest: "sha256:new"})
+	if q.Len() != 1 {
+		t.Errorf("queued %d, want 1", q.Len())
+	}
+}

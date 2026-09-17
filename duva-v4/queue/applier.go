@@ -271,3 +271,16 @@ func (a *applier) Ready() (bool, string) {
 	r := a.client.Ready(ctx)
 	return r.Ready, r.Reason
 }
+
+// Applicable reports whether the updater would act on this service now.
+//
+// Its answer, not the queue's: the updater holds the socket, and a container's
+// state is not in the compose file. An updater that cannot be asked, or one
+// too old to know the question, answers yes -- refusing work because a check
+// failed would silently stop queueing everything.
+func (a *applier) Applicable(service string) (bool, string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	r := a.client.Applicable(ctx, service)
+	return r.Applicable, r.Reason
+}

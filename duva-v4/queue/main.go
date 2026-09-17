@@ -188,6 +188,16 @@ func run(log zerolog.Logger) error {
 		Applier: applying,
 		Log:     log,
 	}
+	// Whether a service should be acted on at all is the updater's to answer:
+	// it is the stage that holds the docker socket, and everything the queue
+	// knows about this host comes from the compose file -- which says nothing
+	// about whether a container is running.
+	//
+	// Nil without an updater, so a watch-only queue keeps queueing everything.
+	// There is nothing to act on, so nothing to refuse on behalf of.
+	if live != nil {
+		handler.Applicable = live.Applicable
+	}
 	notify(newNtfy(log), cfg.Host, handler, live)
 
 	srv := &http.Server{

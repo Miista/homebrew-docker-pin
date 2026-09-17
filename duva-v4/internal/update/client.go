@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -176,6 +177,39 @@ func (c *Client) Ready(ctx context.Context) Readiness {
 	var out Readiness
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&out); err != nil {
 		return Readiness{Reason: "the actor's answer could not be read: " + err.Error()}
+	}
+	return out
+}
+
+// Applicable asks whether the updater would act on one service now.
+//
+// A failure to ask is reported as applicable. The alternative -- treating an
+// unreachable updater as "do not queue" -- would silently drop findings for
+// every service whenever the updater is down, which is the same class of bug
+// as a queue that forgets: work disappears and nothing says so. An updater
+// that cannot be reached is already visible as not-ready.
+func (c *Client) Applicable(ctx context.Context, service string) Applicable {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		c.BaseURL+"/v1/applicable/"+url.PathEscape(service), nil)
+	if err != nil {
+		return Applicable{Applicable: true}
+	}
+	if c.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.Token)
+	}
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return Applicable{Applicable: true}
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		// Including 404, which is an updater that predates this question.
+		return Applicable{Applicable: true}
+	}
+	var out Applicable
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&out); err != nil {
+		return Applicable{Applicable: true}
 	}
 	return out
 }

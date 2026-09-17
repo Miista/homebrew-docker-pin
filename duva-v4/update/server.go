@@ -39,6 +39,12 @@ type Server struct {
 	// exercise the endpoint. Nil means always ready -- an updater that cannot
 	// tell should not claim to be broken.
 	Ready func() update.Readiness
+	// Applicable reports whether this updater would act on one service.
+	//
+	// Injected for the same reason as Ready: the answer here is a docker
+	// daemon, which a test should not have to run. Nil means every service is
+	// applicable -- an updater that cannot tell must not refuse work.
+	Applicable func(service string) update.Applicable
 	// Token, when set, is required on /v1/apply.
 	Token string
 	// Version is the build.
@@ -64,12 +70,32 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.HandleFunc("/v1/apply", s.guard(s.apply))
 	mux.HandleFunc("/v1/ready", s.ready)
+	mux.HandleFunc("/v1/applicable/", s.applicable)
 	// Deliberately unguarded: it returns nothing when no work is running, so
 	// there is no session to guess at and nothing to leak. Guarding it would
 	// mean a token for reading a log that is about to be shown to whoever
 	// asked for the update anyway.
 	mux.HandleFunc("/v1/stream/", s.stream)
 	return mux
+}
+
+// applicable answers whether one service would be acted on.
+//
+// Unguarded, like /v1/ready: it reports whether a service could be updated,
+// which is what the page already shows, and a token for reading it would be
+// a token for a fact the queue publishes anyway.
+func (s *Server) applicable(w http.ResponseWriter, r *http.Request) {
+	service := strings.TrimPrefix(r.URL.Path, "/v1/applicable/")
+	w.Header().Set("Content-Type", "application/json")
+	if service == "" {
+		http.Error(w, "no service named", http.StatusBadRequest)
+		return
+	}
+	if s.Applicable == nil {
+		json.NewEncoder(w).Encode(update.Applicable{Applicable: true})
+		return
+	}
+	json.NewEncoder(w).Encode(s.Applicable(service))
 }
 
 func (s *Server) guard(next http.HandlerFunc) http.HandlerFunc {

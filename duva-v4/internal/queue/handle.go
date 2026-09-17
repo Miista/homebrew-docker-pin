@@ -31,6 +31,20 @@ type Handler struct {
 	// update. Errors are the announcer's to log: failing to tell someone is
 	// not failing to queue, and must not change what the watcher is told.
 	Announce func(Entry)
+	// Applicable reports whether a service should be acted on at all,
+	// independently of what the change is. Nil means every service is.
+	//
+	// The case it exists for is a container somebody stopped: the compose file
+	// still declares it, so a finding still arrives and still sizes correctly,
+	// but there is nothing to update -- and applying would recreate the
+	// container, which starts it. A finding for such a service is neither
+	// queued nor announced, so nothing appears on the page and nobody is
+	// notified about a service that is not running.
+	//
+	// It is asked on every notice rather than remembered, so a service that
+	// comes back is offered what accumulated while it was down: the first
+	// notice after it starts enqueues normally and announces then.
+	Applicable func(service string) (bool, string)
 	// Now is the clock, injected so a caller can pin it.
 	Now func() time.Time
 	// Log records what was decided. The zero value discards, so a handler
@@ -59,6 +73,19 @@ func (h *Handler) Handle(n Notice) Result {
 		// happened. The watcher is told, and so is the log.
 		h.logf("could not look up %s: %v", n.Container, err)
 		return Result{Outcome: Reject, Message: err.Error(), Status: http.StatusInternalServerError}
+	}
+
+	// Asked before the verdict is acted on, but after the lookup: a notice
+	// naming nothing must still be rejected loudly, which is a fact about the
+	// compose file rather than about a container.
+	if h.Applicable != nil && found {
+		if ok, why := h.Applicable(svc.Name); !ok {
+			// Ignore, not Reject: nothing is wrong. The service exists, the
+			// finding is real, and it is simply not actionable right now --
+			// the same shape of answer as "already on it".
+			h.logf("%s: not acted on — %s", svc.Name, why)
+			return Result{Outcome: Ignore, Service: svc.Name, Message: why, Status: http.StatusOK}
+		}
 	}
 
 	v := Decide(n, svc, found)

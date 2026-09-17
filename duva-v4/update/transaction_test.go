@@ -725,3 +725,40 @@ func TestThePinIsWrittenBeforeTheRecreate(t *testing.T) {
 			pinAt, recreateAt)
 	}
 }
+
+// A stopped container is refused before anything is touched.
+//
+// The queue's check gates what is OFFERED; this gates what is DONE. An entry
+// queued before the container was stopped, or an approval clicked on a page
+// loaded before it, arrives here with nothing recent having been asked -- and
+// recreating a container starts it, which is the service coming back on its
+// own as a side effect of an image update.
+func TestApplyRefusesAStoppedContainer(t *testing.T) {
+	restore := applicable
+	applicable = func(string) update.Applicable {
+		return update.Applicable{Applicable: false, Reason: "its container is not running"}
+	}
+	t.Cleanup(func() { applicable = restore })
+
+	w := newWorld(t, versionPin)
+	step, _ := steps()
+
+	status, reason := transaction(versionRequest(), step, w.docker(), w.git(), false, "")
+
+	if status != update.Failed {
+		t.Errorf("status = %q, want %q", status, update.Failed)
+	}
+	if !strings.Contains(reason, "not running") {
+		t.Errorf("reason = %q, want the refusal", reason)
+	}
+	// Nothing touched -- above all, nothing recreated.
+	if len(w.pulled) != 0 {
+		t.Errorf("pulled %v, want nothing", w.pulled)
+	}
+	if len(w.recreated) != 0 {
+		t.Errorf("recreated %v — a stopped container was restarted", w.recreated)
+	}
+	if len(w.committed) != 0 {
+		t.Errorf("committed %v, want nothing", w.committed)
+	}
+}

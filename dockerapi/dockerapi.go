@@ -105,8 +105,14 @@ func dockerDo(method, path string, body any) ([]byte, error) {
 // everything the daemon recorded survives into the replacement. Naming the
 // fields would silently drop whatever this struct did not know about.
 type containerSpec struct {
-	Config          map[string]any `json:"Config"`
-	HostConfig      map[string]any `json:"HostConfig"`
+	Config     map[string]any `json:"Config"`
+	HostConfig map[string]any `json:"HostConfig"`
+	// State is read for one field: whether this container was running. A
+	// recreate must put back what it took away, and starting a container
+	// somebody stopped is not a no-op -- it is the service coming back.
+	State struct {
+		Running bool `json:"Running"`
+	} `json:"State"`
 	NetworkSettings struct {
 		Networks map[string]any `json:"Networks"`
 	} `json:"NetworkSettings"`
@@ -301,6 +307,21 @@ func Recreate(composeFile, service string) error {
 		return fmt.Errorf("creating the replacement for %s: %w", service, err)
 	}
 
+	// Started only if the old one was running.
+	//
+	// A stopped container is a decision: `docker stop` on a service with
+	// restart: unless-stopped is how an operator takes something out of
+	// service, and the compose file still declaring it is what makes it easy
+	// to put back. Starting it here would override that decision as a side
+	// effect of an image update -- a service returning on its own, which is
+	// the kind of surprise this tool exists to avoid.
+	//
+	// The update still happens: the pin is rewritten and the container is
+	// recreated on the new image, so it comes back on the new version
+	// whenever someone starts it.
+	if !spec.State.Running {
+		return nil
+	}
 	if _, err := dockerDo(http.MethodPost, "/containers/"+newc.ID+"/start", nil); err != nil {
 		return fmt.Errorf("starting the replacement for %s: %w", service, err)
 	}
@@ -466,4 +487,34 @@ func containerLabel(id, label string) (string, error) {
 func Exists(service string) error {
 	_, err := findContainer(service)
 	return err
+}
+
+// Running reports whether a service's container exists and is running.
+//
+// A container that does not exist is not running, and not an error: a service
+// declared but never started is an ordinary state, not a fault.
+func Running(service string) (bool, error) {
+	name, err := project(realSelf)
+	if err != nil {
+		return false, err
+	}
+	// all=true, unlike findContainer: a stopped container is exactly what this
+	// is asking about, and the default listing omits it.
+	filters := url.QueryEscape(fmt.Sprintf(
+		`{"label":["com.docker.compose.project=%s","com.docker.compose.service=%s"]}`,
+		name, service))
+	raw, err := dockerDo(http.MethodGet, "/containers/json?all=true&filters="+filters, nil)
+	if err != nil {
+		return false, err
+	}
+	var found []struct {
+		State string `json:"State"`
+	}
+	if err := json.Unmarshal(raw, &found); err != nil {
+		return false, fmt.Errorf("listing containers for %s: %w", service, err)
+	}
+	if len(found) == 0 {
+		return false, nil
+	}
+	return found[0].State == "running", nil
 }

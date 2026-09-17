@@ -160,3 +160,27 @@ type Readiness struct {
 	// Reason is why not, in words meant for a person. Empty when ready.
 	Reason string `json:"reason,omitempty"`
 }
+
+// Applicable is whether an updater would act on one service right now.
+//
+// Readiness asks whether this updater would take work at all; this asks about
+// one service. A host can be perfectly ready and still have a service nothing
+// should be done to.
+//
+// Phrased as "would you act on it" rather than "is the container running",
+// because the contract must not learn what applying involves. A container is
+// this updater's answer -- an updater that opens a pull request has no
+// containers, and would answer yes for every service. What every updater can
+// say is whether it would act, and a sentence explaining why not.
+//
+// The case it exists for: a service stopped deliberately. The compose file
+// still declares it, so the watcher still checks it and the queue still sizes
+// the change -- but a container somebody stopped is not one to update, and an
+// update that recreated it would start it again, which is the service coming
+// back on its own.
+type Applicable struct {
+	// Applicable is whether work on this service would be attempted.
+	Applicable bool `json:"applicable"`
+	// Reason is why not, in words meant for a person. Empty when applicable.
+	Reason string `json:"reason,omitempty"`
+}

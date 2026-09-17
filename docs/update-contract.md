@@ -147,6 +147,40 @@ Answer it **per call**, not from a cache. What blocks an updater usually stops
 blocking it without anything restarting, and a cached `false` leaves a button
 grey after the cause is fixed.
 
+### `GET /v1/applicable/<service>`
+
+Whether this updater would act on **one service** right now.
+
+```json
+{ "applicable": false, "reason": "its container is not running, and updating it would start it" }
+```
+
+Unauthenticated, for the same reason as `/v1/ready`.
+
+`/v1/ready` asks whether you would take work at all; this asks about one
+service. A host can be perfectly ready and still have a service nothing should
+be done to. The queue asks before it queues, so a service you refuse produces
+no row on the page and no notification — and is offered again, with whatever
+accumulated meanwhile, the first time you say yes.
+
+The reference updater answers `false` for a service whose container is not
+running. Somebody stopped it, the compose file still declares it, and applying
+would recreate the container — which starts it. A service coming back on its
+own as a side effect of an image update is not something anyone asked for.
+
+Note what this is *not*: it is not "is the container running". That is the
+reference updater's reason, and an updater that opens a pull request has no
+containers at all and should answer `true` for everything. What every updater
+can answer is whether it would act.
+
+Answer `{"applicable": true}` if nothing stops you. **An updater that does not
+serve this endpoint is treated as applicable**, so adding it is optional and a
+404 costs nothing — the queue reads any non-200 as yes. Refusing work because a
+check could not be made would silently stop queueing everything.
+
+Answer it **per call**, not from a cache, for the same reason as `/v1/ready`:
+a container starts without anything restarting.
+
 ### `GET /healthz`
 
 `200` and anything in the body. For a container runtime, so unauthenticated.

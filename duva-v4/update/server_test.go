@@ -309,3 +309,52 @@ func readAllQuiet(resp *http.Response) string {
 	b, _ := io.ReadAll(resp.Body)
 	return string(b)
 }
+
+// The per-service question: would this updater act on it now.
+func TestApplicableAnswersPerService(t *testing.T) {
+	s := &Server{
+		Applicable: func(service string) (r update.Applicable) {
+			if service == "stopped" {
+				return update.Applicable{Applicable: false, Reason: "its container is not running"}
+			}
+			return update.Applicable{Applicable: true}
+		},
+	}
+	h := s.Handler()
+
+	for _, tc := range []struct {
+		service string
+		want    bool
+	}{{"stopped", false}, {"running", true}} {
+		t.Run(tc.service, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/applicable/"+tc.service, nil))
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200", w.Code)
+			}
+			var got update.Applicable
+			if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+				t.Fatalf("decoding: %v", err)
+			}
+			if got.Applicable != tc.want {
+				t.Errorf("applicable = %v, want %v", got.Applicable, tc.want)
+			}
+			if !got.Applicable && got.Reason == "" {
+				t.Error("refused without a reason")
+			}
+		})
+	}
+}
+
+// An updater that cannot tell must not refuse work: nil means every service is
+// applicable, the same rule Ready follows.
+func TestApplicableDefaultsToYes(t *testing.T) {
+	h := (&Server{}).Handler()
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/applicable/anything", nil))
+	var got update.Applicable
+	json.Unmarshal(w.Body.Bytes(), &got)
+	if !got.Applicable {
+		t.Error("an updater with no check refused a service")
+	}
+}
