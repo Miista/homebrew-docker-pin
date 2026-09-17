@@ -162,6 +162,7 @@ func transaction(req update.Request, step func(string, ...any), d Docker, g Git,
 	// is mounted, so the file is a lookup rather than something to be told.
 	// `include:` is followed, which is the only reason the file was ever worth
 	// carrying: a service can live in one.
+
 	// Refused before anything is touched, for the same reason the queue does
 	// not offer it: recreating a stopped container starts it, and a service
 	// coming back on its own is not something an image update should do.
