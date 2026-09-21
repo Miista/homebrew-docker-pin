@@ -7,35 +7,18 @@
 #
 # That is why this image carries nothing: no docker CLI, no git, no shell.
 # Compare the updater's, which needs all three.
+#
+# The binary is built by GoReleaser (see ../../.goreleaser.duva-v4.yaml), not
+# here: this Dockerfile's context is GoReleaser's per-target output directory,
+# containing only the binary this stage copies in.
 
-# Base images are pinned by digest, the same way this tool asks a compose file
-# to pin its own: the tag says which stream to follow, the digest records what
-# was actually built.
-FROM --platform=$BUILDPLATFORM golang:1.26-alpine@sha256:28d89ee9cc0ff9fec75c82ca201e6bf7fdf9a679d4b7b24dfa04f2bb766bb468 AS build
-WORKDIR /src
-
-# The context is the repository root, not duva-v4: this module replaces four
-# sibling modules by relative path, so they all have to be there. Copying the
-# go.mod files first keeps the dependency download in its own layer, which the
-# source changing does not invalidate.
-COPY go.mod go.sum ./
-COPY compose/go.mod compose/go.sum ./compose/
-COPY dockerapi/go.mod dockerapi/go.sum ./dockerapi/
-COPY oci/go.mod ./oci/
-COPY duva-v4/go.mod duva-v4/go.sum ./duva-v4/
-RUN cd duva-v4 && go mod download
-
-COPY . .
-ARG VERSION=dev
-# Set by buildx from the target platform. The build stage runs natively (see
-# --platform above) and Go cross-compiles, which is both far faster than
-# emulation and actually reliable: the Go toolchain under QEMU dies with
-# "sync: inconsistent mutex state" on this repo.
-ARG TARGETARCH
 # An empty directory to become /data. Docker seeds a fresh named volume from
 # the image, ownership included, so this is what makes the volume writable.
-RUN mkdir -p /out/data
-RUN cd duva-v4 && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /out/queue ./queue
+# A no-op FROM/RUN pair rather than a file GoReleaser has to be told to
+# include, since an empty directory is not something a build context can
+# carry.
+FROM alpine:3.22@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1 AS data
+RUN mkdir -p /data
 
 # distroless-static, not scratch.
 #
@@ -49,7 +32,12 @@ RUN cd duva-v4 && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -trimpa
 # So the base is the three things a networked static Go binary needs: the CA
 # bundle, /etc/passwd for a named user, and the resolver configuration.
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:6ec5aa99dc335666e79dc64e4a6c8b89c33a543a1967f20d360922a80dd21f02
-COPY --from=build /out/queue /queue
+# GoReleaser's dockers_v2 lays the per-platform binary out at
+# linux/<arch>/<binary> in the build context, one platform per invocation of
+# this Dockerfile -- so TARGETARCH (which buildx sets to match) picks the one
+# this build is for.
+ARG TARGETARCH
+COPY linux/${TARGETARCH}/queue /queue
 
 # /compose is read-only: the queue reads what this host declares and never
 # writes it. Writing is the updater's, and giving both the ability would make
@@ -76,7 +64,7 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
 # this directory's ownership, so getting the uid wrong here is a volume the
 # queue cannot write -- measured, not assumed: chowned to nonroot's 65532 and
 # run as 1000, every save fails on a container that otherwise looks healthy.
-COPY --from=build --chown=1000:1000 /out/data /data
+COPY --from=data --chown=1000:1000 /data /data
 
 USER nonroot:nonroot
 ENTRYPOINT ["/queue"]

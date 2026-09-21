@@ -1,0 +1,54 @@
+name: duva-v4 release
+
+# duva-v4 versions independently of docker-pin/docker-unpin: the four images
+# here (watch, queue, update, ui) change on their own schedule -- a queue
+# retry fix should not wait on a CLI release, and a CLI release should not
+# force a rebuild of four images that did not change. So this is its own
+# workflow, its own GoReleaser config (.goreleaser.duva-v4.yaml), and its own
+# tag namespace, separate from release.yml's v* tags.
+on:
+  push:
+    tags:
+      - "duva-v4/v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "duva-v4 tag to release, e.g. duva-v4/v7.2"
+        required: true
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: goreleaser/goreleaser-action@v7
+        with:
+          version: "~> v2"
+          args: release --clean --config .goreleaser.duva-v4.yaml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Explicit rather than left to `git describe`: this repo also
+          # carries the CLI's own vX.Y.Z tags, which can land on the same
+          # commit as a duva-v4/vX.Y.Z one, and git describe picks between
+          # same-commit tags arbitrarily -- not necessarily the one this run
+          # was triggered by.
+          GORELEASER_CURRENT_TAG: ${{ github.event.inputs.tag || github.ref_name }}

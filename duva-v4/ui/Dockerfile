@@ -7,32 +7,10 @@
 #
 # Compare the queue's image, which at least reads the project, and the
 # updater's, which holds the socket and carries git.
-
-# Base images are pinned by digest, the same way this tool asks a compose file
-# to pin its own: the tag says which stream to follow, the digest records what
-# was actually built.
-FROM --platform=$BUILDPLATFORM golang:1.26-alpine@sha256:28d89ee9cc0ff9fec75c82ca201e6bf7fdf9a679d4b7b24dfa04f2bb766bb468 AS build
-WORKDIR /src
-
-# The context is the repository root, not duva-v4: this module replaces four
-# sibling modules by relative path, so they all have to be there. Copying the
-# go.mod files first keeps the dependency download in its own layer, which the
-# source changing does not invalidate.
-COPY go.mod go.sum ./
-COPY compose/go.mod compose/go.sum ./compose/
-COPY dockerapi/go.mod dockerapi/go.sum ./dockerapi/
-COPY oci/go.mod ./oci/
-COPY duva-v4/go.mod duva-v4/go.sum ./duva-v4/
-RUN cd duva-v4 && go mod download
-
-COPY . .
-ARG VERSION=dev
-# Set by buildx from the target platform. The build stage runs natively (see
-# --platform above) and Go cross-compiles, which is both far faster than
-# emulation and actually reliable: the Go toolchain under QEMU dies with
-# "sync: inconsistent mutex state" on this repo.
-ARG TARGETARCH
-RUN cd duva-v4 && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /out/ui ./ui
+#
+# The binary is built by GoReleaser (see ../../.goreleaser.duva-v4.yaml), not
+# here: this Dockerfile's context is GoReleaser's per-target output directory,
+# containing only the binary this stage copies in.
 
 # distroless-static, not scratch.
 #
@@ -43,7 +21,12 @@ RUN cd duva-v4 && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -trimpa
 # same reason it is in the queue's -- a queue reached over HTTPS rather
 # than across a compose network is a configuration, not a rewrite.
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:6ec5aa99dc335666e79dc64e4a6c8b89c33a543a1967f20d360922a80dd21f02
-COPY --from=build /out/ui /ui
+# GoReleaser's dockers_v2 lays the per-platform binary out at
+# linux/<arch>/<binary> in the build context, one platform per invocation of
+# this Dockerfile -- so TARGETARCH (which buildx sets to match) picks the one
+# this build is for.
+ARG TARGETARCH
+COPY linux/${TARGETARCH}/ui /ui
 
 EXPOSE 8080
 

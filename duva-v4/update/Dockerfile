@@ -9,34 +9,22 @@
 # read-write, because the pin is rewritten there; the docker socket, to pull
 # and to replace a container. Compare the queue's image, which holds neither
 # and is distroless as a result. This one carries git, for the commit.
-
-FROM --platform=$BUILDPLATFORM golang:1.26-alpine@sha256:28d89ee9cc0ff9fec75c82ca201e6bf7fdf9a679d4b7b24dfa04f2bb766bb468 AS build
-WORKDIR /src
-
-# The context is the repository root, not duva-v4: this module replaces four
-# sibling modules by relative path, so they all have to be there. Copying the
-# go.mod files first keeps the dependency download in its own layer, which the
-# source changing does not invalidate.
-COPY go.mod go.sum ./
-COPY compose/go.mod compose/go.sum ./compose/
-COPY dockerapi/go.mod dockerapi/go.sum ./dockerapi/
-COPY oci/go.mod ./oci/
-COPY duva-v4/go.mod duva-v4/go.sum ./duva-v4/
-RUN cd duva-v4 && go mod download
-
-COPY . .
-ARG VERSION=dev
-# Native build stage, Go cross-compiles: the toolchain under QEMU dies with
-# "sync: inconsistent mutex state" partway through compiling.
-ARG TARGETARCH
-RUN cd duva-v4 && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /out/update ./update
+#
+# The binary is built by GoReleaser (see ../../.goreleaser.duva-v4.yaml), not
+# here: this Dockerfile's context is GoReleaser's per-target output directory,
+# containing only the binary this stage copies in.
 
 # Alpine rather than distroless: the commit shells out to git, so there has to
 # be a git to shell out to. Everything else the updater does goes through the
 # daemon's API over the mounted socket, which is why there is no docker CLI.
 FROM alpine:3.22@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1
 RUN apk add --no-cache git ca-certificates
-COPY --from=build /out/update /update
+# GoReleaser's dockers_v2 lays the per-platform binary out at
+# linux/<arch>/<binary> in the build context, one platform per invocation of
+# this Dockerfile -- so TARGETARCH (which buildx sets to match) picks the one
+# this build is for.
+ARG TARGETARCH
+COPY linux/${TARGETARCH}/update /update
 
 # No VOLUME. Where the project is mounted is the operator's choice --
 # DUVA_UPDATE_COMPOSE_DIR -- because this stage has to be able to read it from

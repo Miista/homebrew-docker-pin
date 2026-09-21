@@ -1,0 +1,117 @@
+# duva-v4's own GoReleaser config, separate from the root .goreleaser.yaml.
+#
+# duva-v4 versions independently of docker-pin/docker-unpin: a queue retry fix
+# should not wait on a CLI release, and a CLI release should not force a
+# rebuild of four images that did not change. So it has its own tag namespace
+# (duva-v4/vX.Y.Z, pushed via .github/workflows/duva-v4-release.yml) and its
+# own config, invoked with --config .goreleaser.duva-v4.yaml.
+#
+# GORELEASER_CURRENT_TAG must be set explicitly by the workflow to the pushed
+# tag. Without it, GoReleaser resolves "the current tag" via `git describe`,
+# which picks arbitrarily among any tags on the same commit -- and a
+# duva-v4/vX.Y.Z tag will often share a commit with the CLI's own vX.Y.Z tags.
+version: 2
+
+builds:
+  - id: watch
+    dir: duva-v4
+    main: ./watch
+    binary: watch
+    goos: [linux]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X main.version={{ trimprefix .Tag "duva-v4/" }}
+
+  - id: queue
+    dir: duva-v4
+    main: ./queue
+    binary: queue
+    goos: [linux]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X main.version={{ trimprefix .Tag "duva-v4/" }}
+
+  - id: update
+    dir: duva-v4
+    main: ./update
+    binary: update
+    goos: [linux]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X main.version={{ trimprefix .Tag "duva-v4/" }}
+
+  - id: ui
+    dir: duva-v4
+    main: ./ui
+    binary: ui
+    goos: [linux]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X main.version={{ trimprefix .Tag "duva-v4/" }}
+
+# No archives: these binaries are never distributed standalone, only inside
+# the images below. GoReleaser still requires an archives: entry to exist,
+# so this disables the wrapping rather than omitting the section.
+archives:
+  - id: default
+    ids: [watch, queue, update, ui]
+    formats: [binary]
+
+# dockers_v2 rather than the older dockers/docker_manifests pair: one entry
+# per image builds and pushes the multi-arch manifest directly, instead of
+# needing a separate docker_manifests block to join per-arch images GoReleaser
+# built individually.
+dockers_v2:
+  - id: watch
+    ids: [watch]
+    dockerfile: duva-v4/watch/Dockerfile
+    platforms: ["linux/amd64", "linux/arm64"]
+    images:
+      - "ghcr.io/miista/duva-watch"
+    tags:
+      - "{{ trimprefix .Tag \"duva-v4/\" }}"
+      - "latest"
+
+  - id: queue
+    ids: [queue]
+    dockerfile: duva-v4/queue/Dockerfile
+    platforms: ["linux/amd64", "linux/arm64"]
+    images:
+      - "ghcr.io/miista/duva-queue"
+    tags:
+      - "{{ trimprefix .Tag \"duva-v4/\" }}"
+      - "latest"
+
+  - id: update
+    ids: [update]
+    dockerfile: duva-v4/update/Dockerfile
+    platforms: ["linux/amd64", "linux/arm64"]
+    images:
+      - "ghcr.io/miista/duva-update"
+    tags:
+      - "{{ trimprefix .Tag \"duva-v4/\" }}"
+      - "latest"
+
+  - id: ui
+    ids: [ui]
+    dockerfile: duva-v4/ui/Dockerfile
+    platforms: ["linux/amd64", "linux/arm64"]
+    images:
+      - "ghcr.io/miista/duva-ui"
+    tags:
+      - "{{ trimprefix .Tag \"duva-v4/\" }}"
+      - "latest"
+
+# GoReleaser still wants a GitHub Release target; duva-v4's own release notes
+# live there rather than being folded into the CLI's.
+release:
+  name_template: "duva-v4 {{ trimprefix .Tag \"duva-v4/\" }}"
+
+checksum:
+  disable: true
+
+# No brews, no nfpms: those are docker-pin/docker-unpin's, not duva-v4's.
