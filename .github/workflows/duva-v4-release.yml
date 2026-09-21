@@ -43,7 +43,14 @@ jobs:
       - uses: goreleaser/goreleaser-action@v7
         with:
           version: "~> v2"
-          args: release --clean --config .goreleaser.duva-v4.yaml
+          # --skip=validate: GoReleaser's validate step requires the tag
+          # itself to parse as bare semver (vX.Y.Z, no prefix before the v),
+          # which duva-v4/vX.Y.Z deliberately is not -- the prefix is what
+          # keeps it out of the CLI's own v* release trigger. What validate
+          # otherwise checks (tag is real, tag is on this commit, working
+          # tree is clean) is already guaranteed by this only running from an
+          # actual tag push, so skipping it here does not skip a real check.
+          args: release --clean --skip=validate --config .goreleaser.duva-v4.yaml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Explicit rather than left to `git describe`: this repo also
