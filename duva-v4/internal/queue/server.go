@@ -188,12 +188,11 @@ func (s *Server) apply(w http.ResponseWriter, r *http.Request) {
 		writeMessage(w, err.Error())
 		return
 	}
-	// Approved is no longer waiting. It leaves the queue now rather than when
-	// the work finishes: the queue answers "what needs a decision", and this
-	// one has had its decision. If the apply fails, the watcher will say so
-	// again and it comes back -- which is the protocol working rather than
-	// state being lost.
-	s.Queue.Remove(service)
+	// Approved is no longer waiting on a person, but it is not applied either
+	// until the updater says so. The entry stays in the queue until then --
+	// removing it here meant a failed apply left no trace anywhere that the
+	// service still needed the update. The applier removes it once the
+	// updater reports success.
 	writeMessage(w, "")
 }
 

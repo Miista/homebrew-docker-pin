@@ -104,24 +104,39 @@ func (h *Handler) Handle(n Notice) Result {
 
 	case Apply:
 		e := EntryFrom(v, svc, digestFor(v, n))
+		// Queued before the attempt, not after a failure: an apply that never
+		// finishes -- a crash, a pull that times out against a rate-limited
+		// registry -- must still leave the entry somewhere a person or the
+		// next notice can find it. The applier removes it once the updater
+		// reports success; nothing else does.
+		//
+		// Put directly, not enqueue: an auto-apply under way is not "waiting
+		// for approval", and announcing it as such for the seconds or minutes
+		// until it completes would be a notification about something that
+		// never needed a person, for every routine patch. The two branches
+		// below that fall back to waiting for a person announce explicitly.
+		added := h.Queue.Put(e, h.now())
 		if h.Applier == nil {
 			// No updater configured: queue it rather than lose it. A queue
 			// that decided to apply and then dropped the decision would be
 			// worse than one that never decided.
-			h.enqueue(e)
+			if added && h.Announce != nil {
+				h.Announce(e)
+			}
 			h.logf("%s: %s -> %s would apply (%s), but nothing is configured to apply it", svc.Name, v.From, v.To, v.Why)
 			return Result{Outcome: Queue, Service: svc.Name, Message: "queued: nothing is configured to apply it", Status: http.StatusOK}
 		}
 		if err := h.Applier.Start(e); err != nil {
 			// Failing to start is not failing to queue. It stays queued, so
 			// the next notice tries again and a person can see it waiting.
-			h.enqueue(e)
+			if added && h.Announce != nil {
+				h.Announce(e)
+			}
 			h.logf("%s: could not start applying: %v", svc.Name, err)
 			return Result{Outcome: Queue, Service: svc.Name, Message: err.Error(), Status: http.StatusOK}
 		}
-		// Applying is not "applied". The updater says when it is done, and the
-		// entry stays out of the queue because it is no longer waiting on
-		// anyone.
+		// Applying is not "applied". The updater says when it is done, and
+		// the entry stays queued until it says so successfully.
 		h.logf("%s: applying %s -> %s (%s)", svc.Name, v.From, v.To, v.Why)
 		return Result{Outcome: Apply, Service: svc.Name, Message: v.Why, Status: http.StatusOK}
 

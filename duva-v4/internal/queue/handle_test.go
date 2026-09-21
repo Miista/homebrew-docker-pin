@@ -168,9 +168,10 @@ func TestHandleAppliesWhenPolicyAllows(t *testing.T) {
 	if len(app.started) != 1 || app.started[0].To != "1.0.1" {
 		t.Errorf("started = %+v", app.started)
 	}
-	// Applying is not waiting, so it is not in the queue.
-	if q.Len() != 0 {
-		t.Errorf("an applied entry was left queued: %+v", q.List())
+	// Started, not finished: the entry stays queued until the updater
+	// reports success, so a failed apply is not silently forgotten.
+	if q.Len() != 1 {
+		t.Errorf("the in-flight entry was not queued: %+v", q.List())
 	}
 }
 

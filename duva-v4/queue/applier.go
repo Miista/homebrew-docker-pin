@@ -26,6 +26,17 @@ type applier struct {
 	timeout time.Duration
 	log     zerolog.Logger
 
+	// queue is where the entry stays until the updater reports success.
+	//
+	// An entry starting to apply is not an entry applied: a failed pull, a
+	// registry rate limit, a container that would not start all leave the
+	// service exactly as unpatched as before, and only the queue knows that.
+	// Dropping the entry at Start rather than at Completed was how a failed
+	// apply became a silently forgotten one -- the watcher only re-reports a
+	// digest move it has not already handed on, and this had already handed
+	// it on.
+	queue *queue.Pending
+
 	// mu serialises applies. Held for the whole transaction, not just the
 	// start: the point is that nothing else begins until this one is done.
 	mu sync.Mutex
@@ -52,11 +63,12 @@ type live struct {
 	lines []string // what has been said so far, for a watcher arriving late
 }
 
-func newApplier(c *update.Client, timeout time.Duration, log zerolog.Logger) *applier {
+func newApplier(c *update.Client, timeout time.Duration, log zerolog.Logger, q *queue.Pending) *applier {
 	return &applier{
 		client:  c,
 		timeout: timeout,
 		log:     log,
+		queue:   q,
 		running: map[string]*live{},
 	}
 }
@@ -118,6 +130,12 @@ func (a *applier) apply(e queue.Entry, l *live) {
 		a.failed(e, err.Error())
 	case status == update.Completed:
 		a.log.Info().Msgf("%s: %s -> %s applied", e.Service, e.From, e.To)
+		// Only now has the decision actually happened. Removed here rather
+		// than at Start, so a failure anywhere above leaves the entry exactly
+		// where a person or the next notice can still find it.
+		if a.queue != nil {
+			a.queue.Remove(e.Service)
+		}
 	default:
 		a.log.Error().Msgf("%s: failed — %s", e.Service, reason)
 		a.failed(e, reason)

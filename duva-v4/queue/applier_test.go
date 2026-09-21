@@ -82,9 +82,14 @@ func (s *stubActor) server(t *testing.T) *httptest.Server {
 
 func newTestApplier(t *testing.T, s *stubActor) *applier {
 	t.Helper()
+	return newTestApplierOver(t, s, queue.NewPending())
+}
+
+func newTestApplierOver(t *testing.T, s *stubActor, q *queue.Pending) *applier {
+	t.Helper()
 	srv := s.server(t)
 	// A logger writing nowhere: these tests assert on behaviour, not output.
-	return newApplier(&update.Client{BaseURL: srv.URL}, 10*time.Second, zerolog.Nop())
+	return newApplier(&update.Client{BaseURL: srv.URL}, 10*time.Second, zerolog.Nop(), q)
 }
 
 func entryFor(service string) queue.Entry {
@@ -386,6 +391,46 @@ func TestAFailedApplyNotifiesWithTheActorsReason(t *testing.T) {
 	}
 	if gotReason != "recreating app: exit status 1" {
 		t.Errorf("reason = %q, want the actor's own words", gotReason)
+	}
+}
+
+// A completed apply is the only thing that removes the entry: this is the
+// retry path when nothing else notices a failed one, so it must not fire
+// early.
+func TestApplierRemovesFromQueueOnlyOnSuccess(t *testing.T) {
+	q := queue.NewPending()
+	q.Put(entryFor("app"), time.Now())
+
+	s := &stubActor{lines: []string{"pulling", update.Terminal(update.Completed, "")}}
+	a := newTestApplierOver(t, s, q)
+
+	if err := a.Start(entryFor("app")); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	waitIdle(t, a)
+
+	if q.Len() != 0 {
+		t.Errorf("a completed apply left the entry queued: %+v", q.List())
+	}
+}
+
+// A failed apply must leave the entry queued -- it is the only record left
+// that the service still needs the update, since the watcher will not
+// re-report a digest move it already handed on successfully.
+func TestApplierLeavesEntryQueuedOnFailure(t *testing.T) {
+	q := queue.NewPending()
+	q.Put(entryFor("app"), time.Now())
+
+	s := &stubActor{lines: []string{"pulling", update.Terminal(update.Failed, "boom")}}
+	a := newTestApplierOver(t, s, q)
+
+	if err := a.Start(entryFor("app")); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	waitIdle(t, a)
+
+	if q.Len() != 1 {
+		t.Errorf("a failed apply dropped the entry: %+v", q.List())
 	}
 }
 

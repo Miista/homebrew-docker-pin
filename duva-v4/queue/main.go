@@ -172,6 +172,7 @@ func run(log zerolog.Logger) error {
 			&update.Client{BaseURL: cfg.ActorURL, Token: cfg.ActorToken},
 			cfg.ApplyTimeout,
 			log,
+			queue,
 		)
 		applying = live
 		log.Info().Msgf("applying through the actor at %s", cfg.ActorURL)
