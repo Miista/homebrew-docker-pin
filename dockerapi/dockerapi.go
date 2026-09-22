@@ -247,6 +247,19 @@ func ContainerName(service string) string {
 	return strings.TrimPrefix(named.Name, "/")
 }
 
+// preRecreateDump is where a container's inspect output is saved just before
+// Recreate stops and removes it.
+//
+// /tmp rather than the bind-mounted repository: the repository is a git working
+// tree, and a diagnostic file left there would need cleaning up or committing,
+// neither of which is this function's business. A container recycle loses it,
+// which is an acceptable cost for a file nobody usually reads -- `docker cp`
+// while the updater container is still up is what a person reaches for after
+// a create fails, and the error message names this exact path.
+func preRecreateDump(service string) string {
+	return "/tmp/duva-recreate-" + service + ".json"
+}
+
 // Recreate replaces a service's container with one running the image
 // its compose file now pins.
 //
@@ -285,6 +298,17 @@ func Recreate(composeFile, service string) error {
 	}
 	name := strings.TrimPrefix(named.Name, "/")
 
+	// Written before the container is touched, not after a failure: once
+	// stop+remove runs, the old container's exact Mounts/Config are gone for
+	// good, and a create that then fails (e.g. "Duplicate mount point") has
+	// nothing left to diagnose it against. A prior incident (flaresolverr,
+	// 2026-09-22) hit exactly this -- a create failed with a duplicate /config
+	// mount that a fresh container built from the same two images would not
+	// reproduce, and with the original gone there was no way to tell what
+	// state actually caused it. Best-effort: a diagnostic that could itself
+	// fail and block a real update would be worse than not having it.
+	_ = os.WriteFile(preRecreateDump(service), raw, 0o644)
+
 	// Stopped and removed before the replacement is created, because the name
 	// has to be free. A failure here leaves the old container in place, which
 	// the transaction reports and the next run retries.
@@ -298,7 +322,11 @@ func Recreate(composeFile, service string) error {
 	created, err := dockerDo(http.MethodPost,
 		"/containers/create?name="+url.QueryEscape(name), createSpec(spec, image))
 	if err != nil {
-		return fmt.Errorf("creating the replacement for %s: %w", service, err)
+		dump := preRecreateDump(service)
+		return fmt.Errorf("creating the replacement for %s: %w"+
+			" (its configuration just before this was saved to %s inside this container --"+
+			" `docker cp <this container>:%s .` retrieves it before it is gone)",
+			service, err, dump, dump)
 	}
 	var newc struct {
 		ID string `json:"Id"`
