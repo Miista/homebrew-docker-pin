@@ -19,6 +19,14 @@ builds:
     binary: watch
     goos: [linux]
     goarch: [amd64, arm64]
+    # Static, not dynamically linked against glibc: watch/queue/ui run on
+    # distroless-static, which carries no dynamic linker at all, and a
+    # cgo-linked binary there fails at exec with a misleading "no such file
+    # or directory" (the missing interpreter, not the missing binary).
+    # update runs on alpine/musl instead, but the same flag keeps all four
+    # builds identical and avoids relying on musl's looser linking by luck.
+    env:
+      - CGO_ENABLED=0
     flags: [-trimpath]
     ldflags:
       - -s -w -X main.version={{ trimprefix .Tag "duva-v4/" }}
@@ -29,6 +37,14 @@ builds:
     binary: queue
     goos: [linux]
     goarch: [amd64, arm64]
+    # Static, not dynamically linked against glibc: watch/queue/ui run on
+    # distroless-static, which carries no dynamic linker at all, and a
+    # cgo-linked binary there fails at exec with a misleading "no such file
+    # or directory" (the missing interpreter, not the missing binary).
+    # update runs on alpine/musl instead, but the same flag keeps all four
+    # builds identical and avoids relying on musl's looser linking by luck.
+    env:
+      - CGO_ENABLED=0
     flags: [-trimpath]
     ldflags:
       - -s -w -X main.version={{ trimprefix .Tag "duva-v4/" }}
@@ -39,6 +55,14 @@ builds:
     binary: update
     goos: [linux]
     goarch: [amd64, arm64]
+    # Static, not dynamically linked against glibc: watch/queue/ui run on
+    # distroless-static, which carries no dynamic linker at all, and a
+    # cgo-linked binary there fails at exec with a misleading "no such file
+    # or directory" (the missing interpreter, not the missing binary).
+    # update runs on alpine/musl instead, but the same flag keeps all four
+    # builds identical and avoids relying on musl's looser linking by luck.
+    env:
+      - CGO_ENABLED=0
     flags: [-trimpath]
     ldflags:
       - -s -w -X main.version={{ trimprefix .Tag "duva-v4/" }}
@@ -49,6 +73,14 @@ builds:
     binary: ui
     goos: [linux]
     goarch: [amd64, arm64]
+    # Static, not dynamically linked against glibc: watch/queue/ui run on
+    # distroless-static, which carries no dynamic linker at all, and a
+    # cgo-linked binary there fails at exec with a misleading "no such file
+    # or directory" (the missing interpreter, not the missing binary).
+    # update runs on alpine/musl instead, but the same flag keeps all four
+    # builds identical and avoids relying on musl's looser linking by luck.
+    env:
+      - CGO_ENABLED=0
     flags: [-trimpath]
     ldflags:
       - -s -w -X main.version={{ trimprefix .Tag "duva-v4/" }}
