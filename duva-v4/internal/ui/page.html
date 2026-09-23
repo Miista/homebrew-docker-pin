@@ -95,10 +95,15 @@
 
   /* ---------- rows ---------- */
   .rows { list-style: none; margin: 0; padding: 0; }
-  .rows li { display: grid; align-items: center; grid-template-columns: var(--cols);
+  /* > li, not li: a row's own steps are a nested <ul class="steps"> with its
+     own <li> lines (see below), and a plain descendant selector here matched
+     those too -- turning each streamed step into its own 42px grid row with
+     a divider, the same layout as a whole service row, rather than the tight
+     muted list .steps intends. */
+  .rows > li { display: grid; align-items: center; grid-template-columns: var(--cols);
              gap: 0 .55rem; min-height: 42px; padding: .2rem 0;
              border-top: 1px solid var(--line-soft); }
-  .rows li form, .head span:last-child { grid-column: 5; justify-self: end; }
+  .rows > li form, .head span:last-child { grid-column: 5; justify-self: end; }
   .head { display: grid; grid-template-columns: var(--cols); gap: 0 .55rem;
           padding: .4rem .9rem .3rem;
           background: var(--card); border: 1px solid var(--line);
@@ -117,7 +122,7 @@
          font-weight: 400; letter-spacing: 0; opacity: 0; transition: opacity .12s;
          margin-top: -.15rem; overflow: hidden; text-overflow: ellipsis;
          white-space: nowrap; }
-  .rows li:hover .img, .rows li:focus-within .img { opacity: 1; }
+  .rows > li:hover .img, .rows > li:focus-within .img { opacity: 1; }
   /* min-width: 0 lets the grid track's width win over the content's
      intrinsic size, so a long tag clips rather than overflowing into the
      Kind column. */
@@ -158,7 +163,7 @@
 
   /* A row from a decider that has stopped answering: shown, because it was
      really queued, but faded because it cannot be confirmed. */
-  .rows li.stale { opacity: .55; }
+  .rows > li.stale { opacity: .55; }
 
   /* ---------- an apply, as it happens ---------- */
   .steps { grid-column: 1 / -1; margin: .1rem 0 .35rem;
@@ -202,13 +207,13 @@
     .head { display: none; }
     main > .rows { padding: 0 .7rem;
                    border-top: 1px solid var(--line); border-radius: 10px; }
-    .rows li:first-child { border-top: 0; }
-    .rows li { grid-template-columns: minmax(0, 1fr) max-content max-content;
+    .rows > li:first-child { border-top: 0; }
+    .rows > li { grid-template-columns: minmax(0, 1fr) max-content max-content;
                row-gap: 0; padding: .4rem 0; min-height: 0; }
     .svc { grid-column: 1; white-space: normal; }
     .img { opacity: 1; }
     .kind { grid-column: 2; justify-self: end; }
-    .rows li form { grid-column: 3; grid-row: 1 / span 2; justify-self: end; }
+    .rows > li form { grid-column: 3; grid-row: 1 / span 2; justify-self: end; }
     .jump { grid-column: 1 / 3; grid-row: 2; }
     .apply { padding: .3rem .7rem; }
   }
