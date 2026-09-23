@@ -159,7 +159,7 @@ func TestTheCardDrawsItsOwnTopEdgeWithoutTheHead(t *testing.T) {
 	if !strings.Contains(ruleFor(phone, "main > .rows"), "border-top") {
 		t.Error("the card does not draw its own top edge, so the first row's inset border shows as one")
 	}
-	if !strings.Contains(ruleFor(phone, ".rows li:first-child"), "border-top: 0") {
+	if !strings.Contains(ruleFor(phone, ".rows > li:first-child"), "border-top: 0") {
 		t.Error("the first row still draws a border, which doubles the card's edge")
 	}
 }
