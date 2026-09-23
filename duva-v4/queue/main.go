@@ -18,6 +18,9 @@
 //	DUVA_UPDATE_URL    where the updater is, e.g. http://actor:8080
 //	DUVA_UPDATE_TOKEN  the token the updater requires
 //	DUVA_UPDATE_TIMEOUT how long an apply may run before it is called failed
+//	DUVA_RECONCILE_INTERVAL how often a queued entry is re-checked against the
+//	                    compose file, to catch one satisfied by something other
+//	                    than this queue's own apply (default 10m)
 package main
 
 import (
@@ -217,6 +220,10 @@ func run(log zerolog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	reconcileDone := make(chan struct{})
+	go (&reconciler{queue: queue, interval: cfg.ReconcileInterval, log: log}).run(reconcileDone)
+	defer close(reconcileDone)
+
 	go func() {
 		log.Info().Msgf("deciding for %s, serving on %s", cfg.Host, addr)
 		if os.Getenv("DUVA_QUEUE_TOKEN") == "" {
@@ -262,20 +269,22 @@ func notifyHandler(h *q.Handler, log zerolog.Logger) func([]byte) (int, string) 
 }
 
 type config struct {
-	Host         string
-	Token        string
-	ActorURL     string
-	ActorToken   string
-	ApplyTimeout time.Duration
+	Host              string
+	Token             string
+	ActorURL          string
+	ActorToken        string
+	ApplyTimeout      time.Duration
+	ReconcileInterval time.Duration
 }
 
 func loadConfig() config {
 	c := config{
-		Host:         os.Getenv("DUVA_HOST"),
-		Token:        tokenFromEnv(),
-		ActorURL:     os.Getenv("DUVA_UPDATE_URL"),
-		ActorToken:   os.Getenv("DUVA_UPDATE_TOKEN"),
-		ApplyTimeout: defaultApplyTimeout,
+		Host:              os.Getenv("DUVA_HOST"),
+		Token:             tokenFromEnv(),
+		ActorURL:          os.Getenv("DUVA_UPDATE_URL"),
+		ActorToken:        os.Getenv("DUVA_UPDATE_TOKEN"),
+		ApplyTimeout:      defaultApplyTimeout,
+		ReconcileInterval: defaultReconcileInterval,
 	}
 	if c.Host == "" {
 		if h, err := os.Hostname(); err == nil && h != "" {
@@ -294,6 +303,14 @@ func loadConfig() config {
 			os.Exit(1)
 		}
 		c.ApplyTimeout = d
+	}
+	if raw := os.Getenv("DUVA_RECONCILE_INTERVAL"); raw != "" {
+		d, err := time.ParseDuration(raw)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: DUVA_RECONCILE_INTERVAL=%q is not a duration\n", raw)
+			os.Exit(1)
+		}
+		c.ReconcileInterval = d
 	}
 	return c
 }

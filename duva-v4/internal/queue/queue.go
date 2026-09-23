@@ -165,6 +165,51 @@ func (q *Pending) Remove(service string) bool {
 	return ok
 }
 
+// Reconcile drops entries the world no longer agrees with.
+//
+// An entry leaves the queue two ways today: an apply completes, or a newer
+// candidate for the same service supersedes it. Neither covers a service
+// changed by anything else -- a person running `docker pin upgrade` by hand,
+// a hand-edited compose file, a manual `docker pull` + `compose up`. The
+// queue has no way to learn about those on its own, and an entry already
+// satisfied by reality sits offering an update that already happened.
+//
+// still is asked once per entry, with the queue's lock held for the whole
+// call: it is expected to read a compose file, not to block on anything
+// slower. Called on a schedule (see the queue binary's reconciler), not on
+// every read, because "is this still true" costs a file read per entry and a
+// person approving something stale is rare enough not to need it checked
+// synchronously.
+//
+// still's error is logged by the caller and treated as "still wanted": a
+// compose file that briefly fails to read is not evidence an entry is
+// satisfied, and removing one on a spurious read error would be worse than
+// leaving a stale one an extra cycle.
+func (q *Pending) Reconcile(still func(e Entry) (bool, error), onError func(service string, err error)) (removed []string) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	for service, e := range q.entries {
+		ok, err := still(e)
+		if err != nil {
+			if onError != nil {
+				onError(service, err)
+			}
+			continue
+		}
+		if ok {
+			continue
+		}
+		delete(q.entries, service)
+		removed = append(removed, service)
+	}
+	if len(removed) > 0 {
+		sort.Strings(removed)
+		q.save()
+	}
+	return removed
+}
+
 // List returns everything waiting, ordered by service so a row keeps its
 // place between reloads.
 func (q *Pending) List() []Entry {

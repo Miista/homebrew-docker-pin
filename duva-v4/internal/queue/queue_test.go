@@ -1,6 +1,7 @@
 package queue
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -380,5 +381,84 @@ func TestTheOutcomeIsTheSameWhateverTheOrder(t *testing.T) {
 				t.Errorf("queued %s, want %s whatever the arrival order", got.To, want)
 			}
 		})
+	}
+}
+
+// --- Reconcile ---------------------------------------------------------------
+
+// A service satisfied by something other than this queue's own apply --
+// a person running `docker pin upgrade` by hand, a hand-edited compose file --
+// must not sit in the queue offering an update that already happened.
+func TestReconcileDropsAnEntryTheWorldAlreadySatisfies(t *testing.T) {
+	q := NewPending()
+	q.Put(entry("app", "1.0.0", "1.1.0"), now)
+
+	removed := q.Reconcile(func(e Entry) (bool, error) {
+		return false, nil // the world says: not wanted any more
+	}, nil)
+
+	if len(removed) != 1 || removed[0] != "app" {
+		t.Errorf("removed = %v, want [app]", removed)
+	}
+	if q.Len() != 0 {
+		t.Errorf("entry survived reconcile: %+v", q.List())
+	}
+}
+
+// An entry the world still disagrees with is left alone.
+func TestReconcileKeepsAnEntryStillWanted(t *testing.T) {
+	q := NewPending()
+	q.Put(entry("app", "1.0.0", "1.1.0"), now)
+
+	removed := q.Reconcile(func(e Entry) (bool, error) {
+		return true, nil
+	}, nil)
+
+	if len(removed) != 0 {
+		t.Errorf("removed = %v, want none", removed)
+	}
+	if q.Len() != 1 {
+		t.Error("a still-wanted entry was dropped")
+	}
+}
+
+// A read error is not evidence an entry is satisfied. Removing one on a
+// spurious failure (a compose file briefly unreadable mid-write, say) would
+// be worse than leaving a stale one an extra cycle.
+func TestReconcileKeepsAnEntryOnReadError(t *testing.T) {
+	q := NewPending()
+	q.Put(entry("app", "1.0.0", "1.1.0"), now)
+
+	var reported string
+	removed := q.Reconcile(func(e Entry) (bool, error) {
+		return false, errors.New("boom")
+	}, func(service string, err error) { reported = service })
+
+	if len(removed) != 0 {
+		t.Errorf("removed = %v, want none on error", removed)
+	}
+	if q.Len() != 1 {
+		t.Error("an entry was dropped on a read error rather than kept")
+	}
+	if reported != "app" {
+		t.Errorf("onError called with %q, want app", reported)
+	}
+}
+
+// Several entries, only some satisfied: only those leave.
+func TestReconcileIsPerEntry(t *testing.T) {
+	q := NewPending()
+	q.Put(entry("app", "1.0.0", "1.1.0"), now)
+	q.Put(entry("other", "2.0.0", "2.1.0"), now)
+
+	removed := q.Reconcile(func(e Entry) (bool, error) {
+		return e.Service != "app", nil // only "app" is satisfied
+	}, nil)
+
+	if len(removed) != 1 || removed[0] != "app" {
+		t.Errorf("removed = %v, want [app]", removed)
+	}
+	if _, ok := q.Get("other"); !ok {
+		t.Error("an unrelated entry was dropped")
 	}
 }
