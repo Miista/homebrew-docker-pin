@@ -206,124 +206,140 @@ No-op if the service isn't pinned.
 
 ## duva — the update companion
 
-This repo also ships **duva** (Swedish for dove — a carrier pigeon: flies to
-the registry and comes back) as a container image: `ghcr.io/miista/duva`. It
-watches **pinned** services in a compose project (`image:` has `@sha256:...`),
-and for each one either applies the update or queues it for a human, according
-to that service's `duva.auto` policy. Applying means: pull the image, rewrite
-the pin, recreate the container, commit the change. What it cannot apply it
-reports once — over ntfy and in a small web queue — and remembers, so it never
-repeats itself.
+**duva** (Swedish for dove — a carrier pigeon: flies to the registry and comes
+back) watches **pinned** services in a compose project (`image:` has
+`@sha256:...`) and either applies an update or queues it for a person,
+according to that service's `duva.auto` policy. Applying means: pull the
+image, rewrite the pin, recreate the container, commit the change.
 
 Being pinned **is** the opt-in: `docker pin <service>` starts duva watching
-it, `docker unpin <service>` stops it. A service without a digest is logged
-as skipped and otherwise ignored — no notification, no state tracking. This
-is what duva is actually for: telling you when a deliberate version pin has
-gone stale, not generic "is anything newer" drift-watching.
+it, `docker unpin <service>` stops it. A service without a digest is ignored.
+This is what duva is for — telling you when a deliberate version pin has gone
+stale, not generic "is anything newer" drift-watching.
 
-Per-service rules live as labels on the service, right next to the pin they
-govern:
+duva ships as **four images**, one per stage:
+
+    watch  ->  queue  ->  update
+                 ^
+                 |
+                 ui
+
+| stage | what it does | docker socket | /compose | git |
+|---|---|---|---|---|
+| **watch** (`ghcr.io/miista/duva-watch`) | what tags exist, and when | — | read | — |
+| **queue** (`ghcr.io/miista/duva-queue`) | is this an update, how big, may it be applied | — | read | — |
+| **update** (`ghcr.io/miista/duva-update`) | pull, write the pin, recreate, commit | read-write | **read-write** | yes |
+| **ui** (`ghcr.io/miista/duva-ui`) | the approval queue, over one or more hosts | — | — | — |
+
+Only update holds any privilege, and that is the point of the split: the
+network-facing half needs none of what the work needs. Watch, queue and update
+each run on the host they touch, since each reads that host's compose project
+and — for update — its docker socket and its repository. Only the UI is
+host-agnostic, serving as many hosts' queues as it is given.
+
+These version independently of the CLI, under their own `duva-v4/vX.Y` tags.
+See `duva-v4/README.md` for the full deployment contract, including why the
+updater refuses to run as root.
+
+### Per-service labels
+
+Rules live on the service, next to the pin they govern:
 
 ```yaml
 services:
   radarr:
     image: ghcr.io/linuxserver/radarr:latest@sha256:...
     labels:
-      duva.include_tags: '^\d+\.\d+\.\d+$' # only consider tags matching this regex
-      duva.exclude_tags: '(alpha|beta|rc)' # drop matching candidates
-      duva.delay: 7d                  # let a release age this long first
-      duva.auto: patch                # apply patches unattended; queue the rest
+      diun.include_tags: '^\d+\.\d+\.\d+$'  # only consider tags matching this
+      diun.exclude_tags: '(alpha|beta|rc)'  # drop matching candidates
+      duva.auto: digest                     # what may be applied unattended
 ```
+
+**Tag filtering reads diun's labels, not duva's.** These are detection rules
+and the watcher is what reads them; around forty-five services already carry
+them because diun was the watcher here for a long time, and a second namespace
+saying the same thing would mean a migration that changes nothing. Policy —
+what may be applied unattended — is a different question and lives on
+`duva.auto`.
 
 `duva.auto` decides what may be applied without asking: `none` (the default),
 `digest`, `patch`, `minor` or `major`. A service with no `duva.auto` is only
-ever reported.
+ever queued for a person.
 
 `digest` is not a rung on that ladder but a different mode. `patch`, `minor`
-and `major` size a *version step* -- the tag itself changing -- and each also
+and `major` size a *version step* — the tag itself changing — and each also
 implies taking a digest move on the tag already followed. `digest` takes only
 the latter: what `latest` now points at, or an upstream republishing `1.4.2`
 with a patched base layer, without also consenting to be walked up to `1.4.3`.
 A digest move has no magnitude to threshold on, which is why it is a mode
-rather than the smallest step. An unknown `duva.*` label is an error rather than something ignored:
-a misspelled `duva.includ` would otherwise silently mean "follow the moving
-tag", which looks like duva working rather than duva misconfigured.
+rather than the smallest step.
 
-`duva.delay` soaks a release before adopting it — useful for images whose
-publisher occasionally ships a bad build and fixes it within a day. A soaking
-candidate is not hidden: the queue lists it separately, with what happens when
-the wait ends, and an Update button that takes it early. The wait is a default,
-not a lock.
+An unrecognised value is an error rather than a fallback: `duva.auto: pathc`
+silently meaning "none" is the kind of thing discovered months later, when
+something has not been happening and nobody knows why — and the opposite
+mistake, a typo that quietly widened what may be applied unattended, is worse
+still.
 
-Everything else is env vars — `DUVA_SCHEDULE` (cron expression),
-`DUVA_HOSTNAME` (optional, defaults to the OS hostname),
-`DUVA_NTFY_URL`/`DUVA_NTFY_TOPIC`/`DUVA_NTFY_TOKEN` for notifications, and
-`DUVA_GIT_PUSH` to publish the commit. The container contract is two fixed
-mount paths plus env — no config file:
+### Configuration
 
-```yaml
-services:
-  duva:
-    image: ghcr.io/miista/duva:latest
-    environment:
-      DUVA_SCHEDULE: "0 6 * * *"
-      DUVA_NTFY_URL: https://ntfy.example.net
-      DUVA_NTFY_TOPIC: docker-pin
-    env_file: ./duva-secrets.env   # DUVA_NTFY_TOKEN=... ; gitignored
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - .:/compose
-      - duva-state:/data
-    ports:
-      - "8080:8080"   # the approval queue; omit to keep it unreachable
-volumes:
-  duva-state:
-```
+Each stage is configured by env vars; there is no config file.
 
-**duva must be a service in the stack it watches.** It is not a host-wide
-daemon: it reads its own container's compose labels to learn which project to
-recreate containers in, and where that project lives on the host. Outside a
-compose project those labels do not exist and duva refuses to act rather than
-guess — recreating in the wrong project does not replace a container, it
-creates a second one alongside. With a root compose file that `include:`s the
-rest, one duva covers everything, since an included service belongs to the
-root project.
+**watch** — `DUVA_SCHEDULE` (cron expression), `DUVA_WEBHOOK_URL` (where to
+publish notices), `DUVA_HOST`, `DUVA_SINCE`, `DUVA_LOG_LEVEL`. Mounts the
+project read-only at `/compose` and keeps one timestamp in `/data`. Its only
+state is that timestamp, so losing it costs a noisy run rather than a rebuild.
+`serve` checks on the schedule and stays up between checks — restarting it is
+how you ask for a check now.
 
-The three mounts are what that work needs:
+**queue** — `DUVA_UPDATE_URL`/`DUVA_UPDATE_TOKEN` (the updater it hands work
+to), `DUVA_QUEUE_TOKEN` (what a UI must present), `DUVA_NTFY_ENDPOINT`/
+`DUVA_NTFY_TOPIC`/`DUVA_NTFY_CLICK` for notifications, `DUVA_UPDATE_TIMEOUT`,
+and `DUVA_RECONCILE_INTERVAL` (how often a queued entry is re-checked against
+the compose file, to catch one satisfied by something other than its own
+apply; default 10m). Mounts the project read-only at `/compose` and keeps the
+queue in `/data` — without that volume a deploy drops every decision waiting
+on a person, and announces each one again when the watcher re-sends it.
 
-- **`/var/run/docker.sock`** — duva pulls images and recreates containers by
-  driving the host's daemon. This is real access to the host: duva can start
-  and stop anything. Give it to a tool you are willing to trust that far.
-- **`.:/compose`** — the stack itself. duva parses it to find pinned services
-  and their labels, and rewrites the `image:` line when it applies an update.
-  Read-write, unlike earlier versions: a read-only mount silently blocks every
-  apply. It is also the git repository duva commits into, so it must be a
-  checkout, not a deployed copy.
-- **`duva-state:/data`** — the state file. It holds the approval queue, the
-  digest baselines for moving tags, and what has already been announced, so an
-  update is reported once rather than every run and the queue survives a
-  restart. A named volume is the right default; it persists across upgrades
-  and needs no ownership fiddling.
+**update** — `DUVA_REPO` (the repository, at the path it has on the host),
+`DUVA_COMMIT_TEMPLATE`, `DUVA_GIT_PUSH` (off by default: commits stay local),
+`DUVA_UPDATE_TOKEN`. Mounts the repository read-write at its own host path,
+plus the docker socket.
 
-Both paths are fixed. duva runs in a container, where `/compose` and
-`/data/duva.json` are the contract rather than a default, so there is nothing
-to configure and nothing to get wrong.
+**ui** — `DUVA_QUEUES` (`host=url,host=url`), `DUVA_QUEUE_TOKEN_<HOST>` per
+host, and `DUVA_READ_ONLY` to serve the page without the Update button. Tokens
+are never in the queue list, so the list itself is not a secret. It refuses to
+start with no queues: "nothing waiting for approval" is the most misleading
+sentence it can print, and is also what it says when all is well.
 
-Because duva commits, it will not act on a dirty repository — committing on
+### What the mounts are for
+
+- **`/var/run/docker.sock`** (update only) — pulling images and recreating
+  containers means driving the host's daemon. This is real access to the host.
+  `:ro` on a socket applies to the file, not the API served over it: a
+  container holding it can still create and delete containers either way.
+- **`/compose`** — the compose project *directory*, never the file alone. Two
+  things break with a single-file mount: `include:`'d nested compose files
+  resolve relative to the directory and would not exist inside the container,
+  and a single-file bind silently pins the old inode when the host file is
+  replaced by rename — which is exactly how editors and `docker pin` itself
+  rewrite it, so the stage would read a stale file forever without any error.
+  Read-only for watch and queue; read-write for update, because rewriting the
+  pin is the whole point.
+- **`/data`** (watch, queue) — a named volume, not a bind. Docker chowns a
+  fresh named volume to match what the image carries; a bind mount would be
+  root-owned and the stage would fail on its final write, having done all the
+  work.
+
+Because update commits, it will not act on a dirty repository — committing on
 top of someone's half-finished edit is never wanted. It is a precondition, not
 a setting.
 
-**`/compose` MUST be the compose project _directory_, never the compose file
-alone.** Two things break with a single-file mount: `include:`'d nested
-compose files resolve relative to the directory and wouldn't exist inside
-the container, and a single-file bind mount silently pins the old inode when
-the host file is replaced by rename — which is exactly how editors and
-`docker pin` itself rewrite it, so duva would keep reading a stale file
-forever without any error.
-
-`duva serve` (the image's default command) runs the check on
-`DUVA_SCHEDULE`'s cron expression; `duva run` does a single check and
-exits.
+**No rollback.** Everything answerable is answered in a precheck before the
+pull. A failed recreate is left alone: recreating stops and removes the old
+container before creating the replacement, so one error covers the old
+container running, gone, or a new one that will not start — and restoring the
+pin is wrong in some of those. The file keeps what was decided, the repository
+is dirty, and the next apply is blocked with the reason.
 
 ## How digests work (multi-arch)
 
@@ -429,6 +445,13 @@ This repo is the Homebrew tap. Pushing a `vX.Y.Z` tag triggers a GoReleaser work
 4. Publishes the `.deb`s to the shared [Cloudsmith](https://cloudsmith.io) apt
    repository (`guldmund/stable`), which indexes and signs them server-side.
    Each tool pushes only its own artifacts — there is no shared build step.
+
+duva's four images version independently, under `duva-v4/vX.Y` tags handled by
+`.github/workflows/duva-v4-release.yml` and its own `.goreleaser.duva-v4.yaml`.
+A queue fix should not wait on a CLI release, and a CLI release should not
+force a rebuild of four images that did not change — so the tag namespaces are
+deliberately separate, and the `duva-v4/` prefix is what keeps these tags out
+of the CLI workflow's `v*` trigger.
 
 ## License
 

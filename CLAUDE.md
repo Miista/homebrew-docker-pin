@@ -128,9 +128,15 @@ extension rather than an OCI concept.
 ### duva v4 (`duva-v4/`)
 
 Three single-purpose processes plus a page, replacing what duva does in one.
-Built and working end to end, not deployed. duva itself is untouched and
-still ships.
+Deployed and running on optiplex and the pi, released under its own
+`duva-v4/vX.Y` tags (`.github/workflows/duva-v4-release.yml`), separate from
+the CLI's `vX.Y.Z` ones.
 See `docs/duva-v4-watch-queue-update.md`.
+
+v4 reads exactly one `duva.*` label -- `duva.auto`. Tag filtering comes from
+`diun.include_tags` / `diun.exclude_tags`, and there is **no soak**: v3's
+`duva.delay` has no equivalent here, and `pin.SelectCandidate` is not on this
+path.
 
 - **`watcher/`** — what exists, and when. Lists tags, keeps the ones
   published since the last check, publishes them to a webhook. Knows nothing
@@ -176,8 +182,8 @@ See `docs/duva-v4-watch-queue-update.md`.
   and asks them to apply what was clicked. Lifted from duva's `internal/ui`,
   minus the soak list (a soak is an entry with a release time, not a second
   list) and the refresh button (the watcher owns when a check happens).
-  Queues are configured, not discovered: `DUVA_UI_DECIDERS=host=url,...`,
-  with tokens in `DUVA_UI_TOKEN` or per-host `DUVA_UI_TOKEN_<HOST>` — never
+  Queues are configured, not discovered: `DUVA_QUEUES=host=url,...`,
+  with tokens in per-host `DUVA_QUEUE_TOKEN_<HOST>` — never
   in the list, so the list itself is not a secret. Refuses to start with no
   queues, since "nothing waiting for approval" is the most misleading
   sentence it can print and is also what it says when all is well. An
