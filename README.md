@@ -236,8 +236,16 @@ services:
 ```
 
 `duva.auto` decides what may be applied without asking: `none` (the default),
-`patch`, `minor` or `major`. A service with no `duva.auto` is only ever
-reported. An unknown `duva.*` label is an error rather than something ignored:
+`digest`, `patch`, `minor` or `major`. A service with no `duva.auto` is only
+ever reported.
+
+`digest` is not a rung on that ladder but a different mode. `patch`, `minor`
+and `major` size a *version step* -- the tag itself changing -- and each also
+implies taking a digest move on the tag already followed. `digest` takes only
+the latter: what `latest` now points at, or an upstream republishing `1.4.2`
+with a patched base layer, without also consenting to be walked up to `1.4.3`.
+A digest move has no magnitude to threshold on, which is why it is a mode
+rather than the smallest step. An unknown `duva.*` label is an error rather than something ignored:
 a misspelled `duva.includ` would otherwise silently mean "follow the moving
 tag", which looks like duva working rather than duva misconfigured.
 

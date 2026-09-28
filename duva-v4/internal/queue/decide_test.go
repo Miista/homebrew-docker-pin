@@ -236,7 +236,7 @@ func TestAutoNoneQueuesEverySize(t *testing.T) {
 // asked for alpine. duva.auto says how big a step may be taken unattended; it
 // does not say which line to follow, and the tag already said that.
 func TestAFlavourSwitchIsNeverACandidate(t *testing.T) {
-	for _, auto := range []Auto{AutoNone, AutoPatch, AutoMinor, AutoMajor} {
+	for _, auto := range []Auto{AutoNone, AutoDigest, AutoPatch, AutoMinor, AutoMajor} {
 		t.Run(string(auto), func(t *testing.T) {
 			s := svc("1.0.0-alpine", "sha256:old", auto)
 			v := Decide(notice("example.com/app:1.1.0-slim", "sha256:new"), s, true)
@@ -384,5 +384,76 @@ func TestAnUnknownCurrentSchemeSaysSo(t *testing.T) {
 	}
 	if !strings.Contains(v.Why, "a573727") {
 		t.Errorf("the reason does not name the tag in use: %q", v.Why)
+	}
+}
+
+// --- duva.auto: digest ------------------------------------------------------
+
+// The mode it exists for: take what the followed tag now points at.
+func TestAutoDigestAppliesADigestMove(t *testing.T) {
+	s := svc("latest", "sha256:old", AutoDigest)
+	v := Decide(notice("example.com/app:latest", "sha256:new"), s, true)
+	if v.Outcome != Apply {
+		t.Errorf("outcome = %q, want apply (%s)", v.Outcome, v.Why)
+	}
+}
+
+// And the half that makes it worth having. A service asking for digest moves
+// has not asked to be walked up the version ladder, so even a patch -- the
+// smallest step there is -- queues.
+//
+// This is the case that had no spelling before: duva.auto: patch was the
+// lowest rung that took digest moves, and it took patches too.
+func TestAutoDigestQueuesEveryVersionStep(t *testing.T) {
+	for _, to := range []string{"1.0.1", "1.1.0", "2.0.0"} {
+		s := svc("1.0.0", "sha256:old", AutoDigest)
+		v := Decide(notice("example.com/app:"+to, "sha256:new"), s, true)
+		if v.Outcome != Queue {
+			t.Errorf("%s: outcome = %q, want queue (%s)", to, v.Outcome, v.Why)
+		}
+		if !strings.Contains(v.Why, "digest") {
+			t.Errorf("%s: reason = %q, want it to name the policy", to, v.Why)
+		}
+	}
+}
+
+// A digest move on a concrete version tag, which is the other reason to want
+// this: an upstream republishing 1.4.2 with a patched base layer, taken
+// without also consenting to 1.4.3.
+func TestAutoDigestAppliesARepublishedConcreteTag(t *testing.T) {
+	s := svc("1.4.2", "sha256:old", AutoDigest)
+	v := Decide(notice("example.com/app:1.4.2", "sha256:new"), s, true)
+	if v.Outcome != Apply {
+		t.Errorf("outcome = %q, want apply (%s)", v.Outcome, v.Why)
+	}
+}
+
+// digest is not a rung: it is off the ladder, so it must not read as weaker
+// or stronger than a version policy. Held because ordering it would be the
+// natural mistake -- and would make `minor` silently imply it.
+func TestAutoDigestIsNotAVersionRung(t *testing.T) {
+	if AutoDigest.rank() != 0 {
+		t.Errorf("rank = %d, want 0: digest consents to no version step", AutoDigest.rank())
+	}
+	if !AutoDigest.TakesDigestMoves() {
+		t.Error("digest must take digest moves")
+	}
+	if AutoNone.TakesDigestMoves() {
+		t.Error("none must take nothing")
+	}
+	for _, a := range []Auto{AutoPatch, AutoMinor, AutoMajor} {
+		if !a.TakesDigestMoves() {
+			t.Errorf("%s must still take digest moves", a)
+		}
+	}
+}
+
+func TestParseAutoAcceptsDigest(t *testing.T) {
+	got, err := ParseAuto("digest")
+	if err != nil {
+		t.Fatalf("ParseAuto(digest): %v", err)
+	}
+	if got != AutoDigest {
+		t.Errorf("got %q, want digest", got)
 	}
 }

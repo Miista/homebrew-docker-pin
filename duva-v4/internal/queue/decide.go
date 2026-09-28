@@ -169,7 +169,7 @@ func Decide(n Notice, svc Service, found bool) Verdict {
 // would be pretending to a control already declined.
 func digestMove(n Notice, svc Service) Verdict {
 	v := Verdict{From: svc.Digest, To: n.Digest}
-	if svc.Auto == AutoNone {
+	if !svc.Auto.TakesDigestMoves() {
 		v.Outcome, v.Why = Queue, "digest moved; duva.auto is none"
 		return v
 	}
@@ -206,8 +206,11 @@ func tagChange(n Notice, svc Service, newTag string) Verdict {
 		return v
 	}
 
-	if svc.Auto == AutoNone {
-		v.Outcome, v.Why = Queue, string(kind)+"; duva.auto is none"
+	// AutoDigest lands here alongside AutoNone: it consents to digest moves on
+	// a followed tag, which is not this. A version step is a step it never
+	// agreed to take, so it queues like any unpoliced change.
+	if svc.Auto.rank() == 0 {
+		v.Outcome, v.Why = Queue, string(kind)+"; duva.auto is "+string(svc.Auto)
 		return v
 	}
 	if rank(kind) <= svc.Auto.rank() {

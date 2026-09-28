@@ -19,7 +19,17 @@ const (
 	// AutoNone: never act; every change waits for a human. The default, and
 	// what every service on both hosts is set to today.
 	AutoNone Auto = "none"
-	// AutoPatch: take patches.
+	// AutoDigest: take digest moves on the tag already followed, and nothing
+	// else. Not a rung below AutoPatch but a different mode: a digest move has
+	// no magnitude to threshold on, so this answers "which stream do you
+	// follow" where the rest answer "how far along it will you move".
+	//
+	// A service on `latest` that wants what `latest` points at, without also
+	// consenting to 1.4.2 -> 1.4.3, has no other way to say so: every rung of
+	// the ladder implies digest moves, so asking for them used to mean asking
+	// for a version policy you did not want.
+	AutoDigest Auto = "digest"
+	// AutoPatch: take digest moves and patches.
 	AutoPatch Auto = "patch"
 	// AutoMinor: take patches and minors.
 	AutoMinor Auto = "minor"
@@ -39,14 +49,28 @@ func ParseAuto(value string) (Auto, error) {
 	switch Auto(value) {
 	case "":
 		return AutoNone, nil
-	case AutoNone, AutoPatch, AutoMinor, AutoMajor:
+	case AutoNone, AutoDigest, AutoPatch, AutoMinor, AutoMajor:
 		return Auto(value), nil
 	default:
-		return AutoNone, fmt.Errorf("duva.auto: unknown value %q (want patch, minor, major or none)", value)
+		return AutoNone, fmt.Errorf("duva.auto: unknown value %q (want digest, patch, minor, major or none)", value)
 	}
 }
 
-// rank orders the ladder. Higher takes more.
+// TakesDigestMoves reports whether a digest move on an already-followed tag
+// may be applied unattended.
+//
+// Every value but none does. AutoDigest is the one that does only this, which
+// is why this is a predicate rather than a rung on rank(): ordering digest
+// against patch would claim a magnitude it does not have.
+func (a Auto) TakesDigestMoves() bool {
+	return a != AutoNone
+}
+
+// rank orders the version ladder. Higher takes a larger version step.
+//
+// AutoDigest ranks 0, alongside AutoNone: it consents to no version step at
+// all. That is not a statement that it is the weakest policy -- it is off the
+// ladder entirely, and rank() is only ever asked about version changes.
 func (a Auto) rank() int {
 	switch a {
 	case AutoPatch:
