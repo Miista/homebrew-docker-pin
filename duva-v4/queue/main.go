@@ -221,7 +221,7 @@ func run(log zerolog.Logger) error {
 	defer stop()
 
 	reconcileDone := make(chan struct{})
-	go (&reconciler{queue: queue, interval: cfg.ReconcileInterval, log: log}).run(reconcileDone)
+	go (&reconciler{queue: queue, root: root, interval: cfg.ReconcileInterval, log: log}).run(reconcileDone)
 	defer close(reconcileDone)
 
 	go func() {
