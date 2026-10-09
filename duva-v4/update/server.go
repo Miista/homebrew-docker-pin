@@ -180,6 +180,8 @@ func (s *Server) run(req update.Request, st *stream) {
 	// finished without saying so is indistinguishable from one that died.
 	st.write(update.Terminal(status, reason))
 	switch {
+	case status == update.Deferred:
+		s.logf("%s: deferred: %s", req.Service, reason)
 	case status != update.Completed:
 		s.logf("%s: failed: %s", req.Service, reason)
 	case reason != "":

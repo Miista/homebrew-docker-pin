@@ -53,7 +53,20 @@ type applier struct {
 	// something nobody reads. A failed one may have left the container down
 	// and the repository dirty, which is nobody's business but a person's.
 	onFailure func(queue.Entry, string)
+
+	// retryAfter and retryMax bound the backoff between offers of a deferred
+	// apply. Zero means the defaults below.
+	retryAfter, retryMax time.Duration
 }
+
+// A deferral waits defaultRetryAfter, then twice that, and so on up to
+// defaultRetryMax: a dirty repository that clears in a minute is retried
+// soon, and one left dirty for days costs a check every half hour rather
+// than every minute.
+const (
+	defaultRetryAfter = time.Minute
+	defaultRetryMax   = 30 * time.Minute
+)
 
 // live is one apply in flight, and everyone currently watching it.
 type live struct {
@@ -79,6 +92,19 @@ func newApplier(c *update.Client, timeout time.Duration, log zerolog.Logger, q *
 // caller holding an HTTP request open for it would time out long before the
 // updater did.
 func (a *applier) Start(e queue.Entry) error {
+	return a.start(e, false, 0)
+}
+
+// StartUnattended is Start for an apply the queue decided on itself. If the
+// updater defers it, it is offered again later; a person's click is not,
+// because they are watching and will click again when they are ready.
+func (a *applier) StartUnattended(e queue.Entry) error {
+	return a.start(e, true, 0)
+}
+
+// start begins an apply. attempt counts the deferrals so far, and sets how
+// long the next one waits; it means nothing for a manual apply.
+func (a *applier) start(e queue.Entry, unattended bool, attempt int) error {
 	a.watchers.Lock()
 	if _, already := a.running[e.Service]; already {
 		a.watchers.Unlock()
@@ -88,11 +114,11 @@ func (a *applier) Start(e queue.Entry) error {
 	a.running[e.Service] = l
 	a.watchers.Unlock()
 
-	go a.apply(e, l)
+	go a.apply(e, l, unattended, attempt)
 	return nil
 }
 
-func (a *applier) apply(e queue.Entry, l *live) {
+func (a *applier) apply(e queue.Entry, l *live, unattended bool, attempt int) {
 	defer func() {
 		l.finish()
 		a.watchers.Lock()
@@ -136,10 +162,56 @@ func (a *applier) apply(e queue.Entry, l *live) {
 		if a.queue != nil {
 			a.queue.Remove(e.Service)
 		}
+	case status == update.Deferred:
+		// Not a failure: the updater touched nothing and said so. No
+		// notification -- a dirty repository clears when someone commits --
+		// and the entry stays queued. Unattended work is offered again after
+		// a pause; a manual click is not.
+		a.log.Warn().Msgf("%s: deferred — %s", e.Service, reason)
+		if unattended {
+			a.retryLater(e, attempt)
+		}
 	default:
 		a.log.Error().Msgf("%s: failed — %s", e.Service, reason)
 		a.failed(e, reason)
 	}
+}
+
+// retryDelay is how long the attempt-th deferral waits: the base, doubled for
+// each earlier one, capped at the ceiling.
+func (a *applier) retryDelay(attempt int) time.Duration {
+	base, ceiling := a.retryAfter, a.retryMax
+	if base == 0 {
+		base = defaultRetryAfter
+	}
+	if ceiling == 0 {
+		ceiling = defaultRetryMax
+	}
+	d := base
+	for i := 0; i < attempt && d < ceiling; i++ {
+		d *= 2
+	}
+	return min(d, ceiling)
+}
+
+// retryLater offers a deferred entry to the updater again after a backoff, if
+// it is still waiting then. An entry approved or removed in the meantime is
+// left alone.
+func (a *applier) retryLater(e queue.Entry, attempt int) {
+	d := a.retryDelay(attempt)
+	a.log.Info().Msgf("%s: will try again in %s", e.Service, d)
+	time.AfterFunc(d, func() {
+		if a.queue == nil {
+			return
+		}
+		cur, ok := a.queue.Get(e.Service)
+		if !ok {
+			return
+		}
+		if err := a.start(cur, true, attempt+1); err != nil {
+			a.log.Warn().Msgf("%s: retry not started: %v", e.Service, err)
+		}
+	})
 }
 
 // failed tells whoever is listening that an apply did not finish.

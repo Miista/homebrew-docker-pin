@@ -284,8 +284,8 @@ func TestADirtyRepositoryRefusesBeforeAnythingHappens(t *testing.T) {
 	step, _ := steps()
 
 	status, reason := transaction(req, step, w.docker(), w.git(), false, "")
-	if status != update.Failed {
-		t.Errorf("status = %q, want failed", status)
+	if status != update.Deferred {
+		t.Errorf("status = %q, want deferred", status)
 	}
 	if !strings.Contains(reason, "uncommitted") {
 		t.Errorf("reason = %q", reason)
@@ -303,8 +303,8 @@ func TestABusyRepositoryIsToldToTryAgain(t *testing.T) {
 	step, _ := steps()
 
 	status, reason := transaction(req, step, w.docker(), w.git(), false, "")
-	if status != update.Failed {
-		t.Errorf("status = %q", status)
+	if status != update.Deferred {
+		t.Errorf("status = %q, want deferred", status)
 	}
 	if !strings.Contains(reason, "busy") || !strings.Contains(reason, "again") {
 		t.Errorf("reason = %q, want it to say it will be retried", reason)

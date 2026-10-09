@@ -15,6 +15,10 @@ import (
 type Applier interface {
 	// Start begins applying an entry. An error means it never began.
 	Start(e Entry) error
+	// StartUnattended is Start for work the queue decided on itself rather
+	// than a person asked for. The difference is what a deferral does: an
+	// unattended apply is offered again later, a manual one is not.
+	StartUnattended(e Entry) error
 	// Stream writes an in-flight apply's progress to w, for as long as it
 	// runs. It writes nothing when the service has nothing in progress,
 	// which is the whole of its error handling.

@@ -126,7 +126,7 @@ func (h *Handler) Handle(n Notice) Result {
 			h.logf("%s: %s -> %s would apply (%s), but nothing is configured to apply it", svc.Name, v.From, v.To, v.Why)
 			return Result{Outcome: Queue, Service: svc.Name, Message: "queued: nothing is configured to apply it", Status: http.StatusOK}
 		}
-		if err := h.Applier.Start(e); err != nil {
+		if err := h.Applier.StartUnattended(e); err != nil {
 			// Failing to start is not failing to queue. It stays queued, so
 			// the next notice tries again and a person can see it waiting.
 			if added && h.Announce != nil {

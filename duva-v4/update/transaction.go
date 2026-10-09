@@ -189,13 +189,13 @@ func transaction(req update.Request, step func(string, ...any), d Docker, g Git,
 		if errors.Is(err, errRepoBusy) {
 			// Not a failure. The queue will be told again and the next
 			// attempt finds the repository quiet.
-			return update.Failed, "the repository was busy; will try again"
+			return update.Deferred, "the repository was busy; will try again"
 		}
 		if err != nil {
 			return update.Failed, fmt.Sprintf("checking the repository: %v", err)
 		}
 		if !clean {
-			return update.Failed, "the repository has uncommitted changes; refusing to commit on top of them"
+			return update.Deferred, "the repository has uncommitted changes; will try again once they are committed"
 		}
 	}
 

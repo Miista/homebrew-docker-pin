@@ -106,9 +106,13 @@ queue does not parse it. Write whatever a person would want to read.
 ```
 status: completed
 status: failed: the container refused the new image
+status: deferred: the repository has uncommitted changes
 ```
 
-Only `completed` and `failed` are terminal. **A status nobody defined is not
+Only `completed`, `failed` and `deferred` are terminal. `deferred` means nothing
+was done because a precondition does not hold *yet* (a dirty working tree);
+the queue keeps the entry, raises no failure notification, and offers it again
+later. **A status nobody defined is not
 terminal** — a typo would otherwise read as success, where leaving it as
 progress means the queue's timeout catches it.
 

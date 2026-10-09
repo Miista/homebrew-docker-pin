@@ -96,6 +96,11 @@ const (
 	Completed Status = "completed"
 	// Failed: it did not, and the reason follows.
 	Failed Status = "failed"
+	// Deferred: it did nothing, because the precondition for doing it does
+	// not hold *yet* -- a repository with uncommitted changes, say. Not a
+	// failure: nothing was touched, nobody need be told, and the caller
+	// should offer the work again later.
+	Deferred Status = "deferred"
 )
 
 // TerminalPrefix marks the last line of a stream.
@@ -131,7 +136,7 @@ func ParseTerminal(line string) (s Status, reason string, ok bool) {
 	}
 	word, reason, _ := strings.Cut(rest, ": ")
 	switch Status(word) {
-	case Completed, Failed:
+	case Completed, Failed, Deferred:
 		return Status(word), reason, true
 	default:
 		// A status nobody defined is not a terminal line. Treating an

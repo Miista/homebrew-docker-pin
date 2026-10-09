@@ -27,6 +27,8 @@ func (f *fakeApplier) Start(e Entry) error {
 	return nil
 }
 
+func (f *fakeApplier) StartUnattended(e Entry) error { return f.Start(e) }
+
 func (f *fakeApplier) Stream(service string, w http.ResponseWriter, r *http.Request) {
 	for _, line := range f.lines {
 		fmt.Fprintln(w, line)

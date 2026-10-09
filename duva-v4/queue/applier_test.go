@@ -446,3 +446,116 @@ func TestNoFailureListenerIsNotFatal(t *testing.T) {
 	waitIdle(t, a)
 	// Reaching here without a panic is the assertion.
 }
+
+// applyCount reads how many applies the stub has been asked to start.
+func (s *stubActor) applyCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.applies
+}
+
+// waitApplies waits for the stub to have started at least n applies.
+func waitApplies(t *testing.T, s *stubActor, n int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if s.applyCount() >= n {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("applies = %d, want at least %d", s.applyCount(), n)
+}
+
+// A deferral is not a failure: nobody is told, however it was started.
+func TestDeferredIsNotReportedAsAFailure(t *testing.T) {
+	s := &stubActor{lines: []string{update.Terminal(update.Deferred, "the repository has uncommitted changes")}}
+	a := newTestApplier(t, s)
+	told := 0
+	a.onFailure = func(queue.Entry, string) { told++ }
+
+	if err := a.Start(entryFor("app")); err != nil {
+		t.Fatal(err)
+	}
+	waitIdle(t, a)
+
+	if told != 0 {
+		t.Errorf("onFailure called %d times for a deferral", told)
+	}
+}
+
+// What the queue decided on its own is offered again once the repository may
+// have been cleaned up.
+func TestAnUnattendedDeferralIsRetried(t *testing.T) {
+	s := &stubActor{lines: []string{update.Terminal(update.Deferred, "the repository has uncommitted changes")}}
+	q := queue.NewPending()
+	a := newTestApplierOver(t, s, q)
+	a.retryAfter = 20 * time.Millisecond
+	e := entryFor("app")
+	q.Put(e, time.Now())
+
+	if err := a.StartUnattended(e); err != nil {
+		t.Fatal(err)
+	}
+	waitApplies(t, s, 3)
+
+	// Removing the entry ends the chain.
+	q.Remove("app")
+	waitIdle(t, a)
+	time.Sleep(100 * time.Millisecond)
+	waitIdle(t, a)
+	settled := s.applyCount()
+	time.Sleep(100 * time.Millisecond)
+	if got := s.applyCount(); got != settled {
+		t.Errorf("applies went %d -> %d after the entry was removed", settled, got)
+	}
+}
+
+// A person who clicked is watching, and clicks again when ready. Retrying
+// behind their back would apply something they may since have decided against.
+func TestAManualDeferralIsNotRetried(t *testing.T) {
+	s := &stubActor{lines: []string{update.Terminal(update.Deferred, "the repository has uncommitted changes")}}
+	q := queue.NewPending()
+	a := newTestApplierOver(t, s, q)
+	a.retryAfter = 20 * time.Millisecond
+	e := entryFor("app")
+	q.Put(e, time.Now())
+
+	if err := a.Start(e); err != nil {
+		t.Fatal(err)
+	}
+	waitIdle(t, a)
+	time.Sleep(200 * time.Millisecond)
+
+	if got := s.applyCount(); got != 1 {
+		t.Errorf("applies = %d, want 1: a manual apply must not retry", got)
+	}
+	if _, ok := q.Get("app"); !ok {
+		t.Error("the entry was dropped; a deferral must leave it queued")
+	}
+}
+
+// The wait doubles with each deferral and stops growing at the ceiling.
+func TestRetryDelayBacksOffToACeiling(t *testing.T) {
+	a := &applier{retryAfter: time.Minute, retryMax: 10 * time.Minute}
+	want := []time.Duration{1, 2, 4, 8, 10, 10, 10}
+	for attempt, w := range want {
+		if got := a.retryDelay(attempt); got != w*time.Minute {
+			t.Errorf("attempt %d: delay = %v, want %v", attempt, got, w*time.Minute)
+		}
+	}
+	// A long-dirty repository must not overflow the doubling.
+	if got := a.retryDelay(10_000); got != 10*time.Minute {
+		t.Errorf("attempt 10000: delay = %v, want the ceiling", got)
+	}
+}
+
+func TestRetryDelayDefaults(t *testing.T) {
+	a := &applier{}
+	if got := a.retryDelay(0); got != defaultRetryAfter {
+		t.Errorf("first delay = %v, want %v", got, defaultRetryAfter)
+	}
+	if got := a.retryDelay(50); got != defaultRetryMax {
+		t.Errorf("late delay = %v, want %v", got, defaultRetryMax)
+	}
+}
