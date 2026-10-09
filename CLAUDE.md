@@ -161,6 +161,16 @@ path.
   the pin is wrong in some of those. The file keeps what was decided, the
   repository is dirty, `IsClean` blocks the next apply, and the reason says so.
 
+  **A dirty repository defers; it does not fail.** The updater answers
+  `status: deferred` (a third terminal status in the contract) for a dirty
+  tree or a locked index: nothing was touched, so the queue sends no failure
+  notification and keeps the entry. Only applies the queue started itself
+  (`Applier.StartUnattended`) are retried, with exponential backoff -- 1m
+  doubling to a 30m ceiling, held in memory, reset by a restart or a fresh
+  notice. A manual click (`Start`) is tried once and never retried: the person
+  is watching and clicks again. Deploy the queue before the updater, since an
+  older queue treats `deferred` as progress and waits out its timeout.
+
   **It must run as the user that owns the repository, and that user must be
   in the `docker` group** (`user: "1000:1000"` plus `group_add`, GID from
   `stat -c '%g' /var/run/docker.sock` — host-specific). Root leaves

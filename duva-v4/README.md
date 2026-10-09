@@ -125,6 +125,27 @@ nothing. That is a legitimate way to run it, and the right way to run it
 first: clicking Update then answers "no actor is configured, so nothing can be
 applied from here" and leaves the entry queued.
 
+### A dirty repository
+
+Applying commits, so the updater will not start on a repository with
+uncommitted changes, or while git holds its index lock. That is not a failure:
+nothing was touched, so it answers `deferred`, the queue keeps the entry, and
+no failure notification is sent.
+
+What happens next depends on who asked:
+
+- **An update the queue applied on its own** (`duva.auto`) is offered again
+  with exponential backoff: after 1 minute, then 2, 4, 8, 16, and every 30
+  minutes from there until the repository is clean or the entry leaves the
+  queue. Commit or stash and it goes through on the next attempt.
+- **A click in the UI** is tried once and not retried. The reason is shown, the
+  entry stays queued, and clicking again once the repository is clean applies
+  it. The page also greys Update while the repository is dirty.
+
+The backoff is held in memory, so restarting the queue starts it again at one
+minute. The intervals are not configurable. A queue older than this change does
+not recognise `deferred`, so deploy the queue before the updater.
+
 ## Running the others
 
 The watcher, queue and UI hold nothing and need no special user. All three
