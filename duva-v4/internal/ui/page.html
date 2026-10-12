@@ -364,7 +364,24 @@ createApp({
       host: "",         // "" is every host
       q: "",            // what was typed in the search box
 
+      // Pick up applies this page did not start.
+      //
+      // `steps` is this page's memory of what it began, and a reload empties
+      // it while the queue carries on. The queue says what is in flight, so
+      // a row it reports as applying is treated as running and re-attached:
+      // the stream replays what was said so far. Rows with a panel already
+      // are skipped, which includes a failed one kept for reading.
+      resume() {
+        for (const r of this.rows) {
+          if (r.applying && !this.steps[r.key] && !this.finished[r.key]) {
+            this.steps = { ...this.steps, [r.key]: [] }
+            this.watch(r.key)
+          }
+        }
+      },
+
       start() {
+        this.resume()
         // A hidden tab does not poll: this page is left open for days, and a
         // decider answering for nobody every 15s is the sort of thing noticed
         // in a log months later.
@@ -381,6 +398,7 @@ createApp({
           this.unreachable = s.unreachable || []
           this.blocked = s.blocked || []
           this.canApply = s.can_apply
+          this.resume()
         } catch (e) {
           // A failed poll is not worth reporting: the next one is 15s away,
           // and a UI that cannot reach itself has nothing useful to say from

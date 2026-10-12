@@ -82,6 +82,8 @@ type snapshot struct {
 	// the words, which are the updater's and are never parsed.
 	blocker string
 	whyNot  string
+	// applying is the services this queue is applying right now.
+	applying map[string]bool
 	// err is the transport failure, when the queue could not be asked.
 	//
 	// Kept rather than dropped because an unreachable queue must render as
@@ -114,8 +116,13 @@ func (c *Collector) Collect() {
 		go func(i int, d Upstream) {
 			defer wg.Done()
 			snap, err := c.fetch(d)
+			applying := map[string]bool{}
+			for _, svc := range snap.Applying {
+				applying[svc] = true
+			}
 			results[i] = snapshot{queue: snap.Pending, canApply: snap.CanApply,
-				blocker: string(snap.Blocker), whyNot: snap.WhyNot, err: err}
+				blocker: string(snap.Blocker), whyNot: snap.WhyNot,
+				applying: applying, err: err}
 		}(i, d)
 	}
 	wg.Wait()
@@ -209,6 +216,9 @@ type Hosted struct {
 	// CanApply is whether this row's queue has an update. Per row, because
 	// one host can have an updater while another does not.
 	CanApply bool
+	// Applying is whether the queue has this service's apply in flight, so a
+	// page that did not start it can still show it.
+	Applying bool
 	Host     string
 }
 
@@ -229,6 +239,7 @@ func (c *Collector) Pending() []Hosted {
 			out = append(out, Hosted{
 				Entry: e, Host: d.Host,
 				CanApply: s.canApply,
+				Applying: s.applying[e.Service] && s.err == nil,
 				// Shown, but known to be from before the queue stopped
 				// answering. Rendering it as current would invite approving
 				// something that may already be gone.

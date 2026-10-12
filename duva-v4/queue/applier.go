@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"sync"
 	"time"
 
@@ -348,6 +349,18 @@ func trimCR(b []byte) []byte {
 }
 
 var _ io.Writer = (*live)(nil)
+
+// Applying lists the services with an apply in flight, sorted.
+func (a *applier) Applying() []string {
+	a.watchers.Lock()
+	defer a.watchers.Unlock()
+	out := make([]string, 0, len(a.running))
+	for s := range a.running {
+		out = append(out, s)
+	}
+	sort.Strings(out)
+	return out
+}
 
 // Ready asks the updater whether work offered now would be attempted.
 //

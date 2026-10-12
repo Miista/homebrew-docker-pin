@@ -17,6 +17,8 @@ type fakeApplier struct {
 	// which is what an Applier that cannot answer is treated as.
 	ready  *bool
 	reason string
+	// applying is what Applying reports as in flight.
+	applying []string
 }
 
 func (f *fakeApplier) Start(e Entry) error {
@@ -317,4 +319,23 @@ func (f *fakeApplier) Ready() (bool, string) {
 		return true, ""
 	}
 	return *f.ready, f.reason
+}
+
+// Applying makes fakeApplier an ApplyingReporter.
+func (f *fakeApplier) Applying() []string { return f.applying }
+
+// A page reloaded mid-apply must be able to learn that the apply is running,
+// or it offers the same update again and the second click is refused.
+func TestSnapshotReportsWhatIsBeingApplied(t *testing.T) {
+	q := NewPending()
+	q.Put(entry("app", "1.0.0", "1.1.0"), now)
+	srv := serverWith(t, q, &fakeApplier{applying: []string{"app"}}, "")
+
+	resp := do(t, http.MethodGet, srv.URL+"/v1/snapshot", "", "")
+	var snap Snapshot
+	json.NewDecoder(resp.Body).Decode(&snap)
+
+	if len(snap.Applying) != 1 || snap.Applying[0] != "app" {
+		t.Errorf("applying = %v, want [app]", snap.Applying)
+	}
 }

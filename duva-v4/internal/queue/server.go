@@ -126,6 +126,13 @@ type Snapshot struct {
 	// a queue that wrote this sentence itself would be a queue that had
 	// learned what applying involves.
 	WhyNot string `json:"why_not,omitempty"`
+	// Applying is the services with an apply in flight right now.
+	//
+	// Reported so a page that was reloaded mid-apply can say so. Whether
+	// something is running is a fact about the queue, not about the browser
+	// that happened to start it; without this a fresh page offers the same
+	// update again, and the second click is refused.
+	Applying []string `json:"applying,omitempty"`
 }
 
 // Blocker is which kind of thing stops an approval landing.
@@ -153,7 +160,23 @@ func (s *Server) snapshot(w http.ResponseWriter, r *http.Request) {
 		CanApply: canApply,
 		Blocker:  blocker,
 		WhyNot:   whyNot,
+		Applying: s.applying(),
 	})
+}
+
+// ApplyingReporter is an Applier that can say what it is working on.
+//
+// Separate from Applier for the same reason as ReadinessReporter: one that
+// cannot answer must stay usable.
+type ApplyingReporter interface {
+	Applying() []string
+}
+
+func (s *Server) applying() []string {
+	if ar, ok := s.Applier.(ApplyingReporter); ok {
+		return ar.Applying()
+	}
+	return nil
 }
 
 // apply approves a queued entry.

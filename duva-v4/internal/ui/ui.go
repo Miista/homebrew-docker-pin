@@ -129,7 +129,11 @@ type row struct {
 	// can have an updater while another does not.
 	CanApply bool `json:"can_apply"`
 	// Stale marks a row whose queue has stopped answering.
-	Stale     bool   `json:"stale"`
+	Stale bool `json:"stale"`
+	// Applying is whether the queue is applying this row right now, however
+	// the apply began. The page resumes watching it rather than offering it
+	// again.
+	Applying  bool   `json:"applying"`
 	Kind      string `json:"kind"`
 	Why       string `json:"why"`
 	FirstSeen string `json:"first_seen"`
@@ -344,6 +348,7 @@ func toRow(e Hosted) row {
 		Tag:        e.Tag,
 		CanApply:   e.CanApply && !e.Stale,
 		Stale:      e.Stale,
+		Applying:   e.Applying,
 		Kind:       kindLabel(e.Entry),
 		Why:        e.Why,
 		FirstSeen:  e.FirstSeen,
