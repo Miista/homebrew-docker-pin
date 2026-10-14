@@ -125,12 +125,17 @@ nothing. That is a legitimate way to run it, and the right way to run it
 first: clicking Update then answers "no actor is configured, so nothing can be
 applied from here" and leaves the entry queued.
 
-### A dirty repository
+### A dirty repository, or a rate-limited registry
 
 Applying commits, so the updater will not start on a repository with
 uncommitted changes, or while git holds its index lock. That is not a failure:
 nothing was touched, so it answers `deferred`, the queue keeps the entry, and
 no failure notification is sent.
+
+A pull the registry refused for rate limiting is answered the same way. The
+daemon reports it as a 500, like every other registry error, so it is
+recognised by the registry's text (`toomanyrequests`, `retry-after`); any
+other pull failure, `denied` included, is still `failed`.
 
 What happens next depends on who asked:
 

@@ -234,6 +234,9 @@ func transaction(req update.Request, step func(string, ...any), d Docker, g Git,
 	// written.
 	step("pulling new image")
 	if err := d.Pull(ref); err != nil {
+		if rateLimited(err) {
+			return update.Deferred, fmt.Sprintf("the registry is rate limiting pulls; will try again: %v", err)
+		}
 		return update.Failed, fmt.Sprintf("pulling %s: %v", ref, err)
 	}
 
@@ -385,6 +388,25 @@ func candidateRef(req update.Request) string {
 		return req.Image + "@" + req.Digest
 	}
 	return req.Image + ":" + req.Tag
+}
+
+// rateLimited reports whether a pull failed because the registry was rate
+// limiting, which says nothing about the image and passes on its own.
+//
+// It matches text because there is nothing else to match. The daemon answers
+// a registry's 429 with a 500, the same status it gives "denied" and a host
+// that does not resolve, and both of those are worth telling someone about
+// rather than retrying forever. What it keeps is the registry's message:
+// ghcr's "retry-after: ..., allowed: 44000/minute", Docker Hub's
+// "toomanyrequests: ...".
+func rateLimited(err error) bool {
+	msg := strings.ToLower(err.Error())
+	for _, s := range []string{"toomanyrequests", "too many requests", "retry-after"} {
+		if strings.Contains(msg, s) {
+			return true
+		}
+	}
+	return false
 }
 
 // displayOf shortens a digest for a commit subject. Seventy-one characters of

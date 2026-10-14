@@ -219,6 +219,44 @@ func TestAFailedPullChangesNothing(t *testing.T) {
 	}
 }
 
+// A rate-limited pull has written nothing and will pass on its own, so it is
+// deferred like a busy repository rather than reported as a failure. The
+// messages are what the daemon actually returned, as a 500, on optiplex.
+func TestARateLimitedPullIsDeferred(t *testing.T) {
+	for _, msg := range []string{
+		`500 Internal Server Error: {"message":"error from registry: retry-after: 76.651µs, allowed: 44000/minute"}`,
+		`500 Internal Server Error: {"message":"toomanyrequests: You have reached your unauthenticated pull rate limit."}`,
+	} {
+		w := newWorld(t, versionPin)
+		w.pullErr = errors.New(msg)
+		before := w.image(t)
+		step, _ := steps()
+
+		status, reason := transaction(versionRequest(), step, w.docker(), w.git(), false, "")
+		if status != update.Deferred {
+			t.Errorf("%s: status = %q, want deferred", msg, status)
+		}
+		if !strings.Contains(reason, "again") {
+			t.Errorf("reason = %q, want it to say it will be retried", reason)
+		}
+		if w.image(t) != before || len(w.recreated) != 0 {
+			t.Error("it changed something after a rate-limited pull")
+		}
+	}
+}
+
+// Every other registry error is a 500 too, and does not pass by waiting.
+func TestADeniedPullStillFails(t *testing.T) {
+	w := newWorld(t, versionPin)
+	w.pullErr = errors.New(`500 Internal Server Error: {"message":"error from registry: denied\ndenied"}`)
+	step, _ := steps()
+
+	status, _ := transaction(versionRequest(), step, w.docker(), w.git(), false, "")
+	if status != update.Failed {
+		t.Errorf("status = %q, want failed", status)
+	}
+}
+
 // A failed recreate is not undone.
 //
 // The error says only that recreating failed, and recreating stops and removes
