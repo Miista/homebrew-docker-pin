@@ -1,0 +1,8 @@
+# The stages' state and the registry's certificate live inside the project so
+# the compose file can name them relatively. They are not part of the stack,
+# and the update stage refuses to act on a repository with uncommitted
+# changes.
+/watch-data/
+/queue-data/
+/notifications/
+/certs/

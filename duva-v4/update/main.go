@@ -114,6 +114,14 @@ func main() {
 		case "version", "--version", "-v":
 			fmt.Println("update", version)
 			return
+		case "self-update":
+			// Started by an updater asked to replace itself; see selfupdate.go.
+			log := newLogger(os.Getenv("DUVA_LOG_LEVEL"))
+			if err := selfUpdate(log, os.Args[2:]); err != nil {
+				log.Error().Msgf("%v", err)
+				os.Exit(1)
+			}
+			return
 		default:
 			fmt.Fprintln(os.Stderr, "Usage: actor [version]")
 			os.Exit(1)
@@ -127,36 +135,9 @@ func main() {
 }
 
 func run(log zerolog.Logger) error {
-	// Before anything else: an updater that cannot write where the pins live
-	// would take work, do most of it, and fail at the step that matters. The
-	// same reasoning as duva's preflight -- discovering it later means
-	// discovering it after a container was already replaced.
-	//
-	// Which is also why the project is resolved here rather than at the first
-	// apply: DUVA_REPO and DUVA_COMPOSE_DIR are both required,
-	// and a process that started happily and then refused every request is a
-	// worse way to learn that than one that never started.
-	if _, err := projectFile(); err != nil {
-		return err
-	}
-	if err := preflight(repoDir); err != nil {
-		return err
-	}
-
-	push := boolEnv("DUVA_GIT_PUSH", false)
-	token := os.Getenv("DUVA_UPDATE_TOKEN")
-
-	// Loaded once, at startup, and a bad one refuses to start. A template
-	// that does not parse would otherwise be discovered by an apply -- after
-	// a container had already been replaced -- and the failure would be a
-	// commit nobody made rather than a container nobody expected.
-	tmpl, err := loadCommitTemplate()
+	push, token, tmpl, err := setup()
 	if err != nil {
-		return fmt.Errorf("the commit template: %w", err)
-	}
-	commitTemplate = tmpl
-	if _, err := commitSubject(tmpl, commitFields{Container: "probe", NewVersion: "1"}); err != nil {
-		return fmt.Errorf("the commit template: %w", err)
+		return err
 	}
 
 	srv := &http.Server{
@@ -167,6 +148,8 @@ func run(log zerolog.Logger) error {
 			Log:        log,
 			Ready:      readiness,
 			Applicable: applicable,
+			IsSelf:     isSelf,
+			HandOff:    handOff,
 			Apply: func(req update.Request, step func(string, ...any)) (update.Status, string) {
 				return transaction(req, step, realDocker, realGit, push, tmpl)
 			},
@@ -197,6 +180,43 @@ func run(log zerolog.Logger) error {
 	shutdown, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	return srv.Shutdown(shutdown)
+}
+
+// setup is what the updater and a self-update helper both check before taking
+// work, and the configuration both work under.
+func setup() (push bool, token, tmpl string, err error) {
+	// Before anything else: an updater that cannot write where the pins live
+	// would take work, do most of it, and fail at the step that matters. The
+	// same reasoning as duva's preflight -- discovering it later means
+	// discovering it after a container was already replaced.
+	//
+	// Which is also why the project is resolved here rather than at the first
+	// apply: DUVA_REPO and DUVA_COMPOSE_DIR are both required,
+	// and a process that started happily and then refused every request is a
+	// worse way to learn that than one that never started.
+	if _, err := projectFile(); err != nil {
+		return false, "", "", err
+	}
+	if err := preflight(repoDir); err != nil {
+		return false, "", "", err
+	}
+
+	push = boolEnv("DUVA_GIT_PUSH", false)
+	token = os.Getenv("DUVA_UPDATE_TOKEN")
+
+	// Loaded once, at startup, and a bad one refuses to start. A template
+	// that does not parse would otherwise be discovered by an apply -- after
+	// a container had already been replaced -- and the failure would be a
+	// commit nobody made rather than a container nobody expected.
+	tmpl, err = loadCommitTemplate()
+	if err != nil {
+		return false, "", "", fmt.Errorf("the commit template: %w", err)
+	}
+	commitTemplate = tmpl
+	if _, err := commitSubject(tmpl, commitFields{Container: "probe", NewVersion: "1"}); err != nil {
+		return false, "", "", fmt.Errorf("the commit template: %w", err)
+	}
+	return push, token, tmpl, nil
 }
 
 // writable reports whether this process can write in dir.

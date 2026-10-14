@@ -1,0 +1,79 @@
+# The receiver that stands in for ntfy, shared by every scenario that asserts
+# on what was announced.
+include:
+  - common/ntfy.yml
+
+# The updater updating itself.
+#
+# The updater runs from the suite's registry rather than from the image the
+# suite builds, so a newer one can be published and found like any other
+# release. duva.auto allows the patch, so the queue hands it straight to the
+# updater -- which is the container the update replaces. Done in place, the
+# stop is the last thing the updater does; it has to hand the work to a helper.
+#
+# The image carries no digest: the suite pins it with docker pin before any of
+# this runs, so the starting state is produced the same way a real stack's is.
+services:
+  # Stage one. Asks the registry what exists and posts findings to the queue.
+  duva-watch:
+    image: duva-watch:integration
+    command: ["serve"]
+    environment:
+      DUVA_HOST: integration
+      # serve is what ships. It checks once at startup, so restarting the
+      # container is what triggers a check; this schedule never fires.
+      DUVA_SCHEDULE: "0 3 * * *"
+      DUVA_WEBHOOK_URL: http://duva-queue:8080/v1/notify
+      DUVA_LOG_LEVEL: debug
+    volumes:
+      - .:/compose:ro
+      - ./watch-data:/data
+      # Only here because the suite's registry is self-signed.
+      - ./certs/cert.pem:/etc/ssl/certs/ca-certificates.crt:ro
+    extra_hosts:
+      - localhost:host-gateway
+    depends_on:
+      duva-queue:
+        condition: service_healthy
+
+  # Stage two. Decides, and hands what policy allows to the updater -- here,
+  # the updater's own update.
+  duva-queue:
+    image: duva-queue:integration
+    environment:
+      DUVA_HOST: integration
+      DUVA_QUEUE_TOKEN: integration-token
+      DUVA_UPDATE_URL: http://duva-update:8080
+      DUVA_UPDATE_TOKEN: integration-token
+      DUVA_NTFY_ENDPOINT: http://ntfy:8080
+      DUVA_NTFY_TOPIC: duva
+    volumes:
+      - .:/compose:ro
+      - ./queue-data:/data
+    depends_on:
+      - duva-update
+
+  # Stage three, and the service being updated.
+  duva-update:
+    image: localhost:5555/duva-update:1.0.0
+    # Required: v4 watches only services with a container_name, since that is
+    # the name it replaces a container by.
+    container_name: duva-update
+    # The user that owns the repository, and the docker group on this host.
+    # Written to .env by the harness.
+    user: "${UID}:${GID}"
+    group_add:
+      - "${DOCKER_GID}"
+    environment:
+      DUVA_UPDATE_TOKEN: integration-token
+      DUVA_REPO: ${PROJECT_DIR}
+      DUVA_COMMIT_TEMPLATE: "pin {{.Container}} to {{if eq .OldVersion .NewVersion}}{{.NewDigest}}{{else}}{{.NewVersion}}{{end}}"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${PROJECT_DIR}:${PROJECT_DIR}
+      - ./certs/cert.pem:/etc/ssl/certs/ca-certificates.crt:ro
+    extra_hosts:
+      - localhost:host-gateway
+    labels:
+      duva.include: '^1\.0\.\d+$'
+      duva.auto: patch

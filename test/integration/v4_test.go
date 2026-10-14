@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The v4 pipeline against a real daemon, a real registry and real compose
@@ -127,6 +128,75 @@ func TestV4AFailedAutoApplyIsAnnounced(t *testing.T) {
 		// and the updater's own failure message says so.
 		if got := s.Status(); got == "" {
 			t.Error("the repository is clean, so the pin was undone -- the rollback this deliberately does not do")
+		}
+	})
+}
+
+// The updater updating itself: handed to a helper, which replaces it.
+//
+// Done in place, recreating stops the old container first, and the old
+// container is the one recreating -- so it stops partway and the host is left
+// with no updater. That is what happened on both hosts on 2026-10-14, and no
+// unit test can show it: it is a property of the daemon, not of this code.
+func TestV4TheUpdaterUpdatesItself(t *testing.T) {
+	s := Up(t, "duva-v4/self-update")
+	s.Pin("duva-update")
+	// Published only once the stack is up. Start's `compose up` waits on
+	// duva-update as a dependency, and an update found during it replaces
+	// that container under compose -- which reads the old one's exit as the
+	// bring-up failing. Nothing in production is mid-`up` when duva applies.
+	s.Start()
+	s.PushUpdates()
+	s.CheckNowIn("duva-watch")
+
+	s.waitFor("the self-update to be committed", 2*time.Minute,
+		func() bool { return strings.Contains(s.Log(), "pin duva-update to 1.0.1") },
+		func() string {
+			return s.Log() + "\n--- duva-watch\n" + s.Logs("duva-watch") +
+				"\n--- duva-queue\n" + s.Logs("duva-queue") +
+				"\n--- duva-update\n" + s.Logs("duva-update")
+		})
+
+	t.Run("the updater runs the new image", func(t *testing.T) {
+		if got := s.RunningImage("duva-update"); !strings.Contains(got, "1.0.1") {
+			t.Errorf("duva-update was not replaced:\n  got %s", got)
+		}
+		if !s.runningContainer("duva-update") {
+			t.Error("duva-update is not running: the host has no updater")
+		}
+	})
+
+	t.Run("the queue was told it completed", func(t *testing.T) {
+		// The queue followed the helper's stream, so its outcome is the
+		// helper's -- not "lost the actor's stream", which is what reading
+		// from the container being replaced looks like.
+		logs := s.Logs("duva-queue")
+		if !strings.Contains(logs, "duva-update: 1.0.0 -> 1.0.1 applied") {
+			t.Errorf("the queue did not record the update as applied:\n%s", logs)
+		}
+		if strings.Contains(logs, "lost the actor's stream") {
+			t.Errorf("the queue lost the stream:\n%s", logs)
+		}
+	})
+
+	t.Run("the helper is gone", func(t *testing.T) {
+		// It removes itself on success, after the queue has read the end.
+		s.waitFor("the helper to remove itself", 30*time.Second,
+			func() bool {
+				out, _ := exec.Command("docker", "ps", "-aq",
+					"--filter", "label=duva.self-update").Output()
+				return strings.TrimSpace(string(out)) == ""
+			},
+			func() string {
+				out, _ := exec.Command("docker", "ps", "-a",
+					"--filter", "label=duva.self-update").CombinedOutput()
+				return string(out)
+			})
+	})
+
+	t.Run("and the repository is clean", func(t *testing.T) {
+		if got := s.Status(); got != "" {
+			t.Errorf("the repository is dirty after a successful self-update:\n%s", got)
 		}
 	})
 }

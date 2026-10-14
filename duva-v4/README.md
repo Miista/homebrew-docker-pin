@@ -151,6 +151,34 @@ The backoff is held in memory, so restarting the queue starts it again at one
 minute. The intervals are not configurable. A queue older than this change does
 not recognise `deferred`, so deploy the queue before the updater.
 
+### Updating the updater
+
+The updater cannot replace its own container: recreating stops the old
+container before creating the new one, and when the old one is the updater,
+the stop is the last thing it does. So an update naming the updater is handed
+to a helper — the same image, run as `update self-update`, in a container
+copied from the updater's own (same user, group, socket, repository and
+networks, but none of its compose labels or network aliases). To the helper
+the updater is an ordinary container.
+
+- The queue is answered with the helper's stream, so it watches the helper do
+  the work and reads its outcome. Nothing in the queue or the contract changes.
+- The helper does that one job. It serves no `/v1/apply`, and it refuses a job
+  naming anything but the updater that started it.
+- While the helper lives, the old updater reports not ready and defers any
+  work it is offered, since the helper is about to stop it. If the helper exits
+  without replacing it — a failed pull, say — the old updater takes work
+  again.
+- A self-update is deferred while the updater is applying anything else:
+  stopping it would interrupt that.
+- On success the helper removes its own container. On failure it is left,
+  named `duva-update-self-update-<time>` and labelled `duva.self-update`, so
+  `docker logs` can say why. Remove it with `docker rm` once read.
+
+An updater older than this change still replaces itself in place and leaves
+the host without one, so the first update *to* this version must be done by
+hand: `docker compose up -d duva-update`, then commit the pin.
+
 ## Running the others
 
 The watcher, queue and UI hold nothing and need no special user. All three

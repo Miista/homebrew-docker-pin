@@ -171,6 +171,10 @@ func (s *Scenario) Push(repo, tag string, content ...string) {
 	if len(content) > 0 {
 		marker = content[0]
 	}
+	if repo == updaterRepo {
+		s.pushUpdater(tag, marker)
+		return
+	}
 	dir := s.scratch("build")
 
 	main := fmt.Sprintf(`package main
@@ -213,6 +217,35 @@ func main() {
 	_ = exec.Command("docker", "rmi", "-f", ref).Run()
 
 	s.docker("build", "-q", "-t", ref, dir)
+	s.docker("push", "-q", ref)
+	s.pushed = append(s.pushed, ref)
+}
+
+// updaterRepo is the repository a fixture runs the updater from when the
+// updater is the service under test.
+const updaterRepo = "duva-update"
+
+// pushUpdater publishes the updater the suite built, under a tag.
+//
+// The real image, because a sleeper would be replaced and then never answer
+// the queue again. A file per tag, so two tags are two digests: identical
+// content would make the update indistinguishable from nothing happening.
+//
+// A file, not a label. A build that only changes metadata keeps the base
+// image's creation time, and the watcher dates a tag by it -- so the tag reads
+// as published when the suite built its images, before the watcher's cutoff,
+// and is never found. A layer is stamped with when it was built. Uncached for
+// the same reason: a cache hit brings back an earlier run's time.
+func (s *Scenario) pushUpdater(tag, marker string) {
+	s.t.Helper()
+	dir := s.scratch("updater")
+	s.writeFile(filepath.Join(dir, "marker"), marker)
+	s.writeFile(filepath.Join(dir, "Dockerfile"),
+		fmt.Sprintf("FROM %s\nCOPY marker /duva-integration-marker\n", updateImage))
+
+	ref := fmt.Sprintf("%s/%s:%s", registryHost, updaterRepo, tag)
+	_ = exec.Command("docker", "rmi", "-f", ref).Run()
+	s.docker("build", "-q", "--no-cache", "-t", ref, dir)
 	s.docker("push", "-q", ref)
 	s.pushed = append(s.pushed, ref)
 }

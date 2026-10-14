@@ -57,6 +57,11 @@ v4 reads exactly one `duva.*` label, `duva.auto`. There is **no soak**: v3's
     container before creating the replacement, so one error covers the old
     container running, gone, or a new one that will not start, and restoring
     the pin is wrong in some of those. `IsClean` then blocks the next apply.
+  - **Never recreates its own container.** An update naming the updater is
+    handed to a one-shot `update self-update` helper copied from its own
+    container; recreating in place stops the process mid-apply and leaves the
+    host with no updater (both hosts, 2026-10-14). Held by
+    `TestV4TheUpdaterUpdatesItself`.
   - **Must run as the user that owns the repository, in the `docker` group**
     (GID is host-specific). Root leaves root-owned files in the bind mount,
     makes git report dubious ownership, and loses the commit identity in
