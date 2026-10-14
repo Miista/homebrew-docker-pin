@@ -75,17 +75,40 @@ func buildReceiver(root string) error {
 // buildV4 builds the three pipeline images, from the shipped Dockerfiles for
 // the same reason buildImage does: a suite that builds its own artifact tests
 // one nobody ships.
+//
+// The Dockerfiles copy a prebuilt binary from linux/<arch>/<binary>, which is
+// how GoReleaser lays out its build context. So the binary is built here, into
+// a context laid out the same way: handing them the repository root, as this
+// once did, has nothing at that path.
 func buildV4(root string) error {
-	for image, dockerfile := range v4Images {
-		args := []string{"build", "-q", "--label", label + "=integration",
-			"-f", dockerfile, "-t", image}
-		if os.Getenv("GOCOVERDIR") != "" {
-			args = append(args, "--build-arg", "COVER=1")
-		}
-		args = append(args, root)
+	arch, err := exec.Command("docker", "version", "--format", "{{.Server.Arch}}").Output()
+	if err != nil {
+		return fmt.Errorf("asking the daemon its architecture: %w", err)
+	}
+	goarch := trimmed(arch)
 
-		cmd := exec.Command("docker", args...)
-		cmd.Dir = root
+	for image, dockerfile := range v4Images {
+		binary := filepath.Base(filepath.Dir(dockerfile))
+		ctx, err := os.MkdirTemp("", "duva-v4-"+binary)
+		if err != nil {
+			return err
+		}
+		defer os.RemoveAll(ctx)
+
+		args := []string{"build", "-trimpath", "-ldflags", "-s -w"}
+		if os.Getenv("GOCOVERDIR") != "" {
+			args = append(args, "-cover", "-coverpkg=./...")
+		}
+		args = append(args, "-o", filepath.Join(ctx, "linux", goarch, binary), "./"+binary)
+		build := exec.Command("go", args...)
+		build.Dir = filepath.Join(root, "duva-v4")
+		build.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux", "GOARCH="+goarch)
+		if out, err := build.CombinedOutput(); err != nil {
+			return fmt.Errorf("building %s: %w\n%s", binary, err, out)
+		}
+
+		cmd := exec.Command("docker", "build", "-q", "--label", label+"=integration",
+			"-f", filepath.Join(root, dockerfile), "-t", image, ctx)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("building %s: %w\n%s", image, err, out)
 		}
