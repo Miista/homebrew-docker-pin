@@ -151,6 +151,16 @@ The backoff is held in memory, so restarting the queue starts it again at one
 minute. The intervals are not configurable. A queue older than this change does
 not recognise `deferred`, so deploy the queue before the updater.
 
+### Updating by hand
+
+When it starts, and every ten minutes by default, the queue rechecks what is waiting
+against the compose file. An entry goes once the file has what it offered —
+and also once the file has moved somewhere it no longer leads from: a service
+moved to `latest`, or past the offered version, or a moving tag pulled to a
+different digest. Kept, those would offer a step backwards. A version change
+the file has moved only partway towards stays, rewritten to start from where
+the service is now. The log says why each entry went.
+
 ### Updating the updater
 
 The updater cannot replace its own container: recreating stops the old

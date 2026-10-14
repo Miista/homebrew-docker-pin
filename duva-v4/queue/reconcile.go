@@ -6,7 +6,6 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"github.com/Miista/homebrew-docker-pin/compose"
 	q "github.com/Miista/homebrew-docker-pin/duva-v4/internal/queue"
 )
 
@@ -18,8 +17,9 @@ import (
 // satisfied by hand is not urgent to clear, since it is already done.
 const defaultReconcileInterval = 10 * time.Minute
 
-// stillWanted answers Pending.Reconcile's question for one entry: does the
-// compose file still disagree with what this entry is waiting to apply?
+// recheck answers Pending.Reconcile's question for one entry: does it still
+// apply to the service as the compose file declares it now? See
+// q.RecheckEntry for what that means.
 //
 // root is the project's own compose file, read fresh every call so a service
 // moved to a renamed or restructured include: is still found. e.File is not
@@ -30,45 +30,19 @@ const defaultReconcileInterval = 10 * time.Minute
 // queued. A stale File already did this twice in practice (duva-v4/v7.2 and
 // v7.5's deploys both found entries from before a rename or an old path
 // layout, unreconcilable and warning on every tick).
-func stillWanted(root string, e q.Entry) (bool, error) {
-	index, err := compose.ContainerIndex(root)
+func recheck(root string, e q.Entry) (q.Recheck, error) {
+	svc, found, err := q.Lookup{Root: root}.ByService(e.Service)
 	if err != nil {
-		return false, fmt.Errorf("reading the compose project: %w", err)
-	}
-	file := e.File
-	found := false
-	for _, ref := range index {
-		if ref.Service == e.Service {
-			file, found = ref.File, true
-			break
-		}
+		return q.Recheck{}, fmt.Errorf("reading the compose project: %w", err)
 	}
 	if !found {
-		// Not satisfied -- renamed, removed, or lost its container_name. Any
-		// of those is a real question for a person, not evidence the update
-		// already happened, so this must not read as "still wanted: false"
-		// (which Reconcile would then drop). An error keeps it queued instead.
-		return false, fmt.Errorf("no service %q (with a container_name) in the compose project any more", e.Service)
+		// Renamed, removed, or lost its container_name. Any of those is a
+		// real question for a person, not evidence the update already
+		// happened, so this must not read as "no longer applies" (which
+		// Reconcile would then drop). An error keeps it queued instead.
+		return q.Recheck{}, fmt.Errorf("no service %q (with a container_name) in the compose project any more", e.Service)
 	}
-
-	raw, err := compose.RawImage(file, e.Service)
-	if err != nil {
-		return false, fmt.Errorf("reading %s's image: %w", e.Service, err)
-	}
-
-	// A digest move, or a version change whose digest the watcher already
-	// resolved: satisfied the moment the file pins that digest, whatever the
-	// tag says -- the digest is the record of what actually ran, and that is
-	// the thing a manual fix changes first.
-	if e.Digest != "" {
-		return compose.DigestOf(raw) != e.Digest, nil
-	}
-
-	// A version change with no digest yet (the updater resolves it by
-	// pulling the tag): the tag itself is the only thing to compare, and the
-	// entry is satisfied once the file already follows the tag it wanted to
-	// move to.
-	return compose.TagOf(raw) != e.To, nil
+	return q.RecheckEntry(e, svc), nil
 }
 
 // reconciler periodically drops queue entries the compose file no longer
@@ -100,12 +74,13 @@ func (r *reconciler) run(done <-chan struct{}) {
 }
 
 func (r *reconciler) tick() {
-	removed := r.queue.Reconcile(
-		func(e q.Entry) (bool, error) { return stillWanted(r.root, e) },
+	dropped := r.queue.Reconcile(
+		func(e q.Entry) (q.Recheck, error) { return recheck(r.root, e) },
 		func(service string, err error) {
 			r.log.Warn().Msgf("%s: could not reconcile against the compose file: %v", service, err)
 		})
-	for _, service := range removed {
-		r.log.Info().Msgf("%s: already matches the compose file, dropped from the queue", service)
+	for _, d := range dropped {
+		r.log.Info().Msgf("%s: %s -> %s no longer applies (%s), dropped from the queue",
+			d.Entry.Service, d.Entry.From, d.Entry.To, d.Why)
 	}
 }

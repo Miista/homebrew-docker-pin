@@ -393,12 +393,15 @@ func TestReconcileDropsAnEntryTheWorldAlreadySatisfies(t *testing.T) {
 	q := NewPending()
 	q.Put(entry("app", "1.0.0", "1.1.0"), now)
 
-	removed := q.Reconcile(func(e Entry) (bool, error) {
-		return false, nil // the world says: not wanted any more
+	dropped := q.Reconcile(func(e Entry) (Recheck, error) {
+		return Recheck{Why: "already matches the compose file"}, nil
 	}, nil)
 
-	if len(removed) != 1 || removed[0] != "app" {
-		t.Errorf("removed = %v, want [app]", removed)
+	if len(dropped) != 1 || dropped[0].Entry.Service != "app" {
+		t.Errorf("dropped = %+v, want app", dropped)
+	}
+	if dropped[0].Entry.To != "1.1.0" || dropped[0].Why == "" {
+		t.Errorf("a dropped entry should say what it was and why it went: %+v", dropped[0])
 	}
 	if q.Len() != 0 {
 		t.Errorf("entry survived reconcile: %+v", q.List())
@@ -410,15 +413,37 @@ func TestReconcileKeepsAnEntryStillWanted(t *testing.T) {
 	q := NewPending()
 	q.Put(entry("app", "1.0.0", "1.1.0"), now)
 
-	removed := q.Reconcile(func(e Entry) (bool, error) {
-		return true, nil
+	dropped := q.Reconcile(func(e Entry) (Recheck, error) {
+		return Recheck{Keep: true, Entry: e}, nil
 	}, nil)
 
-	if len(removed) != 0 {
-		t.Errorf("removed = %v, want none", removed)
+	if len(dropped) != 0 {
+		t.Errorf("dropped = %+v, want none", dropped)
 	}
 	if q.Len() != 1 {
 		t.Error("a still-wanted entry was dropped")
+	}
+}
+
+// A kept entry is stored as the check described it -- From moved to where the
+// service is now -- but keeps its place and its clock.
+func TestReconcileUpdatesAKeptEntry(t *testing.T) {
+	q := NewPending()
+	q.Put(entry("app", "1.0.0", "1.2.0"), now)
+	before, _ := q.Get("app")
+
+	q.Reconcile(func(e Entry) (Recheck, error) {
+		e.From = "1.1.0"
+		e.FirstSeen = "should not stick"
+		return Recheck{Keep: true, Entry: e}, nil
+	}, nil)
+
+	got, _ := q.Get("app")
+	if got.From != "1.1.0" {
+		t.Errorf("From = %q, want 1.1.0", got.From)
+	}
+	if got.FirstSeen != before.FirstSeen {
+		t.Errorf("FirstSeen = %q, want it unchanged (%q)", got.FirstSeen, before.FirstSeen)
 	}
 }
 
@@ -430,12 +455,12 @@ func TestReconcileKeepsAnEntryOnReadError(t *testing.T) {
 	q.Put(entry("app", "1.0.0", "1.1.0"), now)
 
 	var reported string
-	removed := q.Reconcile(func(e Entry) (bool, error) {
-		return false, errors.New("boom")
+	dropped := q.Reconcile(func(e Entry) (Recheck, error) {
+		return Recheck{}, errors.New("boom")
 	}, func(service string, err error) { reported = service })
 
-	if len(removed) != 0 {
-		t.Errorf("removed = %v, want none on error", removed)
+	if len(dropped) != 0 {
+		t.Errorf("dropped = %+v, want none on error", dropped)
 	}
 	if q.Len() != 1 {
 		t.Error("an entry was dropped on a read error rather than kept")
@@ -451,12 +476,12 @@ func TestReconcileIsPerEntry(t *testing.T) {
 	q.Put(entry("app", "1.0.0", "1.1.0"), now)
 	q.Put(entry("other", "2.0.0", "2.1.0"), now)
 
-	removed := q.Reconcile(func(e Entry) (bool, error) {
-		return e.Service != "app", nil // only "app" is satisfied
+	dropped := q.Reconcile(func(e Entry) (Recheck, error) {
+		return Recheck{Keep: e.Service != "app", Entry: e}, nil // only "app" is satisfied
 	}, nil)
 
-	if len(removed) != 1 || removed[0] != "app" {
-		t.Errorf("removed = %v, want [app]", removed)
+	if len(dropped) != 1 || dropped[0].Entry.Service != "app" {
+		t.Errorf("dropped = %+v, want app", dropped)
 	}
 	if _, ok := q.Get("other"); !ok {
 		t.Error("an unrelated entry was dropped")

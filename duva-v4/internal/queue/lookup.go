@@ -33,7 +33,29 @@ func (l Lookup) Service(container string) (Service, bool, error) {
 	if !ok {
 		return Service{}, false, nil
 	}
+	return declared(ref)
+}
 
+// ByService is Service for a compose service name, which is what a queued
+// entry records.
+//
+// Through the project as it is now rather than the file an entry was queued
+// from: a service moved into a renamed include: is still found.
+func (l Lookup) ByService(name string) (Service, bool, error) {
+	index, err := compose.ContainerIndex(l.Root)
+	if err != nil {
+		return Service{}, false, err
+	}
+	for _, ref := range index {
+		if ref.Service == name {
+			return declared(ref)
+		}
+	}
+	return Service{}, false, nil
+}
+
+// declared reads one service's image and policy.
+func declared(ref compose.ServiceRef) (Service, bool, error) {
 	raw, err := compose.RawImage(ref.File, ref.Service)
 	if err != nil {
 		return Service{}, false, fmt.Errorf("reading %s's image: %w", ref.Service, err)

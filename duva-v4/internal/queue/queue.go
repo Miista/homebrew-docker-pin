@@ -174,40 +174,51 @@ func (q *Pending) Remove(service string) bool {
 // queue has no way to learn about those on its own, and an entry already
 // satisfied by reality sits offering an update that already happened.
 //
-// still is asked once per entry, with the queue's lock held for the whole
+// check is asked once per entry, with the queue's lock held for the whole
 // call: it is expected to read a compose file, not to block on anything
 // slower. Called on a schedule (see the queue binary's reconciler), not on
 // every read, because "is this still true" costs a file read per entry and a
 // person approving something stale is rare enough not to need it checked
-// synchronously.
+// synchronously. An entry it keeps is stored as check returned it, which is
+// how a From the file has moved past is brought up to date.
 //
-// still's error is logged by the caller and treated as "still wanted": a
+// check's error is logged by the caller and treated as "still wanted": a
 // compose file that briefly fails to read is not evidence an entry is
 // satisfied, and removing one on a spurious read error would be worse than
 // leaving a stale one an extra cycle.
-func (q *Pending) Reconcile(still func(e Entry) (bool, error), onError func(service string, err error)) (removed []string) {
+func (q *Pending) Reconcile(check func(e Entry) (Recheck, error), onError func(service string, err error)) (dropped []Recheck) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
+	changed := false
 	for service, e := range q.entries {
-		ok, err := still(e)
+		r, err := check(e)
 		if err != nil {
 			if onError != nil {
 				onError(service, err)
 			}
 			continue
 		}
-		if ok {
+		if r.Keep {
+			// What is waiting has not changed, only how it is described:
+			// it keeps its place in the order things arrived, and its clock.
+			r.Entry.Service, r.Entry.FirstSeen, r.Entry.ReleaseAt = service, e.FirstSeen, e.ReleaseAt
+			if r.Entry != e {
+				q.entries[service] = r.Entry
+				changed = true
+			}
 			continue
 		}
 		delete(q.entries, service)
-		removed = append(removed, service)
+		r.Entry = e
+		dropped = append(dropped, r)
+		changed = true
 	}
-	if len(removed) > 0 {
-		sort.Strings(removed)
+	if changed {
 		q.save()
 	}
-	return removed
+	sort.Slice(dropped, func(i, j int) bool { return dropped[i].Entry.Service < dropped[j].Entry.Service })
+	return dropped
 }
 
 // List returns everything waiting, ordered by service so a row keeps its
