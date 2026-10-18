@@ -77,6 +77,11 @@ v4 reads exactly one `duva.*` label, `duva.auto`. There is **no soak**: v3's
   and never in the list, so the list is not a secret. It refuses to start with
   no queues, because "nothing waiting for approval" is the most misleading
   sentence it can print. An unreachable queue suppresses that reassurance.
+  Its Update button is the authority to replace a container, so the whole
+  handler sits behind the `authy` sign-in gate (`DUVA_UI_OIDC_*`, or a local
+  account; `DUVA_UI_AUTH_DISABLED` turns it off); only `/healthz` is public.
+  `ui/gate_test.go` pins that nothing is approved without a session. The gate
+  needs a writable `/app/data` and is why `duva-v4/go.mod` is on Go 1.26.
 
 Each binary has its own Dockerfile because each needs different things; the
 build context is the repo root since modules replace siblings by relative path.

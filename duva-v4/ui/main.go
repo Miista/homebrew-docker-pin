@@ -11,6 +11,13 @@
 //	DUVA_QUEUE_TOKEN_<HOST>  what that host's queue reads as DUVA_QUEUE_TOKEN
 //	DUVA_READ_ONLY           serve the page without the Update button
 //	DUVA_LOG_LEVEL           how much to say
+//	DUVA_UI_OIDC_ISSUER, _CLIENT_ID, _CLIENT_SECRET, _BASE_URL
+//	                         sign in through an OIDC provider (all four
+//	                         together); with none, a local account
+//	DUVA_UI_AUTH_DISABLED    no sign-in at all, for a UI behind something else
+//
+// The sign-in gate keeps its state in /app/data/auth, so that directory must
+// be a volume the container's user can write.
 package main
 
 import (
@@ -31,6 +38,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/Miista/homebrew-docker-pin/duva-v4/internal/ui"
+	"github.com/miista/authy"
 )
 
 var version = "dev"
@@ -104,18 +112,31 @@ func run(log zerolog.Logger) error {
 		log.Warn().Msgf("could not reach the queue on %s, so its queue is not shown: %s", host, err)
 	}
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	// Sign-in is owned by authy: OIDC when the DUVA_UI_OIDC_* variables are
+	// set, otherwise a local account the first visitor creates.
+	// DUVA_UI_AUTH_DISABLED=true turns the gate off (gate is nil and Wrap
+	// leaves the handler unchanged). Misconfigured: refuse to start rather
+	// than serve the approval queue unprotected.
+	gate, err := authy.FromEnv(ctx, "duva-ui")
+	if err != nil {
+		return fmt.Errorf("auth: %w", err)
+	}
+	if gate == nil {
+		log.Warn().Msg("login is OFF (DUVA_UI_AUTH_DISABLED): everyone who can reach this port can approve updates")
+	}
+
 	srv := &http.Server{
 		Addr: addr,
-		Handler: (&ui.Server{
+		Handler: newHandler(&ui.Server{
 			Source:   collector,
 			Approver: approver(collector, log),
 			Version:  version,
-		}).Handler(),
+		}, gate),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
 	go func() {
 		for _, d := range queues {
@@ -139,6 +160,13 @@ func run(log zerolog.Logger) error {
 	shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	return srv.Shutdown(shutdown)
+}
+
+// newHandler is the whole HTTP surface behind the sign-in gate. A nil gate
+// (DUVA_UI_AUTH_DISABLED) leaves it unprotected. Only /healthz is public, so
+// the container healthcheck keeps working without a session.
+func newHandler(s *ui.Server, gate *authy.Gate) http.Handler {
+	return gate.Wrap(s.Handler())
 }
 
 // approver returns what the Update button calls, or nil in read-only mode.

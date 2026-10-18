@@ -265,7 +265,7 @@ func (s *Server) run(req update.Request, st *stream, do work) {
 		// A panic in the transaction must still end the stream, or the
 		// queue waits out its whole timeout on work that stopped.
 		if p := recover(); p != nil {
-			st.write(update.Terminal(update.Failed, fmt.Sprintf("the actor panicked: %v", p)))
+			st.write("%s", update.Terminal(update.Failed, fmt.Sprintf("the actor panicked: %v", p)))
 			s.logf("%s: panicked: %v", req.Service, p)
 		}
 		st.finish()
@@ -292,7 +292,7 @@ func (s *Server) run(req update.Request, st *stream, do work) {
 	// The terminal line is the last thing on the stream, always: a queue
 	// reading it is how the work is known to have ended, and an updater that
 	// finished without saying so is indistinguishable from one that died.
-	st.write(update.Terminal(status, reason))
+	st.write("%s", update.Terminal(status, reason))
 	switch {
 	case status == update.Deferred:
 		s.logf("%s: deferred: %s", req.Service, reason)

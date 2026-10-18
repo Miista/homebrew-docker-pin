@@ -191,7 +191,8 @@ hand: `docker compose up -d duva-update`, then commit the pin.
 
 ## Running the others
 
-The watcher, queue and UI hold nothing and need no special user. All three
+The watcher, queue and UI hold nothing and need no special user (the UI does
+need a writable `/app/data` for its sign-in state, see **ui** below). All three
 are distroless and answer `health` as a subcommand, which is what their
 `HEALTHCHECK` runs — there is no shell or curl in the image to poll a port
 with.
@@ -239,6 +240,19 @@ already been replaced.
 Tokens are deliberately not in `DUVA_UI_QUEUES`: a token is the authority to
 replace a container on that host, so a list carrying one could not be shown in
 a log or committed to git, which is where the rest of it belongs.
+
+The UI signs people in through [authy](https://github.com/miista/authy), because
+its Update button is that same authority. With `DUVA_UI_OIDC_ISSUER`,
+`DUVA_UI_OIDC_CLIENT_ID`, `DUVA_UI_OIDC_CLIENT_SECRET` and `DUVA_UI_OIDC_BASE_URL`
+(all four together) sign-in is the provider's, with redirect URI
+`<BASE_URL>/auth/callback`; with none of them the first visitor creates a local
+account. `DUVA_UI_LOCAL_ENABLED=true` keeps that account next to OIDC as a
+break-glass login, and `DUVA_UI_AUTH_DISABLED=true` turns the gate off for a UI
+that sits behind something else. Only `/healthz` is public.
+
+The gate keeps a signing key in `/app/data/auth`, so mount a writable volume at
+`/app/data` for the UI's user (the image runs as `nonroot`, so set `user:` to
+whoever owns a bind mount, as the queue does). Losing it only signs people out.
 
 ## Build
 

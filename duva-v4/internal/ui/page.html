@@ -41,6 +41,11 @@
   /* align-self overrides .top's baseline alignment, which suits the text
      beside it but has no equivalent meaning for an image. */
   .logo { align-self: center; }
+  /* Pushed to the far end of the header. Hidden unless the sign-in gate is on:
+     it serves /auth/client.js, which sets data-authy on <html>. */
+  .signout { margin-left: auto; font-size: .78rem; color: var(--faint); text-decoration: none; }
+  .signout:hover { color: var(--fg); }
+  html:not([data-authy]) .only-with-gate { display: none !important }
   .mark { font-size: 1.1rem; font-weight: 700; letter-spacing: .12em;
           text-transform: uppercase; color: var(--fg); }
   .host { font-size: 1.1rem; font-weight: 400; color: var(--muted);
@@ -218,6 +223,9 @@
     .apply { padding: .3rem .7rem; }
   }
 </style>
+<!-- Served by the sign-in gate; a 404 when the gate is off, which keeps the
+     Sign out link hidden. -->
+<script src="/auth/client.js"></script>
 </head>
 <body>
 <!-- One description of a row, not two.
@@ -245,6 +253,7 @@
   <div class="top">
     <img class="logo" src="/logo.png" alt="" width="24" height="24">
     <span class="mark">duva</span>
+    <a class="signout only-with-gate" href="/auth/logout">Sign out</a>
   </div>
 
   <!-- Two kinds of blocked, and what a person should do about them differs.
@@ -393,7 +402,11 @@ createApp({
 
       async poll() {
         try {
-          const s = await (await fetch("/api/state")).json()
+          const r = await fetch("/api/state")
+          // The sign-in gate answers 401 once the session has ended; a
+          // reload sends the browser back through sign-in.
+          if (r.status === 401) { location.reload(); return }
+          const s = await r.json()
           this.rows = s.rows || []
           this.unreachable = s.unreachable || []
           this.blocked = s.blocked || []
@@ -480,7 +493,9 @@ createApp({
         const { [r.key]: _done, ...others } = this.finished
         this.finished = others
         this.steps = { ...this.steps, [r.key]: [] }
-        const res = await (await fetch("/api/apply/" + r.key, { method: "POST" })).json()
+        const applied = await fetch("/api/apply/" + r.key, { method: "POST" })
+        if (applied.status === 401) { location.reload(); return }
+        const res = await applied.json()
         if (res.message) {
           // Refused before anything started: drop the panel and say why.
           const { [r.key]: _, ...rest } = this.steps

@@ -185,7 +185,7 @@ func (h *helper) Run() (status update.Status, ran bool) {
 	}
 
 	status, reason := h.apply()
-	h.st.write(update.Terminal(status, reason))
+	h.st.write("%s", update.Terminal(status, reason))
 	h.st.finish()
 	h.Log.Info().Msgf("%s: %s %s", h.Request.Service, status, reason)
 
