@@ -3,6 +3,7 @@ package watchevent
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 // The payload the watcher actually sends, verbatim rather than reduced to
@@ -80,5 +81,29 @@ func TestUnknownFieldsAreIgnored(t *testing.T) {
 	}
 	if _, why, ok := Translate(e); !ok {
 		t.Errorf("an event with extra fields was rejected: %s", why)
+	}
+}
+
+// The publish time is what a soak counts from.
+func TestThePublishTimeIsCarried(t *testing.T) {
+	e, err := Parse([]byte(realEvent))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	n, _, _ := Translate(e)
+	if got := n.Published.UTC().Format(time.RFC3339); got != "2026-09-04T02:58:02Z" {
+		t.Errorf("published = %s", got)
+	}
+}
+
+// An unreadable publish time is the same as none, not a reason to drop a real
+// finding: a soak without one counts from now, which only waits longer.
+func TestAnUnreadablePublishTimeIsNone(t *testing.T) {
+	n, why, ok := Translate(Event{Container: "app", Image: "app", Tag: "1.0", Published: "last tuesday"})
+	if !ok {
+		t.Fatalf("rejected for its publish time: %s", why)
+	}
+	if !n.Published.IsZero() {
+		t.Errorf("published = %s, want none", n.Published)
 	}
 }

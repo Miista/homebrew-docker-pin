@@ -3,6 +3,7 @@
 package integration
 
 import (
+	"fmt"
 	"os/exec"
 	"strings"
 	"testing"
@@ -71,6 +72,78 @@ func TestV4AppliesWhatPolicyAllows(t *testing.T) {
 	t.Run("nothing is left waiting for a person", func(t *testing.T) {
 		if got := s.Queued(); len(got) != 0 {
 			t.Errorf("queue is %v, want empty -- policy allowed this one", got)
+		}
+	})
+}
+
+// A soak holds back what policy allows until the release is old enough, and
+// the queue's own clock -- not another notice -- lets it go.
+//
+// The watcher reports each release once, so if the reconciler did not
+// release a soaked entry nothing else ever would. That is the path the unit
+// tests fake the clock for, and this is where it is driven by a real one.
+func TestV4ASoakHoldsBackWhatPolicyAllows(t *testing.T) {
+	s := Up(t, "duva-v4/soak")
+	// Pushed fresh rather than through PushUpdates. A soak counts from when
+	// an image was built, and an identical build is served from the cache
+	// with the Created time of whichever earlier run built it first -- so a
+	// second run found a release minutes old, older than the short soak, and
+	// applied it at once. Correctly: that is what a soak counted from
+	// publication does. Content unique to this run makes the release new.
+	run := fmt.Sprint(time.Now().UnixNano())
+	for _, repo := range []string{"soak-held", "soak-released"} {
+		s.Push(repo, "1.0.1", "1.0.1 "+run)
+	}
+	s.Pin("held", "released")
+	s.Start()
+
+	t.Run("both are found and soaking, not applied", func(t *testing.T) {
+		for _, service := range []string{"held", "released"} {
+			row := s.Pending(service)
+			if row.ReleaseAt == "" {
+				t.Errorf("%s is not soaking: %+v\n%s", service, row, s.Logs("duva-queue"))
+			}
+			if !strings.Contains(row.Why, "soaking until") {
+				t.Errorf("%s's row does not say it is soaking: %q", service, row.Why)
+			}
+		}
+		if got := s.RunningImage("soak-held"); strings.Contains(got, "1.0.1") {
+			t.Errorf("held was applied before its soak was over:\n  got %s", got)
+		}
+	})
+
+	t.Run("the short soak is released by the clock", func(t *testing.T) {
+		s.waitFor("soak-released to run 1.0.1", 3*time.Minute,
+			func() bool { return strings.Contains(s.RunningImage("soak-released"), "1.0.1") },
+			func() string { return s.Logs("duva-queue") + "\n--- duva-update\n" + s.Logs("duva-update") })
+		if !strings.Contains(s.Logs("duva-queue"), "released: soak is over, applying 1.0.0 -> 1.0.1") {
+			t.Errorf("applied, but not by the soak ending:\n%s", s.Logs("duva-queue"))
+		}
+		s.waitFor("released to leave the queue", 30*time.Second,
+			func() bool { return s.Pending("released").Candidate == "" },
+			func() string { return s.Logs("duva-queue") })
+	})
+
+	t.Run("and committed like any auto-apply", func(t *testing.T) {
+		if got := s.Log(); !strings.Contains(got, "pin released to 1.0.1") {
+			t.Errorf("the change was not committed under the template:\n  got %s", got)
+		}
+	})
+
+	t.Run("the long soak is still waiting", func(t *testing.T) {
+		if got := s.RunningImage("soak-held"); strings.Contains(got, "1.0.1") {
+			t.Errorf("held was applied before its soak was over:\n  got %s", got)
+		}
+		if row := s.Pending("held"); row.ReleaseAt == "" {
+			t.Errorf("held is no longer soaking: %+v", row)
+		}
+	})
+
+	t.Run("nobody was asked about either", func(t *testing.T) {
+		// Soaking is policy working as configured, like an auto-apply: there
+		// is nothing for a person to do.
+		if got := s.Notifications(); len(got) != 0 {
+			t.Errorf("announced:\n  %v", got)
 		}
 	})
 }

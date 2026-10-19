@@ -18,6 +18,7 @@ package queue
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/Miista/homebrew-docker-pin/oci/version"
 )
@@ -38,6 +39,9 @@ type Notice struct {
 	Image string
 	// Digest is what that reference resolves to now.
 	Digest string
+	// Published is when the release appeared upstream. Zero when the watcher
+	// did not say, which a soak counts from now instead.
+	Published time.Time
 }
 
 // Service is what the compose file declares for one service: the tag it
@@ -57,6 +61,9 @@ type Service struct {
 	Digest string
 	// Auto is how large a change may be applied without asking.
 	Auto Auto
+	// Soak is how old a release must be before Auto applies it. Zero applies
+	// it as soon as it is found. A person approving it is not held to this.
+	Soak time.Duration
 }
 
 // Pinned reports whether the service has opted in to being watched.

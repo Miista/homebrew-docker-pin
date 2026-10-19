@@ -151,6 +151,35 @@ The backoff is held in memory, so restarting the queue starts it again at one
 minute. The intervals are not configurable. A queue older than this change does
 not recognise `deferred`, so deploy the queue before the updater.
 
+### Soaking a release
+
+`duva.auto` applies a release on the run that finds it, which is before anyone
+could have heard it was broken. `duva.soak` holds it back until it is old
+enough:
+
+```yaml
+labels:
+  duva.auto: patch
+  duva.soak: 3d   # Go durations too: 72h, 90m. 0 turns it off.
+```
+
+There is no host-wide default: a soak is a judgement about one image's
+upstream, like `duva.auto`, so it sits beside it. No label means no soak. An
+unreadable value is refused, not treated as no soak.
+
+The soak counts from when the release was published, as the watcher reports
+it, not from when it was found, so a daily check does not add a day. A notice
+without a publish time counts from when it arrived.
+
+A soaking release sits in the queue with "soaking until …" and is not
+announced. The queue releases it on its recheck tick (`DUVA_RECONCILE_INTERVAL`,
+ten minutes by default), so it applies up to one interval late. From then on it
+is an ordinary auto-apply: a deferral is retried, a failure is announced and
+waits for a person. Clicking Update applies it at once, soak or not.
+
+A soak only delays what policy would apply on its own. An update that waits
+for a person was never going to apply unattended, so it has no soak.
+
 ### Updating by hand
 
 When it starts, and every ten minutes by default, the queue rechecks what is waiting
@@ -211,7 +240,9 @@ run.
 schedule, or `run` for one pass.
 
 **queue** — `DUVA_QUEUE_HOST`, `DUVA_QUEUE_COMPOSE_SUBDIR`, `DUVA_QUEUE_TOKEN`,
-`DUVA_QUEUE_UPDATE_URL`, `DUVA_QUEUE_UPDATE_TOKEN`, `DUVA_QUEUE_UPDATE_TIMEOUT`.
+`DUVA_QUEUE_UPDATE_URL`, `DUVA_QUEUE_UPDATE_TOKEN`, `DUVA_QUEUE_UPDATE_TIMEOUT`,
+`DUVA_RECONCILE_INTERVAL` (also how often a soak is checked for release; see
+[Soaking a release](#soaking-a-release)).
 
 Set `DUVA_QUEUE_TOKEN` rather than letting it mint one: a minted token changes on
 every restart, and anything holding it goes stale.

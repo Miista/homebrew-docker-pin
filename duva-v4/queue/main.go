@@ -20,7 +20,8 @@
 //	DUVA_UPDATE_TIMEOUT how long an apply may run before it is called failed
 //	DUVA_RECONCILE_INTERVAL how often a queued entry is re-checked against the
 //	                    compose file, to catch one satisfied by something other
-//	                    than this queue's own apply (default 10m)
+//	                    than this queue's own apply (default 10m); also how
+//	                    often a soaked entry is checked for release
 package main
 
 import (
@@ -221,7 +222,11 @@ func run(log zerolog.Logger) error {
 	defer stop()
 
 	reconcileDone := make(chan struct{})
-	go (&reconciler{queue: queue, root: root, interval: cfg.ReconcileInterval, log: log}).run(reconcileDone)
+	rec := &reconciler{queue: queue, root: root, interval: cfg.ReconcileInterval, log: log, applier: applying}
+	if live != nil {
+		rec.applicable = live.Applicable
+	}
+	go rec.run(reconcileDone)
 	defer close(reconcileDone)
 
 	go func() {

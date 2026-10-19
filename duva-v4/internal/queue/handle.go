@@ -1,6 +1,7 @@
 package queue
 
 import (
+	"fmt"
 	"net/http"
 	"time"
 
@@ -115,6 +116,17 @@ func (h *Handler) Handle(n Notice) Result {
 		// until it completes would be a notification about something that
 		// never needed a person, for every routine patch. The two branches
 		// below that fall back to waiting for a person announce explicitly.
+		//
+		// Only a queue that can apply has anything to soak: without an
+		// updater the entry waits for a person either way.
+		var at time.Time
+		if h.Applier != nil {
+			at = releaseAt(svc.Soak, n.Published, h.now())
+		}
+		if !at.IsZero() {
+			e.ReleaseAt = at.UTC().Format(time.RFC3339)
+			e.Why = fmt.Sprintf("%s; soaking until %s", v.Why, at.Local().Format("2006-01-02 15:04 MST"))
+		}
 		added := h.Queue.Put(e, h.now())
 		if h.Applier == nil {
 			// No updater configured: queue it rather than lose it. A queue
@@ -125,6 +137,19 @@ func (h *Handler) Handle(n Notice) Result {
 			}
 			h.logf("%s: %s -> %s would apply (%s), but nothing is configured to apply it", svc.Name, v.From, v.To, v.Why)
 			return Result{Outcome: Queue, Service: svc.Name, Message: "queued: nothing is configured to apply it", Status: http.StatusOK}
+		}
+		// Policy allows it, but not yet: it waits out the soak in the queue,
+		// where a person can see it and approve it early, and the reconciler
+		// releases it once it is due. Not announced, for the same reason an
+		// auto-apply is not: nobody needs to do anything.
+		//
+		// The same candidate arriving again keeps the clock it already had,
+		// since Put leaves an unchanged entry alone.
+		if !at.IsZero() {
+			if added {
+				h.logf("%s: %s -> %s is allowed (%s), soaking until %s", svc.Name, v.From, v.To, v.Why, e.ReleaseAt)
+			}
+			return Result{Outcome: Queue, Service: svc.Name, Message: "soaking until " + e.ReleaseAt, Status: http.StatusOK}
 		}
 		if err := h.Applier.StartUnattended(e); err != nil {
 			// Failing to start is not failing to queue. It stays queued, so

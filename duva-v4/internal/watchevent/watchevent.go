@@ -14,6 +14,7 @@ package watchevent
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/Miista/homebrew-docker-pin/duva-v4/internal/queue"
 )
@@ -40,6 +41,9 @@ type Event struct {
 	// the tag did not change, so without the digest there is nothing to
 	// report.
 	Digest string `json:"digest,omitempty"`
+	// Published is when the tag appeared upstream, RFC 3339. What a soak
+	// counts from.
+	Published string `json:"published,omitempty"`
 }
 
 // Translate turns an event into a notice.
@@ -65,6 +69,10 @@ func Translate(e Event) (queue.Notice, string, bool) {
 		// where it is the only thing that changed and the gate's digest-move
 		// path needs it to have anything to act on.
 		Digest: e.Digest,
+		// Unreadable is the same as absent rather than a reason to refuse:
+		// the finding is still real, and a soak without a publish time counts
+		// from now, which only ever waits longer.
+		Published: published(e.Published),
 	}, "", true
 }
 
@@ -75,4 +83,13 @@ func Parse(body []byte) (Event, error) {
 		return Event{}, fmt.Errorf("parsing the detector's payload: %w", err)
 	}
 	return e, nil
+}
+
+// published reads the watcher's publish time, zero when absent or unreadable.
+func published(raw string) time.Time {
+	t, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
 }

@@ -1,0 +1,11 @@
+# The newer versions the watcher should find in this scenario: one patch for
+# each service, so the only difference between them is the soak.
+#
+# For the sandbox. The test pushes its own, with content unique to the run:
+# a soak counts from when an image was built, and an identical build comes
+# out of the cache with the time of whichever run built it first.
+updates:
+  soak-held:
+    - 1.0.1
+  soak-released:
+    - 1.0.1

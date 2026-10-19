@@ -45,8 +45,13 @@ that as major: a change it cannot measure is not one to make unattended.
 Released under its own `duva-v4/vX.Y` tags, separate from the CLI's `vX.Y.Z`.
 See `docs/duva-v4-watch-queue-update.md`.
 
-v4 reads exactly one `duva.*` label, `duva.auto`. There is **no soak**: v3's
-`duva.delay` has no equivalent, and `pin.SelectCandidate` is not on this path.
+v4 reads two `duva.*` labels: `duva.auto` (how big a change applies
+unattended) and `duva.soak` (how old a release must be first; per service, no
+host default). A soaking release is an ordinary queue entry with
+`ReleaseAt` set, released by the queue's reconcile tick, not a separate list.
+The soak counts from the watcher's publish time, so the build cache's
+`Created` is what the integration suite's soak test controls for.
+`pin.SelectCandidate` is not on this path.
 
 - **watcher** knows nothing about versions: not semver, not calver. Its only
   state is one timestamp, so losing it costs a noisy run, not a rebuild.

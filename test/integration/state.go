@@ -198,6 +198,7 @@ type queueEntry struct {
 	Why       string `json:"why"`
 	Auto      string `json:"auto"`
 	FirstSeen string `json:"first_seen"`
+	ReleaseAt string `json:"release_at"`
 }
 
 // state is the queue, keyed by service.
@@ -244,6 +245,7 @@ func (s *Scenario) Pending(service string) PendingRow {
 		Why:       row.Why,
 		Bump:      row.Kind,
 		Auto:      row.Auto,
+		ReleaseAt: row.ReleaseAt,
 	}
 }
 
@@ -253,6 +255,9 @@ type PendingRow struct {
 	Why       string
 	Bump      string
 	Auto      string
+	// ReleaseAt is when a soak lets policy apply it. Empty for an entry
+	// waiting for a person.
+	ReleaseAt string
 }
 
 // Queue fetches duva's approval queue over HTTP.

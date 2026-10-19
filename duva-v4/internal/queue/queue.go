@@ -269,6 +269,33 @@ func (q *Pending) Due(now time.Time) []Entry {
 	return out
 }
 
+// Release ends an entry's soak, returning it as it now stands.
+//
+// The clock is cleared before the apply starts, not after it succeeds: from
+// here the entry is an auto-apply like any other, retried on a deferral and
+// left for a person on a failure. Leaving ReleaseAt set would make it due
+// again on every tick, re-offering a failed apply and cutting under the
+// applier's backoff on a deferred one.
+//
+// false when there is nothing due to release: the entry is gone, or was
+// replaced since Due by a newer candidate whose own soak has not run out.
+func (q *Pending) Release(service string, now time.Time) (Entry, bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	e, ok := q.entries[service]
+	if !ok || e.ReleaseAt == "" {
+		return Entry{}, false
+	}
+	at, err := time.Parse(time.RFC3339, e.ReleaseAt)
+	if err != nil || now.Before(at) {
+		return Entry{}, false
+	}
+	e.ReleaseAt = ""
+	q.entries[service] = e
+	q.save()
+	return e, true
+}
+
 // EntryFrom builds a queue entry from a verdict about a service.
 //
 // Pure, and separate from Put, so the shape of a row can be tested without a

@@ -84,6 +84,12 @@ func declared(ref compose.ServiceRef) (Service, bool, error) {
 		// typo only if you assume the typo was in the safe direction.
 		return Service{}, false, fmt.Errorf("%s: %w", ref.Service, err)
 	}
+	// Per service, with no host default: a soak is a judgement about one
+	// image's upstream, the same as duva.auto, and lives beside it.
+	soak, err := ParseSoak(labels["duva.soak"])
+	if err != nil {
+		return Service{}, false, fmt.Errorf("%s: %w", ref.Service, err)
+	}
 
 	return Service{
 		Name:   ref.Service,
@@ -92,5 +98,6 @@ func declared(ref compose.ServiceRef) (Service, bool, error) {
 		Tag:    tag,
 		Digest: compose.DigestOf(raw),
 		Auto:   auto,
+		Soak:   soak,
 	}, true, nil
 }

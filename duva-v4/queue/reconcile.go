@@ -46,12 +46,29 @@ func recheck(root string, e q.Entry) (q.Recheck, error) {
 }
 
 // reconciler periodically drops queue entries the compose file no longer
-// agrees with -- see Pending.Reconcile's comment for why this exists.
+// agrees with -- see Pending.Reconcile's comment for why this exists -- and
+// releases the ones whose soak has run out.
+//
+// One loop for both, because both are the queue re-asking a question on a
+// clock, and releasing right after reconciling means nothing is released that
+// the compose file has already moved past. The interval is therefore also how
+// late a release can be, which against a soak measured in days is noise.
 type reconciler struct {
 	queue    *q.Pending
 	root     string
 	interval time.Duration
 	log      zerolog.Logger
+
+	// applier is what a released entry is handed to. Nil releases nothing:
+	// a queue with no updater never set a soak, since there was nothing to
+	// apply unattended.
+	applier q.Applier
+	// applicable is asked before releasing, for the same reason the handler
+	// asks it: a container stopped while its update soaked must not be
+	// started by applying it. Nil means every service is.
+	applicable func(service string) (bool, string)
+	// now is the clock, injected so a test can pin it.
+	now func() time.Time
 }
 
 // run reconciles once per tick until ctx is done.
@@ -74,6 +91,11 @@ func (r *reconciler) run(done <-chan struct{}) {
 }
 
 func (r *reconciler) tick() {
+	r.reconcile()
+	r.release()
+}
+
+func (r *reconciler) reconcile() {
 	dropped := r.queue.Reconcile(
 		func(e q.Entry) (q.Recheck, error) { return recheck(r.root, e) },
 		func(service string, err error) {
@@ -82,5 +104,41 @@ func (r *reconciler) tick() {
 	for _, d := range dropped {
 		r.log.Info().Msgf("%s: %s -> %s no longer applies (%s), dropped from the queue",
 			d.Entry.Service, d.Entry.From, d.Entry.To, d.Why)
+	}
+}
+
+// release hands every entry whose soak has run out to the applier.
+//
+// The soak is cleared first, by Release: from then on the entry is an ordinary
+// auto-apply, and what happens to it if the apply is deferred or fails is the
+// applier's existing answer rather than a second one here.
+func (r *reconciler) release() {
+	if r.applier == nil {
+		return
+	}
+	now := time.Now()
+	if r.now != nil {
+		now = r.now()
+	}
+	for _, due := range r.queue.Due(now) {
+		if r.applicable != nil {
+			if ok, why := r.applicable(due.Service); !ok {
+				// Left soaking, so it is released the first tick after the
+				// service is back -- the same as a notice for it would be.
+				r.log.Debug().Msgf("%s: soak is over, but not released: %s", due.Service, why)
+				continue
+			}
+		}
+		e, ok := r.queue.Release(due.Service, now)
+		if !ok {
+			continue
+		}
+		if err := r.applier.StartUnattended(e); err != nil {
+			// Released either way: it now waits where any auto-apply that
+			// could not start waits, for a person or the next notice.
+			r.log.Warn().Msgf("%s: soak is over, but could not start applying: %v", e.Service, err)
+			continue
+		}
+		r.log.Info().Msgf("%s: soak is over, applying %s -> %s", e.Service, e.From, e.To)
 	}
 }

@@ -154,6 +154,38 @@ func TestNotifyIgnoresTheTagAlreadyFollowed(t *testing.T) {
 	}
 }
 
+// The watcher's publish time reaches the gate, so a soak counts from the
+// release rather than from when it was found.
+func TestNotifySoaksFromThePublishTime(t *testing.T) {
+	q := queue.NewPending()
+	app := &startRecorder{}
+	notify := notifyHandler(&queue.Handler{
+		Lookup: queue.Lookup{Root: projectWith(t, `
+services:
+  app:
+    image: example.com/app:1.0.0@sha256:old
+    container_name: my-app
+    labels:
+      duva.auto: patch
+      duva.soak: 3d
+`)},
+		Queue:   q,
+		Applier: app,
+	}, zerolog.Nop())
+
+	published := time.Now().UTC().Add(-24 * time.Hour).Truncate(time.Second)
+	notify([]byte(`{"container":"my-app","image":"example.com/app","tag":"1.0.1",
+		"published":"` + published.Format(time.RFC3339) + `"}`))
+
+	if len(app.started) != 0 {
+		t.Errorf("applied a day-old release under a three-day soak: %+v", app.started)
+	}
+	e, _ := q.Get("app")
+	if want := published.Add(72 * time.Hour).Format(time.RFC3339); e.ReleaseAt != want {
+		t.Errorf("release_at = %q, want %q (three days after publication)", e.ReleaseAt, want)
+	}
+}
+
 func TestNotifyRejectsAnUnreadableBody(t *testing.T) {
 	notify := notifyHandler(&queue.Handler{
 		Lookup: queue.Lookup{Root: projectWith(t, oneService)},
