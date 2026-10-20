@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -54,6 +55,9 @@ func serve() error {
 		return err
 	}
 	defer st.Close()
+	if err := importJSON(st, filepath.Dir(dataFile), root, log); err != nil {
+		return err
+	}
 	// The blocklist is the queue's, and the queue is built from the
 	// updater, so the updater asks through this once both exist.
 	var queue *gate.Gate
