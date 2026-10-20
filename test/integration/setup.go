@@ -34,6 +34,9 @@ var v4Images = map[string]string{
 
 // receiverImage stands in for ntfy, for the scenarios that assert on what
 // duva announced.
+// v5Image is duva v5: one image for every component, chosen by command.
+const v5Image = "duva:integration"
+
 const receiverImage = "duva-receiver:integration"
 
 // suiteCerts holds the certificate the registry serves and duva trusts,
@@ -116,6 +119,42 @@ func buildV4(root string) error {
 	return nil
 }
 
+// buildV5 builds duva v5's one image, the way buildV4 builds v4's: the binary
+// first, laid out as GoReleaser lays it out, then the Dockerfile the release
+// uses over it.
+func buildV5(root string) error {
+	arch, err := exec.Command("docker", "version", "--format", "{{.Server.Arch}}").Output()
+	if err != nil {
+		return fmt.Errorf("asking the daemon its architecture: %w", err)
+	}
+	goarch := trimmed(arch)
+
+	ctx, err := os.MkdirTemp("", "duva-v5")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(ctx)
+
+	args := []string{"build", "-trimpath", "-ldflags", "-s -w"}
+	if os.Getenv("GOCOVERDIR") != "" {
+		args = append(args, "-cover", "-coverpkg=./...")
+	}
+	args = append(args, "-o", filepath.Join(ctx, "linux", goarch, "duva"), "./cmd/duva")
+	build := exec.Command("go", args...)
+	build.Dir = filepath.Join(root, "duva-v5")
+	build.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux", "GOARCH="+goarch)
+	if out, err := build.CombinedOutput(); err != nil {
+		return fmt.Errorf("building duva: %w\n%s", err, out)
+	}
+
+	cmd := exec.Command("docker", "build", "-q", "--label", label+"=integration",
+		"-f", filepath.Join(root, "duva-v5", "Dockerfile"), "-t", v5Image, ctx)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("building %s: %w\n%s", v5Image, err, out)
+	}
+	return nil
+}
+
 func findRoot() (string, error) {
 	out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
 	if err != nil {
@@ -141,6 +180,9 @@ func Setup() (string, error) {
 		return "", fmt.Errorf("building %s: %w", receiverImage, err)
 	}
 	if err := buildV4(root); err != nil {
+		return "", err
+	}
+	if err := buildV5(root); err != nil {
 		return "", err
 	}
 	// Generates the certificate beside the registry's compose file, then

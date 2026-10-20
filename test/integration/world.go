@@ -241,13 +241,22 @@ func (s *Scenario) pushUpdater(tag, marker string) {
 	dir := s.scratch("updater")
 	s.writeFile(filepath.Join(dir, "marker"), marker)
 	s.writeFile(filepath.Join(dir, "Dockerfile"),
-		fmt.Sprintf("FROM %s\nCOPY marker /duva-integration-marker\n", updateImage))
+		fmt.Sprintf("FROM %s\nCOPY marker /duva-integration-marker\n", s.updaterImage()))
 
 	ref := fmt.Sprintf("%s/%s:%s", registryHost, updaterRepo, tag)
 	_ = exec.Command("docker", "rmi", "-f", ref).Run()
 	s.docker("build", "-q", "--no-cache", "-t", ref, dir)
 	s.docker("push", "-q", ref)
 	s.pushed = append(s.pushed, ref)
+}
+
+// updaterImage is the image the suite built that this scenario's updater
+// runs: v5's one image, or v4's updater.
+func (s *Scenario) updaterImage() string {
+	if s.suite() == "duva-v5" {
+		return v5Image
+	}
+	return updateImage
 }
 
 // PushUnrunnable publishes an image that exists but cannot start: FROM
