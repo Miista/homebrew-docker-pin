@@ -15,8 +15,6 @@
 //
 //	DUVA_HOST         what this queue calls itself, for a UI over several
 //	DUVA_QUEUE_TOKEN        the bearer token a UI must present
-//	DUVA_UPDATE_URL    where the updater is, e.g. http://actor:8080
-//	DUVA_UPDATE_TOKEN  the token the updater requires
 //	DUVA_UPDATE_TIMEOUT how long an apply may run before it is called failed
 //	DUVA_RECONCILE_INTERVAL how often a queued entry is re-checked against the
 //	                    compose file, to catch one satisfied by something other
@@ -29,8 +27,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"os/signal"
-	"syscall"
 	"time"
 	// The timezone database, embedded in the binary. Go reads TZ on its
 	// own, but resolves a name like Europe/Copenhagen against the host's
@@ -69,29 +65,6 @@ var stateFile = "/data/queue.json"
 // forever, invisible to the person who could have noticed.
 const defaultApplyTimeout = 30 * time.Minute
 
-func Main(args []string) {
-	if len(args) > 0 {
-		switch args[0] {
-		case "version", "--version", "-v":
-			fmt.Println("queue", Version)
-			return
-		case "health":
-			// For HEALTHCHECK. A subcommand rather than a port something
-			// polls, because this image carries neither a shell nor curl to
-			// poll it with.
-			os.Exit(health())
-		default:
-			fmt.Fprintln(os.Stderr, "Usage: queue [health|version]")
-			os.Exit(1)
-		}
-	}
-	log := newLogger(os.Getenv("DUVA_LOG_LEVEL"))
-	if err := run(log); err != nil {
-		log.Error().Msgf("%v", err)
-		os.Exit(1)
-	}
-}
-
 // notify wires a notifier to the two things worth telling someone about.
 //
 // A function rather than four lines inside run, so a test can exercise the
@@ -116,46 +89,11 @@ func notify(n *ntfy, host string, h *q.Handler, a *applier) {
 	}
 }
 
-// health is the exit code for the health subcommand: 0 healthy, 1 not.
-//
-// It asks the running process, over the loopback port it serves on, rather
-// than re-deriving anything itself. A health check that re-reads the compose
-// file in a second process would report on the file, not on the server: the
-// server could be wedged, or dead, and the file would still parse.
-//
-// What it does not check is the update. A queue with no updater is a queue
-// that queues everything and applies nothing, which is a legitimate way to
-// run it -- and the only way it runs today.
-func health() int {
-	c := &http.Client{Timeout: 5 * time.Second}
-	resp, err := c.Get("http://127.0.0.1" + addr + "/healthz")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "not serving: %v\n", err)
-		return 1
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		fmt.Fprintf(os.Stderr, "serving, but /healthz answered %s\n", resp.Status)
-		return 1
-	}
-	return 0
-}
-
-func run(log zerolog.Logger) error {
-	g, err := New(log, Options{})
-	if err != nil {
-		return err
-	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	return g.Run(ctx)
-}
-
 // Options is what a caller in the same process supplies instead of the
 // environment.
 type Options struct {
-	// Updater applies what is decided. Nil reads DUVA_UPDATE_URL and talks to
-	// an updater in another process, or applies nothing if that is unset.
+	// Updater applies what is decided. Nil applies nothing: every decision
+	// waits for a person, which is how a queue is tested without one.
 	Updater update.Updater
 	// Root is the compose file. Empty means the one mounted at /compose.
 	Root string
@@ -212,10 +150,6 @@ func New(log zerolog.Logger, opts Options) (*Gate, error) {
 	}
 
 	updater := opts.Updater
-	if updater == nil && cfg.ActorURL != "" {
-		updater = &update.Client{BaseURL: cfg.ActorURL, Token: cfg.ActorToken}
-		log.Info().Msgf("applying through the actor at %s", cfg.ActorURL)
-	}
 
 	// The concrete one, so a notifier can be attached to it below: the
 	// Applier interface deliberately says nothing about failures -- the
@@ -320,8 +254,6 @@ func (g *Gate) Run(ctx context.Context) error {
 type config struct {
 	Host              string
 	Token             string
-	ActorURL          string
-	ActorToken        string
 	ApplyTimeout      time.Duration
 	ReconcileInterval time.Duration
 }
@@ -330,8 +262,6 @@ func loadConfig() config {
 	c := config{
 		Host:              os.Getenv("DUVA_HOST"),
 		Token:             tokenFromEnv(),
-		ActorURL:          os.Getenv("DUVA_UPDATE_URL"),
-		ActorToken:        os.Getenv("DUVA_UPDATE_TOKEN"),
 		ApplyTimeout:      defaultApplyTimeout,
 		ReconcileInterval: defaultReconcileInterval,
 	}

@@ -26,16 +26,11 @@ func TestConfigDefaults(t *testing.T) {
 func TestConfigReadsTheEnvironment(t *testing.T) {
 	t.Setenv("DUVA_HOST", "pi")
 	t.Setenv("DUVA_QUEUE_TOKEN", "s3cret")
-	t.Setenv("DUVA_UPDATE_URL", "http://actor:8080")
-	t.Setenv("DUVA_UPDATE_TOKEN", "atoken")
 	t.Setenv("DUVA_UPDATE_TIMEOUT", "5m")
 
 	c := loadConfig()
 	if c.Host != "pi" || c.Token != "s3cret" {
 		t.Errorf("host/token = %q/%q", c.Host, c.Token)
-	}
-	if c.ActorURL != "http://actor:8080" || c.ActorToken != "atoken" {
-		t.Errorf("actor = %q/%q", c.ActorURL, c.ActorToken)
 	}
 	if c.ApplyTimeout != 5*time.Minute {
 		t.Errorf("timeout = %v, want 5m", c.ApplyTimeout)

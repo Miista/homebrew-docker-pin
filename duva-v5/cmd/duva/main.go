@@ -1,10 +1,8 @@
 // duva: one binary for watching pinned services and applying the updates
 // their policy allows.
 //
-// `duva serve` runs watch, queue and updater in one process
-// (docs/duva-v5-one-binary.md). Each can still run alone, chosen by the first
-// argument, exactly as the four v4 binaries did: `duva watch serve` is v4's
-// `watch serve`. The self-update helper is `duva update self-update`.
+// `duva serve` runs watch, queue, updater and, with DUVA_UI, the page, in
+// one process (docs/duva-v5-one-binary.md).
 package main
 
 import (
@@ -22,7 +20,7 @@ import (
 
 var version = "dev"
 
-const usage = "Usage: duva <serve|watch|queue|update|ui|version> [arguments]"
+const usage = "Usage: duva <serve|version>"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -31,21 +29,19 @@ func main() {
 	}
 	watcher.Version, gate.Version, updater.Version, webui.Version = version, version, version, version
 
-	args := os.Args[2:]
 	switch os.Args[1] {
 	case "serve":
 		if err := serve(); err != nil {
 			fmt.Fprintln(os.Stderr, "Error:", err)
 			os.Exit(1)
 		}
-	case "watch":
-		watcher.Main(args)
-	case "queue":
-		gate.Main(args)
-	case "update":
-		updater.Main(args)
-	case "ui":
-		webui.Main(args)
+	case "self-update":
+		// Not in the usage: duva starts this itself, in a copy of its own
+		// container, to replace that container. See updater.SelfUpdate.
+		if err := updater.SelfUpdate(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "Error:", err)
+			os.Exit(1)
+		}
 	case "version", "--version", "-v":
 		fmt.Println("duva", version)
 	default:

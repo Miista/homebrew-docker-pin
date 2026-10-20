@@ -42,10 +42,8 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/signal"
 	"regexp"
 	"strings"
-	"syscall"
 	"time"
 	// The timezone database, embedded in the binary. Go reads TZ on its own,
 	// but resolves a name like Europe/Copenhagen against the host's
@@ -101,84 +99,6 @@ func scheduleFromEnv() string {
 }
 
 const defaultSchedule = "0 3 * * *"
-
-func Main(args []string) {
-	mode := "run"
-	// A service named after run narrows that run to it. Nothing is recorded
-	// differently: the cutoff each service carries is its own, so checking one
-	// moves only that one, exactly as a full run would have.
-	var only string
-	if len(args) > 0 {
-		switch args[0] {
-		case "version", "--version", "-v":
-			fmt.Println("watch", Version)
-			return
-		case "run", "serve":
-			mode = args[0]
-			if mode == "run" && len(args) > 1 {
-				only = args[1]
-			}
-		case "health":
-			// For HEALTHCHECK. The watcher serves no HTTP of its own, so
-			// health is a subcommand the image can exec rather than a port
-			// something can poll -- which also means it needs no shell and no
-			// curl, neither of which a distroless image carries.
-			//
-			// What it reports is whether the webhook can be reached, because
-			// that is the one thing that is both outside this process and
-			// fatal to its purpose: a watcher that cannot publish is doing
-			// all the work and dropping the result. Between daily runs there
-			// is nothing else to be wrong.
-			os.Exit(health())
-		default:
-			fmt.Fprintln(os.Stderr, "Usage: detector [run [service]|serve|health|version]")
-			os.Exit(1)
-		}
-	}
-
-	log := newLogger(os.Getenv("DUVA_LOG_LEVEL"))
-
-	var err error
-	if mode == "serve" {
-		err = serve(log)
-	} else {
-		err = run(log, only, Options{})
-	}
-	if err != nil {
-		log.Error().Msgf("%v", err)
-		os.Exit(1)
-	}
-}
-
-// health is the exit code for the health subcommand: 0 healthy, 1 not.
-//
-// A watcher with no webhook configured is healthy. That is a real way to run
-// it -- findings go to the log and nowhere else -- and reporting a deliberate
-// configuration as unhealthy would make the signal useless for everyone who
-// runs it that way.
-func health() int {
-	url := os.Getenv("DUVA_WEBHOOK_URL")
-	if url == "" {
-		return 0
-	}
-	if err := dialWebhook(url); err != nil {
-		fmt.Fprintf(os.Stderr, "the webhook at %s cannot be reached: %v\n", url, err)
-		return 1
-	}
-	return 0
-}
-
-// serve checks on a schedule, until told to stop.
-//
-// `run` stays the whole of the program: serve is a loop around it, so a
-// scheduled check and a manual one do exactly the same thing. A separate
-// scheduled path would be a second implementation to keep in agreement with
-// the first.
-func serve(log zerolog.Logger) error {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	return Serve(ctx, log, Options{})
-}
 
 // Options is what a caller in the same process supplies instead of the
 // environment.

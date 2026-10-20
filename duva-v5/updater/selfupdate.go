@@ -20,7 +20,7 @@ import (
 // stop is the last thing that happens. Both hosts lost their updater that way.
 //
 // So a request naming the updater is handed to a helper -- this binary, as
-// `update self-update`, in a container copied from the updater's own. To the
+// `duva self-update`, in a container copied from the updater's own. To the
 // helper the updater is an ordinary container, and the ordinary transaction
 // replaces it. The queue is given the helper's stream, so it watches the work
 // and reads its outcome from the process that actually did it.
@@ -81,7 +81,7 @@ func handOff(req update.Request) (Handoff, error) {
 	// next attempt from starting.
 	name := dockerapi.ContainerName(req.Service) + "-self-update-" + time.Now().Format("20060102-150405")
 
-	id, err := dockerapi.StartHelper(name, []string{"update", "self-update", self, string(job)})
+	id, err := dockerapi.StartHelper(name, []string{"self-update", self, string(job)})
 	if err != nil {
 		return Handoff{}, err
 	}
@@ -212,7 +212,7 @@ func (h *helper) apply() (status update.Status, reason string) {
 	return h.Apply(h.Request, h.st.write)
 }
 
-// selfUpdate is the helper's whole life: `update self-update <updater> <job>`.
+// selfUpdate is the helper's whole life: `duva self-update <updater> <job>`.
 //
 // <updater> is the id of the container that started it, and the job must name
 // that container's service. Anything else is refused before it is looked at:
@@ -220,7 +220,7 @@ func (h *helper) apply() (status update.Status, reason string) {
 // any it was told to is a second updater nobody configured.
 func selfUpdate(log zerolog.Logger, args []string) error {
 	if len(args) != 2 {
-		return fmt.Errorf("usage: update self-update <updater container id> <request>")
+		return fmt.Errorf("usage: duva self-update <updater container id> <request>")
 	}
 	updater := args[0]
 	var req update.Request

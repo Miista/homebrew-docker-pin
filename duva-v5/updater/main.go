@@ -24,17 +24,12 @@
 package updater
 
 import (
-	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
-	"time"
 	// The timezone database, embedded in the binary. Go reads TZ on its
 	// own, but resolves a name like Europe/Copenhagen against the host's
 	// /usr/share/zoneinfo -- which a scratch image does not carry, so TZ
@@ -108,65 +103,6 @@ func projectFile() (string, error) {
 	return compose.FileIn(dir)
 }
 
-func Main(args []string) {
-	if len(args) > 0 {
-		switch args[0] {
-		case "version", "--version", "-v":
-			fmt.Println("update", Version)
-			return
-		case "self-update":
-			// Started by an updater asked to replace itself; see selfupdate.go.
-			log := newLogger(os.Getenv("DUVA_LOG_LEVEL"))
-			if err := selfUpdate(log, args[1:]); err != nil {
-				log.Error().Msgf("%v", err)
-				os.Exit(1)
-			}
-			return
-		default:
-			fmt.Fprintln(os.Stderr, "Usage: actor [version]")
-			os.Exit(1)
-		}
-	}
-	log := newLogger(os.Getenv("DUVA_LOG_LEVEL"))
-	if err := run(log); err != nil {
-		log.Error().Msgf("%v", err)
-		os.Exit(1)
-	}
-}
-
-func run(log zerolog.Logger) error {
-	s, err := New(log)
-	if err != nil {
-		return err
-	}
-	srv := &http.Server{
-		Addr:              addr,
-		Handler:           s.Handler(),
-		ReadHeaderTimeout: 10 * time.Second,
-	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
-	go func() {
-		log.Info().Msgf("ready to apply, serving on %s", addr)
-		if s.Token == "" {
-			// Worth a line rather than silence: an open updater is a root
-			// shell on this host for anything that can reach the port.
-			log.Warn().Msg("no DUVA_UPDATE_TOKEN: this actor will accept work from any caller that can reach it")
-		}
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Error().Msgf("stopped serving: %v", err)
-		}
-	}()
-
-	<-ctx.Done()
-	log.Info().Msg("shutting down")
-	shutdown, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	return srv.Shutdown(shutdown)
-}
-
 // New is the updater, checked and ready to apply: the repository is mounted,
 // writable and owned as it must be, and the commit template renders.
 //
@@ -192,6 +128,12 @@ func New(log zerolog.Logger) (*Server, error) {
 			return transaction(req, step, realDocker, realGit, push, tmpl)
 		},
 	}, nil
+}
+
+// SelfUpdate is the helper's whole life, started as `duva self-update`: see
+// selfUpdate.
+func SelfUpdate(args []string) error {
+	return selfUpdate(newLogger(os.Getenv("DUVA_LOG_LEVEL")), args)
 }
 
 // ProjectFile is the compose file the updater rewrites: DUVA_REPO, and

@@ -25,9 +25,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"os/signal"
 	"strconv"
-	"syscall"
 	"time"
 	// The timezone database, embedded in the binary. Go reads TZ on its own
 	// but resolves a name like Europe/Copenhagen against the host's
@@ -47,56 +45,6 @@ var Version = "dev"
 // container the port is invisible to the operator, who chooses what to
 // publish it as.
 const addr = ":8080"
-
-func Main(args []string) {
-	if len(args) > 0 {
-		switch args[0] {
-		case "version", "--version", "-v":
-			fmt.Println("duva-ui", Version)
-			return
-		case "health":
-			// For HEALTHCHECK. A subcommand rather than a port something
-			// polls, because this image carries neither a shell nor curl.
-			//
-			// It reports whether this process is serving, not whether the
-			// queues are reachable. An unreachable queue is the UI's
-			// subject matter -- it renders as unreachable, which is the whole
-			// point of the page -- and marking the UI unhealthy for it would
-			// take down the one thing that can tell you about it.
-			os.Exit(health())
-		default:
-			fmt.Fprintln(os.Stderr, "Usage: duva-ui [health|version]")
-			os.Exit(1)
-		}
-	}
-	log := newLogger(os.Getenv("DUVA_LOG_LEVEL"))
-	if err := run(log); err != nil {
-		log.Error().Msgf("%v", err)
-		os.Exit(1)
-	}
-}
-
-// health is the exit code for the health subcommand: 0 healthy, 1 not.
-func health() int {
-	c := &http.Client{Timeout: 5 * time.Second}
-	resp, err := c.Get("http://127.0.0.1" + addr + "/healthz")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "not serving: %v\n", err)
-		return 1
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		fmt.Fprintf(os.Stderr, "serving, but /healthz answered %s\n", resp.Status)
-		return 1
-	}
-	return 0
-}
-
-func run(log zerolog.Logger) error {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	return Run(ctx, log, Options{})
-}
 
 // Options is what a caller in the same process supplies.
 type Options struct {

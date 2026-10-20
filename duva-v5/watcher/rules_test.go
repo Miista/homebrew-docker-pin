@@ -1,6 +1,7 @@
 package watcher
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -314,7 +315,7 @@ func TestTheDefaultScheduleParses(t *testing.T) {
 // nothing in the log to say why nothing happened.
 func TestServeRefusesAnUnparseableSchedule(t *testing.T) {
 	t.Setenv("DUVA_SCHEDULE", "every tuesday-ish")
-	err := serve(zerolog.Nop())
+	err := Serve(context.Background(), zerolog.Nop(), Options{})
 	if err == nil {
 		t.Fatal("an unparseable schedule was accepted")
 	}
