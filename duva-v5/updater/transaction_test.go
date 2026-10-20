@@ -800,3 +800,45 @@ func TestApplyRefusesAStoppedContainer(t *testing.T) {
 		t.Errorf("committed %v, want nothing", w.committed)
 	}
 }
+
+// --- the blocklist -----------------------------------------------------------
+
+// A release blocked after it was queued is refused once its digest is known:
+// after the pull, before anything is written. Blocked, not failed: nothing
+// was touched, and it is a person's decision rather than a fault.
+func TestABlockedReleaseIsRefusedAfterThePull(t *testing.T) {
+	w := newWorld(t, versionPin)
+	before := w.image(t)
+	d := w.docker()
+	var asked []string
+	d.Blocked = func(image, digest string) (string, bool) {
+		asked = append(asked, image+"@"+digest)
+		return "missing migrations", digest == "sha256:newdigest"
+	}
+	step, _ := steps()
+
+	status, reason := transaction(versionRequest(), step, d, w.git(), false, "")
+
+	if status != update.Blocked || reason != "missing migrations" {
+		t.Errorf("status = %s %q, want blocked with the block's reason", status, reason)
+	}
+	if len(asked) != 1 || asked[0] != "example.com/app@sha256:newdigest" {
+		t.Errorf("asked about %v, want the pulled image's digest", asked)
+	}
+	if got := w.image(t); got != before {
+		t.Errorf("the pin was written for a blocked release:\n  %s", got)
+	}
+	if len(w.recreated) != 0 || len(w.committed) != 0 {
+		t.Errorf("recreated %v and committed %v for a blocked release", w.recreated, w.committed)
+	}
+}
+
+func TestAnUnblockedReleaseGoesThrough(t *testing.T) {
+	w := newWorld(t, versionPin)
+	d := w.docker()
+	d.Blocked = func(string, string) (string, bool) { return "", false }
+	step, lines := steps()
+	if status, reason := transaction(versionRequest(), step, d, w.git(), false, ""); status != update.Completed {
+		t.Errorf("status = %s (%s)\n%v", status, reason, *lines)
+	}
+}

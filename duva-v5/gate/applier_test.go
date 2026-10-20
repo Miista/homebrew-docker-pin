@@ -552,3 +552,29 @@ func TestRetryDelayDefaults(t *testing.T) {
 		t.Errorf("late delay = %v, want %v", got, defaultRetryMax)
 	}
 }
+
+// The updater refusing a blocked release settles the entry as blocked, and
+// tells nobody: a person blocked it, and knows.
+func TestABlockedApplyIsSettledNotAnnounced(t *testing.T) {
+	q := queue.NewPending()
+	e, _ := q.PutEntry(entryFor("app"), time.Now())
+	s := &stubActor{lines: []string{update.Terminal(update.Blocked, "missing migrations")}}
+	a := newTestApplierOver(t, s, q)
+	told := 0
+	a.onFailure = func(queue.Entry, string) { told++ }
+
+	if err := a.StartUnattended(e); err != nil {
+		t.Fatal(err)
+	}
+	waitIdle(t, a)
+
+	if _, ok := q.Get("app"); ok {
+		t.Error("a blocked entry is still waiting")
+	}
+	if told != 0 {
+		t.Errorf("announced %d failure(s) for a blocked release", told)
+	}
+	if s.applyCount() != 1 {
+		t.Errorf("tried %d times; a block is not retried", s.applyCount())
+	}
+}

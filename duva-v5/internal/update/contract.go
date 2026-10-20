@@ -101,6 +101,11 @@ const (
 	// failure: nothing was touched, nobody need be told, and the caller
 	// should offer the work again later.
 	Deferred Status = "deferred"
+	// Blocked: it did nothing, because the release is on the blocklist --
+	// announced as bad, by a person. Not a failure and not to be retried:
+	// nothing was touched, and the same release will be refused every time
+	// until it is unblocked. The reason is the block's.
+	Blocked Status = "blocked"
 )
 
 // TerminalPrefix marks the last line of a stream.
@@ -136,7 +141,7 @@ func ParseTerminal(line string) (s Status, reason string, ok bool) {
 	}
 	word, reason, _ := strings.Cut(rest, ": ")
 	switch Status(word) {
-	case Completed, Failed, Deferred:
+	case Completed, Failed, Deferred, Blocked:
 		return Status(word), reason, true
 	default:
 		// A status nobody defined is not a terminal line. Treating an

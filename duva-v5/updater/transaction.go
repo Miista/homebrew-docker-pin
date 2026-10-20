@@ -50,6 +50,10 @@ type Docker struct {
 	// touching it. Nil skips the check.
 	Exists        func(service string) error
 	ContainerName func(service string) string
+	// Blocked reports whether a release is on the blocklist, by image and
+	// index digest, and why. Asked after the pull: a version change's digest
+	// is not known until then. Nil blocks nothing.
+	Blocked func(image, digest string) (reason string, blocked bool)
 }
 
 // Git is the git access applying needs.
@@ -238,6 +242,21 @@ func transaction(req update.Request, step func(string, ...any), d Docker, g Git,
 			return update.Deferred, fmt.Sprintf("the registry is rate limiting pulls; will try again: %v", err)
 		}
 		return update.Failed, fmt.Sprintf("pulling %s: %v", ref, err)
+	}
+
+	// The blocklist, now that the digest is known. A digest move carried its
+	// digest from the start; a version change's is only certain once pulled,
+	// and a release blocked after it was queued -- or approved -- must still
+	// not go through. Nothing has been written, so refusing touches nothing.
+	if d.Blocked != nil {
+		digest, err := d.GetDigest(ref)
+		if err != nil {
+			return update.Failed, fmt.Sprintf("reading what %s pulled as: %v", ref, err)
+		}
+		if reason, blocked := d.Blocked(req.Image, digest); blocked {
+			step("%s is blocked: %s", displayOf(digest), reason)
+			return update.Blocked, reason
+		}
 	}
 
 	// pin.Compute derives the tag by stripping the base image from the ref it

@@ -91,6 +91,18 @@ func (h *Handler) Handle(n Notice) Result {
 
 	v := Decide(n, svc, found)
 
+	// A release a person blocked is not offered, however policy sizes it.
+	// Only where the digest is known here -- a digest move; a version change's
+	// is checked by the updater once pulled.
+	if v.Outcome == Apply || v.Outcome == Queue {
+		if digest := digestFor(v, n); digest != "" {
+			if reason, blocked := h.Queue.IsBlocked(svc.Image, digest); blocked {
+				h.logf("%s: %s is blocked — %s", svc.Name, shortDigest(digest), reason)
+				return Result{Outcome: Ignore, Service: svc.Name, Message: "blocked: " + reason, Status: http.StatusOK}
+			}
+		}
+	}
+
 	switch v.Outcome {
 	case Reject:
 		// Loud rather than dropped: a notice naming a container nothing

@@ -107,7 +107,10 @@ func projectFile() (string, error) {
 //
 // Serving it is the caller's choice. As its own process it answers HTTP; in
 // duva v5's one process, the queue calls Local() instead.
-func New(log zerolog.Logger) (*Server, error) {
+//
+// blocked is the blocklist, asked once a release's digest is known; nil
+// blocks nothing.
+func New(log zerolog.Logger, blocked func(image, digest string) (string, bool)) (*Server, error) {
 	push, tmpl, err := setup()
 	if err != nil {
 		return nil, err
@@ -123,7 +126,9 @@ func New(log zerolog.Logger) (*Server, error) {
 		IsSelf:     isSelf,
 		HandOff:    handOff,
 		Apply: func(req update.Request, step func(string, ...any)) (update.Status, string) {
-			return transaction(req, step, realDocker, realGit, push, tmpl)
+			d := realDocker
+			d.Blocked = blocked
+			return transaction(req, step, d, realGit, push, tmpl)
 		},
 	}, nil
 }

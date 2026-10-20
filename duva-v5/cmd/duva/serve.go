@@ -53,11 +53,15 @@ func serve() error {
 		return err
 	}
 	defer st.Close()
-	up, err := updater.New(component(log, "update"))
+	// The blocklist is the queue's, and the queue is built from the
+	// updater, so the updater asks through this once both exist.
+	var queue *gate.Gate
+	blocked := func(image, digest string) (string, bool) { return queue.IsBlocked(image, digest) }
+	up, err := updater.New(component(log, "update"), blocked)
 	if err != nil {
 		return err
 	}
-	queue, err := gate.New(component(log, "queue"), gate.Options{
+	queue, err = gate.New(component(log, "queue"), gate.Options{
 		Updater: up.Local(),
 		Root:    root,
 		Store:   st,

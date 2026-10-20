@@ -242,6 +242,11 @@ func (g *Gate) Poke() {
 	}
 }
 
+// IsBlocked reports whether a release is on the blocklist, and why.
+func (g *Gate) IsBlocked(image, digest string) (string, bool) {
+	return g.queue.IsBlocked(image, digest)
+}
+
 // Handle decides about one notice: what a watcher in the same process calls
 // instead of POSTing the webhook.
 func (g *Gate) Handle(n q.Notice) q.Result { return g.handler.Handle(n) }

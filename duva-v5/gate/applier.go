@@ -172,6 +172,14 @@ func (a *applier) apply(e queue.Entry, l *live, unattended bool, attempt int) {
 		if unattended {
 			a.retryLater(e, attempt)
 		}
+	case status == update.Blocked:
+		// A person blocked this release; the updater found out on pulling
+		// it. Not a failure, and not to be retried: the entry is settled as
+		// blocked, and nobody is told what they already decided.
+		a.log.Warn().Msgf("%s: %s -> %s is blocked — %s", e.Service, e.From, e.To, reason)
+		if a.queue != nil {
+			a.queue.MarkBlocked(e, reason, time.Now())
+		}
 	default:
 		a.log.Error().Msgf("%s: failed — %s", e.Service, reason)
 		a.failed(e, reason)
