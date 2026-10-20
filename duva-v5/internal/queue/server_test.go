@@ -45,9 +45,6 @@ func serverWith(t *testing.T, q *Pending, app Applier, token string) *httptest.S
 		Host:    "testhost",
 		Version: "test",
 		Token:   token,
-		Notify: func(body []byte) (int, string) {
-			return http.StatusOK, "noted"
-		},
 	}
 	srv := httptest.NewServer(s.Handler())
 	t.Cleanup(srv.Close)
@@ -98,24 +95,6 @@ func TestHealthNeedsNoToken(t *testing.T) {
 	srv := serverWith(t, NewPending(), &fakeApplier{}, "s3cret")
 	if resp := do(t, http.MethodGet, srv.URL+"/healthz", "", ""); resp.StatusCode != http.StatusOK {
 		t.Errorf("status = %d, want 200", resp.StatusCode)
-	}
-}
-
-// A watcher reaches this over the host's own network and carries no
-// credential, so it is open by design.
-func TestNotifyNeedsNoToken(t *testing.T) {
-	srv := serverWith(t, NewPending(), &fakeApplier{}, "s3cret")
-	resp := do(t, http.MethodPost, srv.URL+"/v1/notify", "", `{"status":"update"}`)
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("status = %d, want 200", resp.StatusCode)
-	}
-}
-
-func TestNotifyRejectsGet(t *testing.T) {
-	srv := serverWith(t, NewPending(), &fakeApplier{}, "")
-	resp := do(t, http.MethodGet, srv.URL+"/v1/notify", "", "")
-	if resp.StatusCode != http.StatusMethodNotAllowed {
-		t.Errorf("status = %d, want 405", resp.StatusCode)
 	}
 }
 

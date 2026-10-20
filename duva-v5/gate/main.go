@@ -46,7 +46,6 @@ import (
 	// Aliased: this binary lives in queue/, so the bare name would be
 	// ambiguous with the package it is the command for.
 	q "github.com/Miista/homebrew-docker-pin/duva-v5/internal/queue"
-	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/watchevent"
 )
 
 var Version = "dev"
@@ -263,7 +262,6 @@ func New(log zerolog.Logger, opts Options) (*Gate, error) {
 			Host:    cfg.Host,
 			Version: Version,
 			Token:   cfg.Token,
-			Notify:  notifyHandler(handler, log),
 		},
 		applying: applying,
 		live:     live,
@@ -317,28 +315,6 @@ func (g *Gate) Run(ctx context.Context) error {
 	shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	return srv.Shutdown(shutdown)
-}
-
-// notifyHandler wires the watcher's payload to the gate.
-//
-// The translation is the only part that knows which watcher is in use, which
-// is why it is one function and not spread through the queue.
-func notifyHandler(h *q.Handler, log zerolog.Logger) func([]byte) (int, string) {
-	return func(body []byte) (int, string) {
-		e, err := watchevent.Parse(body)
-		if err != nil {
-			log.Warn().Msgf("a notification could not be read: %v", err)
-			return http.StatusBadRequest, err.Error()
-		}
-		n, why, ok := watchevent.Translate(e)
-		if !ok {
-			// Unusable is not a failure of the sender: saying what was
-			// missing is more useful than a status code.
-			return http.StatusOK, why
-		}
-		res := h.Handle(n)
-		return res.Status, res.Message
-	}
 }
 
 type config struct {

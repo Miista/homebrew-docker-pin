@@ -3,7 +3,6 @@ package queue
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 )
@@ -28,16 +27,13 @@ type Applier interface {
 
 // Server is the queue's HTTP surface.
 //
-// Two audiences, and they are the reason the endpoints are split the way they
-// are: a watcher on this host telling it something happened, and a UI --
-// possibly on another host -- reading the queue and approving from it.
+// One audience: a UI, possibly on another host, reading the queue and
+// approving from it. The watcher is in the same process and calls the
+// handler directly; v4's open /v1/notify webhook is gone, and with it the
+// one route that answered without a token.
 type Server struct {
 	// Queue is what is waiting.
 	Queue *Pending
-	// Notify handles a watcher's webhook: it translates, decides, and
-	// either queues or applies. Supplied rather than built here because the
-	// translation belongs to whichever watcher is in use.
-	Notify func(body []byte) (status int, message string)
 	// Applier carries out an approval.
 	Applier Applier
 	// Host is what this queue calls itself, for a UI showing several.
@@ -58,14 +54,6 @@ func (s *Server) Handler() http.Handler {
 		w.Write([]byte("ok\n"))
 	})
 
-	// Open, because a watcher reaches this over the host's own network by
-	// container name and nothing else has a path to it. It is still exposed
-	// on the published port, which is a judgement about a LAN rather than a
-	// principle -- see the duva-v4 design note. What it can do is bounded:
-	// an unknown container is refused, and a known one still has to clear
-	// the policy on it.
-	mux.HandleFunc("/v1/notify", s.notify)
-
 	mux.HandleFunc("/v1/snapshot", s.guard(s.snapshot))
 	mux.HandleFunc("/v1/apply/", s.guard(s.apply))
 	mux.HandleFunc("/v1/stream/", s.guard(s.stream))
@@ -83,21 +71,6 @@ func (s *Server) guard(next http.HandlerFunc) http.HandlerFunc {
 		}
 		next(w, r)
 	}
-}
-
-func (s *Server) notify(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	body, err := readBody(r)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	status, message := s.Notify(body)
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]string{"message": message})
 }
 
 // Snapshot is what a UI renders.
@@ -268,16 +241,6 @@ func (s *Server) Stream(service string, w http.ResponseWriter, r *http.Request) 
 func writeMessage(w http.ResponseWriter, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"message": message})
-}
-
-// readBody reads a webhook body, bounded.
-//
-// Bounded because this endpoint is open: a watcher's notification is a few
-// hundred bytes, and anything that is not one should not be allowed to make
-// the queue allocate for it.
-func readBody(r *http.Request) ([]byte, error) {
-	defer r.Body.Close()
-	return io.ReadAll(io.LimitReader(r.Body, 64<<10))
 }
 
 // ReadinessReporter is an Applier that can say whether it would take work.
