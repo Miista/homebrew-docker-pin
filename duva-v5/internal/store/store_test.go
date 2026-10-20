@@ -106,22 +106,3 @@ func TestABlockCanBeLiftedAndRepeated(t *testing.T) {
 		t.Errorf("could not block again after unblocking: %v", err)
 	}
 }
-
-func TestABackupIsADatabase(t *testing.T) {
-	s := open(t)
-	s.db.Exec(`INSERT INTO images (repo) VALUES ('example.com/app')`)
-	path := filepath.Join(t.TempDir(), "backup.db")
-	if err := s.Backup(path); err != nil {
-		t.Fatal(err)
-	}
-	b, err := Open(path)
-	if err != nil {
-		t.Fatalf("the backup does not open: %v", err)
-	}
-	defer b.Close()
-	var n int
-	b.db.QueryRow(`SELECT COUNT(*) FROM images`).Scan(&n)
-	if n != 1 {
-		t.Errorf("the backup has %d image(s), want 1", n)
-	}
-}

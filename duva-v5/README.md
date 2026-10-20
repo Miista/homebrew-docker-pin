@@ -229,9 +229,11 @@ duva's own container without its compose labels or network aliases.
 `/data` holds `duva.db`, a SQLite database -- what is waiting, the history of
 every decision and who made it, the blocklist, the services duva knows, and
 how far back each was checked -- and `auth/`, the page's session key. Losing
-`auth/` signs people out. Back the database up with `docker exec <duva> duva backup
-/data/backup-<date>.db`, which writes a consistent copy while duva runs; do
-not copy the live file.
+`auth/` signs people out. Backing it up is the host's job, as for any other volume. Copy `duva.db`
+together with `duva.db-wal` (and `-shm`), or stop duva first; `sqlite3
+duva.db "VACUUM INTO 'backup.db'"` on the host turns the copy into one
+consistent file. Do not copy `duva.db` alone while duva runs: recent changes
+may still be in the `-wal` file.
 
 ## Moving from v4
 
