@@ -135,25 +135,13 @@ func Main(args []string) {
 }
 
 func run(log zerolog.Logger) error {
-	push, token, tmpl, err := setup()
+	s, err := New(log)
 	if err != nil {
 		return err
 	}
-
 	srv := &http.Server{
-		Addr: addr,
-		Handler: (&Server{
-			Token:      token,
-			Version:    Version,
-			Log:        log,
-			Ready:      readiness,
-			Applicable: applicable,
-			IsSelf:     isSelf,
-			HandOff:    handOff,
-			Apply: func(req update.Request, step func(string, ...any)) (update.Status, string) {
-				return transaction(req, step, realDocker, realGit, push, tmpl)
-			},
-		}).Handler(),
+		Addr:              addr,
+		Handler:           s.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -162,13 +150,10 @@ func run(log zerolog.Logger) error {
 
 	go func() {
 		log.Info().Msgf("ready to apply, serving on %s", addr)
-		if token == "" {
+		if s.Token == "" {
 			// Worth a line rather than silence: an open updater is a root
 			// shell on this host for anything that can reach the port.
 			log.Warn().Msg("no DUVA_UPDATE_TOKEN: this actor will accept work from any caller that can reach it")
-		}
-		if !push {
-			log.Info().Msg("DUVA_GIT_PUSH is off: commits stay local")
 		}
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Error().Msgf("stopped serving: %v", err)
@@ -181,6 +166,38 @@ func run(log zerolog.Logger) error {
 	defer cancel()
 	return srv.Shutdown(shutdown)
 }
+
+// New is the updater, checked and ready to apply: the repository is mounted,
+// writable and owned as it must be, and the commit template renders.
+//
+// Serving it is the caller's choice. As its own process it answers HTTP; in
+// duva v5's one process, the queue calls Local() instead.
+func New(log zerolog.Logger) (*Server, error) {
+	push, token, tmpl, err := setup()
+	if err != nil {
+		return nil, err
+	}
+	if !push {
+		log.Info().Msg("DUVA_GIT_PUSH is off: commits stay local")
+	}
+	return &Server{
+		Token:      token,
+		Version:    Version,
+		Log:        log,
+		Ready:      readiness,
+		Applicable: applicable,
+		IsSelf:     isSelf,
+		HandOff:    handOff,
+		Apply: func(req update.Request, step func(string, ...any)) (update.Status, string) {
+			return transaction(req, step, realDocker, realGit, push, tmpl)
+		},
+	}, nil
+}
+
+// ProjectFile is the compose file the updater rewrites: DUVA_REPO, and
+// DUVA_COMPOSE_DIR within it. In one process it is the project every
+// component reads.
+func ProjectFile() (string, error) { return projectFile() }
 
 // setup is what the updater and a self-update helper both check before taking
 // work, and the configuration both work under.

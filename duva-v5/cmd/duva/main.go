@@ -1,11 +1,10 @@
 // duva: one binary for watching pinned services and applying the updates
 // their policy allows.
 //
-// For now each component still runs as its own process, chosen by the first
+// `duva serve` runs watch, queue and updater in one process
+// (docs/duva-v5-one-binary.md). Each can still run alone, chosen by the first
 // argument, exactly as the four v4 binaries did: `duva watch serve` is v4's
-// `watch serve`. That is a step on the way to `duva serve`, which runs them
-// in one process (docs/duva-v5-one-binary.md); until then, the integration
-// suite exercises the same behaviour through one binary.
+// `watch serve`. The self-update helper is `duva update self-update`.
 package main
 
 import (
@@ -23,7 +22,7 @@ import (
 
 var version = "dev"
 
-const usage = "Usage: duva <watch|queue|update|ui|version> [arguments]"
+const usage = "Usage: duva <serve|watch|queue|update|ui|version> [arguments]"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -34,6 +33,11 @@ func main() {
 
 	args := os.Args[2:]
 	switch os.Args[1] {
+	case "serve":
+		if err := serve(); err != nil {
+			fmt.Fprintln(os.Stderr, "Error:", err)
+			os.Exit(1)
+		}
 	case "watch":
 		watcher.Main(args)
 	case "queue":

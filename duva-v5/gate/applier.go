@@ -23,7 +23,7 @@ import (
 // and is then decided again, against the file as it is afterwards, which may
 // make it a different change or none at all.
 type applier struct {
-	client  *update.Client
+	client  update.Updater
 	timeout time.Duration
 	log     zerolog.Logger
 
@@ -77,7 +77,7 @@ type live struct {
 	lines []string // what has been said so far, for a watcher arriving late
 }
 
-func newApplier(c *update.Client, timeout time.Duration, log zerolog.Logger, q *queue.Pending) *applier {
+func newApplier(c update.Updater, timeout time.Duration, log zerolog.Logger, q *queue.Pending) *applier {
 	return &applier{
 		client:  c,
 		timeout: timeout,

@@ -143,17 +143,59 @@ func health() int {
 }
 
 func run(log zerolog.Logger) error {
-	cfg := loadConfig()
-
-	root, err := projectFile()
+	g, err := New(log, Options{})
 	if err != nil {
 		return err
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return g.Run(ctx)
+}
+
+// Options is what a caller in the same process supplies instead of the
+// environment.
+type Options struct {
+	// Updater applies what is decided. Nil reads DUVA_UPDATE_URL and talks to
+	// an updater in another process, or applies nothing if that is unset.
+	Updater update.Updater
+	// Root is the compose file. Empty means the one mounted at /compose.
+	Root string
+}
+
+// Gate is the queue, assembled: what decides, what is waiting, and what
+// serves both to a UI.
+type Gate struct {
+	log   zerolog.Logger
+	cfg   config
+	root  string
+	queue *q.Pending
+	// handler decides about one notice; Handle is how a watcher in the same
+	// process reaches it.
+	handler *q.Handler
+	// API is the queue's HTTP surface, for a UI. Exposed so a UI in the same
+	// process can serve it without a network in between.
+	API      *q.Server
+	applying q.Applier
+	live     *applier
+}
+
+// New assembles a queue: it reads the compose project, restores what was
+// waiting, and connects whatever applies.
+func New(log zerolog.Logger, opts Options) (*Gate, error) {
+	cfg := loadConfig()
+
+	root := opts.Root
+	if root == "" {
+		var err error
+		if root, err = projectFile(); err != nil {
+			return nil, err
+		}
 	}
 	// Before anything else: a queue that cannot read the project it is
 	// deciding about should say so now, not when the first notice arrives
 	// and is rejected for reasons nobody can see.
 	if _, err := compose.ContainerIndex(root); err != nil {
-		return fmt.Errorf("reading the compose project at %s: %w", root, err)
+		return nil, fmt.Errorf("reading the compose project at %s: %w", root, err)
 	}
 
 	// Restored from /data, so a restart is not a decision about what is
@@ -166,25 +208,25 @@ func run(log zerolog.Logger) error {
 		log.Info().Msgf("%d entr(ies) were still waiting from before the restart", n)
 	}
 
+	updater := opts.Updater
+	if updater == nil && cfg.ActorURL != "" {
+		updater = &update.Client{BaseURL: cfg.ActorURL, Token: cfg.ActorToken}
+		log.Info().Msgf("applying through the actor at %s", cfg.ActorURL)
+	}
+
 	// The concrete one, so a notifier can be attached to it below: the
 	// Applier interface deliberately says nothing about failures -- the
 	// handler does not need to know -- but the thing being notified does.
 	var live *applier
 	var applying q.Applier
-	if cfg.ActorURL != "" {
-		live = newApplier(
-			&update.Client{BaseURL: cfg.ActorURL, Token: cfg.ActorToken},
-			cfg.ApplyTimeout,
-			log,
-			queue,
-		)
+	if updater != nil {
+		live = newApplier(updater, cfg.ApplyTimeout, log, queue)
 		applying = live
-		log.Info().Msgf("applying through the actor at %s", cfg.ActorURL)
 	} else {
 		// Legitimate, not broken: a queue with no updater queues everything
 		// and applies nothing, which is what someone running it to watch
 		// rather than to act would want.
-		log.Info().Msg("no DUVA_UPDATE_URL: every decision will be queued and nothing applied")
+		log.Info().Msg("no updater: every decision will be queued and nothing applied")
 	}
 
 	handler := &q.Handler{
@@ -205,26 +247,43 @@ func run(log zerolog.Logger) error {
 	}
 	notify(newNtfy(log), cfg.Host, handler, live)
 
-	srv := &http.Server{
-		Addr: addr,
-		Handler: (&q.Server{
+	return &Gate{
+		log:     log,
+		cfg:     cfg,
+		root:    root,
+		queue:   queue,
+		handler: handler,
+		API: &q.Server{
 			Queue:   queue,
 			Applier: applying,
 			Host:    cfg.Host,
 			Version: Version,
 			Token:   cfg.Token,
 			Notify:  notifyHandler(handler, log),
-		}).Handler(),
+		},
+		applying: applying,
+		live:     live,
+	}, nil
+}
+
+// Handle decides about one notice: what a watcher in the same process calls
+// instead of POSTing the webhook.
+func (g *Gate) Handle(n q.Notice) q.Result { return g.handler.Handle(n) }
+
+// Run serves the queue's API and reconciles on its interval, until ctx is
+// done.
+func (g *Gate) Run(ctx context.Context) error {
+	log, cfg := g.log, g.cfg
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           g.API.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
 	reconcileDone := make(chan struct{})
-	rec := &reconciler{queue: queue, root: root, interval: cfg.ReconcileInterval, log: log, applier: applying}
-	if live != nil {
-		rec.applicable = live.Applicable
+	rec := &reconciler{queue: g.queue, root: g.root, interval: cfg.ReconcileInterval, log: log, applier: g.applying}
+	if g.live != nil {
+		rec.applicable = g.live.Applicable
 	}
 	go rec.run(reconcileDone)
 	defer close(reconcileDone)

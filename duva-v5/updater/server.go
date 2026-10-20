@@ -147,6 +147,23 @@ func (s *Server) apply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	acc, err := s.Start(req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(acc)
+}
+
+// Start begins applying a request and says where to watch it. It is what
+// the HTTP handler does after reading the request, and what a caller in the
+// same process uses instead -- one path, so the two cannot answer the same
+// request differently.
+//
+// An error means nothing was started: the service already has an apply in
+// flight.
+func (s *Server) Start(req update.Request) (update.Accepted, error) {
 	// Asked before the lock: it is a question for the daemon, and holding the
 	// lock across it would stall every stream and readiness check behind it.
 	self := s.IsSelf != nil && s.IsSelf(req.Service)
@@ -158,9 +175,8 @@ func (s *Server) apply(w http.ResponseWriter, r *http.Request) {
 		// apply is offered again later and reaches the replacement.
 		helper := s.handedOff
 		s.mu.Unlock()
-		s.begin(w, req, answer(update.Deferred,
+		return s.begin(req, answer(update.Deferred,
 			"this updater is being replaced by "+helper+"; will try again once it is back"))
-		return
 	}
 	if self {
 		// Only from idle. The helper stops this container, and with it
@@ -168,20 +184,18 @@ func (s *Server) apply(w http.ResponseWriter, r *http.Request) {
 		// between a stop and a create, is a service left removed.
 		if busy := s.busyLocked(); busy != "" {
 			s.mu.Unlock()
-			s.begin(w, req, answer(update.Deferred,
+			return s.begin(req, answer(update.Deferred,
 				"this updater is applying "+busy+", and replacing it now would interrupt that; will try again"))
-			return
 		}
 		// Claimed before the helper exists, so a request arriving while it
 		// starts is deferred rather than racing it.
 		s.handedOff = "the helper that is starting"
 		s.mu.Unlock()
-		s.handOff(w, req)
-		return
+		return s.handOff(req)
 	}
 	s.mu.Unlock()
 
-	s.begin(w, req, s.Apply)
+	return s.begin(req, s.Apply)
 }
 
 // busyLocked names a service whose work is still running, or "". The caller
@@ -196,16 +210,18 @@ func (s *Server) busyLocked() string {
 }
 
 // begin takes a request: one stream per service, and the work run against it.
-func (s *Server) begin(w http.ResponseWriter, req update.Request, do work) {
+func (s *Server) begin(req update.Request, do work) (update.Accepted, error) {
 	s.mu.Lock()
+	if s.running == nil {
+		s.running = map[string]*stream{}
+	}
 	if prev, busy := s.running[req.Service]; busy {
 		// A finished stream still in its linger window is not busy: the work
 		// is over, and refusing the next request because its log has not
 		// been collected yet would make the window a rate limit.
 		if !prev.finished() {
 			s.mu.Unlock()
-			http.Error(w, req.Service+" is already being updated", http.StatusConflict)
-			return
+			return update.Accepted{}, fmt.Errorf("%s is already being updated", req.Service)
 		}
 	}
 	st := newStream()
@@ -214,8 +230,7 @@ func (s *Server) begin(w http.ResponseWriter, req update.Request, do work) {
 
 	go s.run(req, st, do)
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(update.Accepted{Stream: "/v1/stream/" + req.Service})
+	return update.Accepted{Stream: "/v1/stream/" + req.Service}, nil
 }
 
 // handOff gives a request to update this updater to a helper, and answers with
@@ -224,13 +239,12 @@ func (s *Server) begin(w http.ResponseWriter, req update.Request, do work) {
 // The queue follows whatever stream it is given, so it watches the helper do
 // the work and reads the helper's terminal line: completed means the helper did
 // its job, which is what completed means from any updater.
-func (s *Server) handOff(w http.ResponseWriter, req update.Request) {
+func (s *Server) handOff(req update.Request) (update.Accepted, error) {
 	h, err := s.HandOff(req)
 	if err != nil {
 		s.setHandedOff("")
-		s.begin(w, req, answer(update.Failed,
+		return s.begin(req, answer(update.Failed,
 			"could not start the helper that replaces this updater: "+err.Error()))
-		return
 	}
 	s.setHandedOff(h.Name)
 	s.logf("%s: handed to %s, which replaces this updater", req.Service, h.Name)
@@ -250,8 +264,7 @@ func (s *Server) handOff(w http.ResponseWriter, req update.Request) {
 		s.logf("%s exited and this updater is still running: taking work again", h.Name)
 	}()
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(update.Accepted{Stream: h.Stream})
+	return update.Accepted{Stream: h.Stream}, nil
 }
 
 func (s *Server) setHandedOff(helper string) {
@@ -380,6 +393,14 @@ func (s *Server) logf(format string, args ...any) {
 // and carries no secret. A token here would mean the UI could not show why a
 // button is grey without holding one.
 func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	json.NewEncoder(w).Encode(s.Readiness())
+}
+
+// Readiness is whether work offered now would be attempted: the /v1/ready
+// answer, for a caller in the same process.
+func (s *Server) Readiness() update.Readiness {
 	s.mu.Lock()
 	helper := s.handedOff
 	s.mu.Unlock()
@@ -393,7 +414,5 @@ func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
 	case s.Ready != nil:
 		out = s.Ready()
 	}
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
-	json.NewEncoder(w).Encode(out)
+	return out
 }

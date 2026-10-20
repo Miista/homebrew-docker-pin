@@ -213,3 +213,22 @@ func (c *Client) Applicable(ctx context.Context, service string) Applicable {
 	}
 	return out
 }
+
+// Updater is everything the queue asks of an updater.
+//
+// *Client asks one in another process, over HTTP. In duva v5 the updater runs
+// in the queue's process, and answers the same four questions directly; the
+// queue cannot tell the difference, which is the point of the contract.
+type Updater interface {
+	// Apply starts a request and says where to watch it.
+	Apply(ctx context.Context, r Request) (Accepted, error)
+	// Watch follows a started request to its end, copying its progress to
+	// tee, and returns how it ended.
+	Watch(ctx context.Context, stream string, tee io.Writer) (Status, string, error)
+	// Ready is whether work offered now would be attempted.
+	Ready(ctx context.Context) Readiness
+	// Applicable is whether a service should be acted on at all.
+	Applicable(ctx context.Context, service string) Applicable
+}
+
+var _ Updater = (*Client)(nil)

@@ -209,7 +209,12 @@ type queueEntry struct {
 // which is what made the v3 suite flaky.
 func (s *Scenario) state() map[string]queueEntry {
 	s.t.Helper()
-	raw, err := os.ReadFile(filepath.Join(s.Dir, "queue-data", "queue.json"))
+	// v5 keeps every component's state in one /data; v4's queue had its own.
+	path := filepath.Join(s.Dir, "data", "queue.json")
+	if _, err := os.Stat(path); err != nil {
+		path = filepath.Join(s.Dir, "queue-data", "queue.json")
+	}
+	raw, err := os.ReadFile(path)
 	if err != nil {
 		return map[string]queueEntry{} // nothing queued yet
 	}

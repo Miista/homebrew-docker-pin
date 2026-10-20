@@ -141,7 +141,7 @@ func Main(args []string) {
 	if mode == "serve" {
 		err = serve(log)
 	} else {
-		err = run(log, only)
+		err = run(log, only, Options{})
 	}
 	if err != nil {
 		log.Error().Msgf("%v", err)
@@ -174,6 +174,23 @@ func health() int {
 // scheduled path would be a second implementation to keep in agreement with
 // the first.
 func serve(log zerolog.Logger) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return Serve(ctx, log, Options{})
+}
+
+// Options is what a caller in the same process supplies instead of the
+// environment.
+type Options struct {
+	// Root is the compose file. Empty means the one mounted at /compose.
+	Root string
+	// Report hands one finding to the queue, reporting whether it landed. Nil
+	// POSTs it to DUVA_WEBHOOK_URL.
+	Report func(watch.Finding) bool
+}
+
+// Serve checks once now and then on DUVA_SCHEDULE, until ctx is done.
+func Serve(ctx context.Context, log zerolog.Logger, opts Options) error {
 	expr := scheduleFromEnv()
 	// Validated before the first check rather than at the first tick: a
 	// schedule that does not parse should stop this now, not in a day, with
@@ -183,14 +200,11 @@ func serve(log zerolog.Logger) error {
 	}
 	log.Info().Msgf("checking on schedule %q", expr)
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
 	// Once at startup, rather than waiting for the first tick. A daily
 	// schedule would otherwise leave a freshly deployed watcher silent for
 	// up to a day, and it is what makes restarting the container a way to
 	// ask for a check now.
-	if err := run(log, ""); err != nil {
+	if err := run(log, "", opts); err != nil {
 		log.Error().Msgf("%v", err)
 	}
 
@@ -212,7 +226,7 @@ func serve(log zerolog.Logger) error {
 			log.Info().Msg("shutting down")
 			return nil
 		case <-timer.C:
-			if err := run(log, ""); err != nil {
+			if err := run(log, "", opts); err != nil {
 				// A failed check is not a reason to stop checking: the next
 				// one may find the registry back.
 				log.Error().Msgf("%v", err)
@@ -221,7 +235,7 @@ func serve(log zerolog.Logger) error {
 	}
 }
 
-func run(log zerolog.Logger, only string) error {
+func run(log zerolog.Logger, only string, opts Options) error {
 	host := os.Getenv("DUVA_HOST")
 	if host == "" {
 		if h, err := os.Hostname(); err == nil && h != "" {
@@ -231,9 +245,12 @@ func run(log zerolog.Logger, only string) error {
 		}
 	}
 
-	root, err := projectFile()
-	if err != nil {
-		return err
+	root := opts.Root
+	if root == "" {
+		var err error
+		if root, err = projectFile(); err != nil {
+			return err
+		}
 	}
 
 	mem, err := loadMemory(log)
@@ -276,17 +293,24 @@ func run(log zerolog.Logger, only string) error {
 		TagDigest: registry.RemoteDigest,
 	}
 
-	reporter := newReporter(os.Getenv("DUVA_WEBHOOK_URL"), host, log)
+	report := opts.Report
+	var reporter *reporter
+	if report == nil {
+		reporter = newReporter(os.Getenv("DUVA_WEBHOOK_URL"), host, log)
+		report = reporter.report
+	}
 
 	// The backlog first: a webhook that has come back should hear what earlier
 	// runs could not hand on before it hears anything new.
-	handHeld(mem, reporter.report, log)
+	handHeld(mem, report, log)
 
-	found, failed := checkAll(services, mem, reg, reporter.report, log)
+	found, failed := checkAll(services, mem, reg, report, log)
 
 	log.Info().Msgf("check complete: %d new tag(s) across %d service(s), %d could not be checked",
 		found, len(services), failed)
-	reporter.summarise()
+	if reporter != nil {
+		reporter.summarise()
+	}
 
 	// Saved whatever happened. Each service's cutoff moved only if that
 	// service was checked, and anything that could not be handed on is held --
