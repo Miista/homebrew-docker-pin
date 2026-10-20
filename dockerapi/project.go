@@ -37,8 +37,15 @@ var realSelf = selfFuncs{
 	Label:       containerLabel,
 }
 
-// cgroupID matches the 64-hex container id docker leaves in the mount table.
-var cgroupID = regexp.MustCompile(`[0-9a-f]{64}`)
+// cgroupID matches the container id docker leaves in the mount table, in the
+// path of the files it bind-mounts into every container (/etc/hostname,
+// /etc/hosts, /etc/resolv.conf).
+//
+// Anchored to /containers/, not any 64-hex string: an anonymous volume is
+// named by 64 hex characters too, and is mounted earlier in the table. An
+// image declaring VOLUME made duva take that volume's name for its own id,
+// and then fail to find itself.
+var cgroupID = regexp.MustCompile(`/containers/([0-9a-f]{64})/`)
 
 // containerID finds the id of the container this process runs in.
 //
@@ -48,8 +55,8 @@ var cgroupID = regexp.MustCompile(`[0-9a-f]{64}`)
 // first and the hostname is the fallback.
 func containerID() (string, error) {
 	if b, err := os.ReadFile("/proc/self/mountinfo"); err == nil {
-		if id := cgroupID.Find(b); id != nil {
-			return string(id), nil
+		if m := cgroupID.FindSubmatch(b); m != nil {
+			return string(m[1]), nil
 		}
 	}
 	host, err := os.Hostname()

@@ -1,6 +1,10 @@
 package dockerapi
 
-import "testing"
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
 
 // splitRef separates what to pull from what to pull it by. Getting it wrong is
 // quiet: a reference split at the wrong colon still looks like a reference, and
@@ -126,5 +130,38 @@ func TestRegistryAuthIsAnonymousWithoutBothHalves(t *testing.T) {
 			t.Errorf("user=%q password=%q should pull anonymously, got %q",
 				c.user, c.pass, got)
 		}
+	}
+}
+
+// Compose declares an image's anonymous volume in HostConfig.Mounts itself,
+// by name. Copied across as it is, that already carries the volume over; a
+// bind added for the same path as well was a duplicate mount point, which the
+// daemon refused after the old container was gone. Trimmed from a real
+// container: compose v2, an image with VOLUME ["/data"].
+func TestCreateSpec_DoesNotBindWhatComposeAlreadyMounts(t *testing.T) {
+	var spec containerSpec
+	if err := json.Unmarshal([]byte(`{
+		"Config": {"Image": "duva:old", "Volumes": {"/data": {}}},
+		"HostConfig": {
+			"Binds": ["/var/run/docker.sock:/var/run/docker.sock:rw"],
+			"Mounts": [{"Type": "volume", "Source": "ab02418a347268a259f04958a54d44203a0cb56500600fbc886332875fdafece", "Target": "/data"}]
+		},
+		"Mounts": [
+			{"Type": "bind", "Destination": "/var/run/docker.sock", "RW": true},
+			{"Type": "volume", "Name": "ab02418a347268a259f04958a54d44203a0cb56500600fbc886332875fdafece", "Destination": "/data", "RW": true}
+		]
+	}`), &spec); err != nil {
+		t.Fatal(err)
+	}
+
+	host := createSpec(spec, "duva:new")["HostConfig"].(map[string]any)
+
+	for _, b := range toStrings(host["Binds"]) {
+		if strings.Contains(b, ":/data") {
+			t.Errorf("bound /data a second time: %q", b)
+		}
+	}
+	if got := mountTargets(host["Mounts"]); len(got) != 1 || got[0] != "/data" {
+		t.Errorf("Mounts = %v, want compose's /data carried over", got)
 	}
 }

@@ -183,6 +183,15 @@ func createSpec(spec containerSpec, image string) map[string]any {
 			bound[parts[1]] = true
 		}
 	}
+	// HostConfig.Mounts is copied across as it is, so whatever it already
+	// mounts is carried over without a bind. Compose puts an image's
+	// anonymous volumes there itself -- by name, so they survive its own
+	// recreates -- and a bind added for the same path is a second mount at
+	// one destination: the daemon refuses the create with "Duplicate mount
+	// point", after the old container has already been removed.
+	for _, m := range mountTargets(host["Mounts"]) {
+		bound[m] = true
+	}
 	for _, m := range spec.Mounts {
 		if m.Type != "volume" || m.Name == "" || bound[m.Destination] {
 			continue
@@ -210,6 +219,20 @@ func createSpec(spec containerSpec, image string) map[string]any {
 		"EndpointsConfig": spec.NetworkSettings.Networks,
 	}
 	return cfg
+}
+
+// mountTargets lists where HostConfig.Mounts mounts things.
+func mountTargets(v any) []string {
+	list, _ := v.([]any)
+	var out []string
+	for _, item := range list {
+		if m, ok := item.(map[string]any); ok {
+			if target, ok := m["Target"].(string); ok && target != "" {
+				out = append(out, target)
+			}
+		}
+	}
+	return out
 }
 
 func toStrings(v any) []string {

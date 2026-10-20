@@ -73,9 +73,23 @@ func TestProject_LabelFailureIsReported(t *testing.T) {
 func TestCgroupID_FindsTheContainerID(t *testing.T) {
 	const line = "2887 2699 0:283 / /etc/hosts rw,relatime - ext4 /dev/vda1 rw " +
 		"/var/lib/docker/containers/5511a8ba8d1374ae32415569b3e231ead03a1f55e2017cf6baad72d0566b1fed/hosts"
-	got := cgroupID.FindString(line)
+	m := cgroupID.FindStringSubmatch(line)
 	want := "5511a8ba8d1374ae32415569b3e231ead03a1f55e2017cf6baad72d0566b1fed"
-	if got != want {
-		t.Errorf("got %q, want %q", got, want)
+	if m == nil || m[1] != want {
+		t.Errorf("got %q, want %q", m, want)
+	}
+}
+
+// An anonymous volume is named by 64 hex characters too, and an image that
+// declares VOLUME puts one in the table before the container's own files.
+// Taking the first 64-hex string found the volume, and duva could not find
+// itself. Lines from a real container with VOLUME ["/data"].
+func TestCgroupID_SkipsAnAnonymousVolume(t *testing.T) {
+	const table = "552 537 253:17 /docker/volumes/cdb15fbe5d64af9dc77e0f6ec2ef0e6107099a7ad3e6c2407119b0e08a49b0dd/_data /data rw,relatime master:134 - ext4 /dev/vdb1 rw\n" +
+		"554 537 253:17 /docker/containers/e5779e30dae4bc3d7941f1423bfe13f2df3c5a5fbd63c1ac9656ba22df1082b5/resolv.conf /etc/resolv.conf rw,relatime - ext4 /dev/vdb1 rw\n"
+	m := cgroupID.FindStringSubmatch(table)
+	want := "e5779e30dae4bc3d7941f1423bfe13f2df3c5a5fbd63c1ac9656ba22df1082b5"
+	if m == nil || m[1] != want {
+		t.Errorf("got %q, want the container's id %q", m, want)
 	}
 }
