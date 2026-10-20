@@ -2,6 +2,7 @@ package queue
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -151,9 +152,14 @@ const (
 )
 
 func (s *Server) snapshot(w http.ResponseWriter, r *http.Request) {
-	canApply, blocker, whyNot := s.actorReadiness()
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(Snapshot{
+	json.NewEncoder(w).Encode(s.Snapshot())
+}
+
+// Snapshot is what /v1/snapshot answers, for a UI in the same process.
+func (s *Server) Snapshot() Snapshot {
+	canApply, blocker, whyNot := s.actorReadiness()
+	return Snapshot{
 		Host:     s.Host,
 		Version:  s.Version,
 		Pending:  s.Queue.List(),
@@ -161,7 +167,7 @@ func (s *Server) snapshot(w http.ResponseWriter, r *http.Request) {
 		Blocker:  blocker,
 		WhyNot:   whyNot,
 		Applying: s.applying(),
-	})
+	}
 }
 
 // ApplyingReporter is an Applier that can say what it is working on.
@@ -196,31 +202,35 @@ func (s *Server) apply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	writeMessage(w, s.Approve(service))
+}
+
+// Approve starts applying what is queued for a service: what /v1/apply
+// does, for a UI in the same process. The answer is a message for a person,
+// empty when it started.
+func (s *Server) Approve(service string) string {
 	// No updater is a configuration, not a fault: a queue without one queues
 	// every decision and applies nothing, which is how this runs before an
 	// updater is trusted with the socket. Said plainly, and before the queue is
 	// touched -- an entry must not leave the queue for an apply that cannot
 	// happen.
 	if s.Applier == nil {
-		writeMessage(w, "no actor is configured, so nothing can be applied from here")
-		return
+		return "no actor is configured, so nothing can be applied from here"
 	}
 
 	e, ok := s.Queue.Get(service)
 	if !ok {
-		writeMessage(w, "nothing is queued for "+service)
-		return
+		return "nothing is queued for " + service
 	}
 	if err := s.Applier.Start(e); err != nil {
-		writeMessage(w, err.Error())
-		return
+		return err.Error()
 	}
 	// Approved is no longer waiting on a person, but it is not applied either
 	// until the updater says so. The entry stays in the queue until then --
 	// removing it here meant a failed apply left no trace anywhere that the
 	// service still needed the update. The applier removes it once the
 	// updater reports success.
-	writeMessage(w, "")
+	return ""
 }
 
 // stream relays an in-flight apply's progress.
@@ -242,6 +252,17 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	s.Applier.Stream(service, w, r)
+}
+
+// Stream relays an in-flight apply's progress, for a UI in the same process.
+func (s *Server) Stream(service string, w http.ResponseWriter, r *http.Request) error {
+	if s.Applier == nil {
+		return fmt.Errorf("no actor is configured, so nothing is ever in flight")
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	s.Applier.Stream(service, w, r)
+	return nil
 }
 
 func writeMessage(w http.ResponseWriter, message string) {

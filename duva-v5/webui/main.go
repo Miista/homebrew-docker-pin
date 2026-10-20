@@ -93,9 +93,33 @@ func health() int {
 }
 
 func run(log zerolog.Logger) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return Run(ctx, log, Options{})
+}
+
+// Options is what a caller in the same process supplies.
+type Options struct {
+	// Local is the queue in this process, listed first. The rest come from
+	// DUVA_QUEUES, which may then be empty: a UI over its own host alone is
+	// still a UI over a queue.
+	Local *ui.Upstream
+	// Addr is where to listen. Empty is :8080.
+	Addr string
+}
+
+// Run serves the page until ctx is done.
+func Run(ctx context.Context, log zerolog.Logger, opts Options) error {
+	listen := opts.Addr
+	if listen == "" {
+		listen = addr
+	}
 	queues, err := parseQueues(os.Getenv("DUVA_QUEUES"), tokenFromEnv)
 	if err != nil {
 		return fmt.Errorf("DUVA_QUEUES: %w", err)
+	}
+	if opts.Local != nil {
+		queues = append([]ui.Upstream{*opts.Local}, queues...)
 	}
 	// Refusing rather than serving an empty page: with no queues every
 	// reload would say "nothing waiting for approval", which is the single
@@ -112,9 +136,6 @@ func run(log zerolog.Logger) error {
 		log.Warn().Msgf("could not reach the queue on %s, so its queue is not shown: %s", host, err)
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
 	// Sign-in is owned by authy: OIDC when the DUVA_UI_OIDC_* variables are
 	// set, otherwise a local account the first visitor creates.
 	// DUVA_UI_AUTH_DISABLED=true turns the gate off (gate is nil and Wrap
@@ -129,7 +150,7 @@ func run(log zerolog.Logger) error {
 	}
 
 	srv := &http.Server{
-		Addr: addr,
+		Addr: listen,
 		Handler: newHandler(&ui.Server{
 			Source:   collector,
 			Approver: approver(collector, log),
@@ -140,6 +161,10 @@ func run(log zerolog.Logger) error {
 
 	go func() {
 		for _, d := range queues {
+			if d.Local != nil {
+				log.Info().Msgf("serving the queue on %s, in this process", d.Host)
+				continue
+			}
 			if d.Token == "" {
 				// Worth a line each: a queue that minted its own token
 				// answers nothing without it, and the symptom is a host that
@@ -149,7 +174,7 @@ func run(log zerolog.Logger) error {
 			}
 			log.Info().Msgf("serving the queue on %s at %s", d.Host, d.URL)
 		}
-		log.Info().Msgf("listening on %s", addr)
+		log.Info().Msgf("listening on %s", listen)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Error().Msgf("stopped serving: %v", err)
 		}

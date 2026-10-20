@@ -36,6 +36,19 @@ type Upstream struct {
 	URL string
 	// Token is the bearer token it requires.
 	Token string
+	// Local is the queue in this process, when it is. Set, it is asked
+	// directly and URL and Token are not used: the queue on the UI's own
+	// host is a call away, not a request.
+	Local LocalQueue
+}
+
+// LocalQueue is a queue in the UI's own process: the three things the UI
+// asks of a queue, answered without HTTP.
+type LocalQueue interface {
+	Snapshot() queue.Snapshot
+	// Approve starts an apply; the answer is a message, empty on success.
+	Approve(service string) string
+	Stream(service string, w http.ResponseWriter, r *http.Request) error
 }
 
 // Collector fans out over queues and implements what the page renders from.
@@ -160,6 +173,9 @@ func (c *Collector) Collect() {
 
 // fetch reads one upstream's queue.
 func (c *Collector) fetch(d Upstream) (queue.Snapshot, error) {
+	if d.Local != nil {
+		return d.Local.Snapshot(), nil
+	}
 	req, err := http.NewRequest(http.MethodGet, strings.TrimSuffix(d.URL, "/")+"/v1/snapshot", nil)
 	if err != nil {
 		return queue.Snapshot{}, err
@@ -295,6 +311,12 @@ func (c *Collector) Approve(key string) error {
 		if d.Host != host {
 			continue
 		}
+		if d.Local != nil {
+			if msg := d.Local.Approve(service); msg != "" {
+				return fmt.Errorf("%s", msg)
+			}
+			return nil
+		}
 		req, err := http.NewRequest(http.MethodPost,
 			strings.TrimSuffix(d.URL, "/")+"/v1/apply/"+url.PathEscape(service), nil)
 		if err != nil {
@@ -392,6 +414,9 @@ func (c *Collector) Stream(key string, w http.ResponseWriter, r *http.Request) e
 	for _, d := range c.Upstreams {
 		if d.Host != host {
 			continue
+		}
+		if d.Local != nil {
+			return d.Local.Stream(service, w, r)
 		}
 		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet,
 			strings.TrimSuffix(d.URL, "/")+"/v1/stream/"+url.PathEscape(service), nil)

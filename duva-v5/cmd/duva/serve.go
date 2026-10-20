@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -15,9 +16,11 @@ import (
 
 	"github.com/Miista/homebrew-docker-pin/duva-v5/gate"
 	q "github.com/Miista/homebrew-docker-pin/duva-v5/internal/queue"
+	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/ui"
 	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/watch"
 	"github.com/Miista/homebrew-docker-pin/duva-v5/updater"
 	"github.com/Miista/homebrew-docker-pin/duva-v5/watcher"
+	"github.com/Miista/homebrew-docker-pin/duva-v5/webui"
 )
 
 // serve runs watch, queue and updater in this process.
@@ -26,6 +29,11 @@ import (
 // instead of HTTP: the watcher hands a finding to the queue's Handle, and the
 // queue applies through the updater's Local. Only the queue's API still
 // listens, because a UI on another host reads it.
+//
+// With DUVA_UI set it serves the page too, on uiAddr: this host's queue by
+// call, other hosts' through DUVA_QUEUES as before. On its own port, not the
+// queue API's, because the page is published to the internet and the API is
+// not, and sharing a port would publish both.
 //
 // The project is the updater's -- DUVA_REPO, mounted at the path it has on
 // the host -- and every component reads that one, rather than v4's read-only
@@ -50,7 +58,7 @@ func serve() error {
 	defer stop()
 
 	var wg sync.WaitGroup
-	failed := make(chan error, 2)
+	failed := make(chan error, 3)
 	run := func(name string, fn func(context.Context) error) {
 		wg.Add(1)
 		go func() {
@@ -68,6 +76,15 @@ func serve() error {
 		})
 	})
 
+	if withUI, err := boolEnv("DUVA_UI"); err != nil {
+		return err
+	} else if withUI {
+		local := &ui.Upstream{Host: queue.Host(), Local: queue.API}
+		run("ui", func(ctx context.Context) error {
+			return webui.Run(ctx, component(log, "ui"), webui.Options{Local: local, Addr: uiAddr})
+		})
+	}
+
 	// One component giving up takes the process with it, and Docker's
 	// restart policy brings all of them back. A duva that keeps watching
 	// with nothing left to decide is quieter than one that is down, and
@@ -81,6 +98,22 @@ func serve() error {
 	}
 	wg.Wait()
 	return err2
+}
+
+// uiAddr is where serve listens for the page when DUVA_UI is set.
+const uiAddr = ":8081"
+
+// boolEnv reads a boolean variable, false when unset.
+func boolEnv(key string) (bool, error) {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return false, nil
+	}
+	v, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false, fmt.Errorf("%s=%q is not a boolean", key, raw)
+	}
+	return v, nil
 }
 
 // hand gives one finding to the queue, reporting whether it landed.

@@ -266,6 +266,9 @@ func New(log zerolog.Logger, opts Options) (*Gate, error) {
 	}, nil
 }
 
+// Host is what this queue calls itself.
+func (g *Gate) Host() string { return g.cfg.Host }
+
 // Handle decides about one notice: what a watcher in the same process calls
 // instead of POSTing the webhook.
 func (g *Gate) Handle(n q.Notice) q.Result { return g.handler.Handle(n) }
