@@ -146,3 +146,12 @@ func versionOf(file string) (int, error) {
 	}
 	return strconv.Atoi(digits)
 }
+
+// Backup writes a consistent copy of the database to path, which must not
+// exist. VACUUM INTO rather than copying the file: a copy of a live WAL
+// database can miss what is still in the log, and a copy taken mid-write is
+// not a database at all.
+func (s *Store) Backup(path string) error {
+	_, err := s.db.Exec(`VACUUM INTO ?`, path)
+	return err
+}

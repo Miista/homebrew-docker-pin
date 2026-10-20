@@ -73,8 +73,8 @@ type Server struct {
 	Approver Approver
 	// Actor names who a request is from, for the record of an approval.
 	// Nil records no one in particular.
-	Actor func(*http.Request) string
-	Version  string
+	Actor   func(*http.Request) string
+	Version string
 }
 
 // Handler returns the routes.
