@@ -140,6 +140,12 @@ and `duva-v5/README.md`.
   after the pull, which is the only point a version change's digest is
   certain. The contract's `blocked` status is that refusal. Held by
   `TestV5ABlockedReleaseIsNeverApplied`.
+- **Settings go through configy** (`internal/settings`): `DUVA_SETTING_<KEY>`
+  wins, else the store's `settings` table, else the default; an invalid value
+  is an error. What is needed before the store opens, or would lock people
+  out if edited behind the sign-in (`DUVA_REPO`, `DUVA_HOST`, `DUVA_UI`,
+  `DUVA_UI_OIDC_*`, the queue tokens and list), stays a plain variable. An
+  old name refuses to start (`settings.CheckRenamed`). configy needs Go 1.27.
 - An image that declares `VOLUME` broke two things in `dockerapi`, both fixed:
   `containerID` must match `/containers/<id>/`, not any 64-hex string, and
   `createSpec` must not bind what compose already put in `HostConfig.Mounts`.

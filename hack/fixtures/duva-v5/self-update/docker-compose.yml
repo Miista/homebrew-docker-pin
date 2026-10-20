@@ -25,11 +25,11 @@ services:
       - "${DOCKER_GID}"
     environment:
       DUVA_HOST: integration
-      DUVA_SCHEDULE: "0 3 * * *"
-      DUVA_LOG_LEVEL: debug
+      DUVA_SETTING_SCHEDULE: "0 3 * * *"
+      DUVA_SETTING_LOG_LEVEL: debug
       DUVA_QUEUE_TOKEN: integration-token
       DUVA_REPO: ${PROJECT_DIR}
-      DUVA_COMMIT_TEMPLATE: "pin {{.Container}} to {{if eq .OldVersion .NewVersion}}{{.NewDigest}}{{else}}{{.NewVersion}}{{end}}"
+      DUVA_SETTING_COMMIT_TEMPLATE: "pin {{.Container}} to {{if eq .OldVersion .NewVersion}}{{.NewDigest}}{{else}}{{.NewVersion}}{{end}}"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${PROJECT_DIR}:${PROJECT_DIR}

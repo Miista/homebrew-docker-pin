@@ -4,7 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"os"
+	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/settings"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -135,18 +135,22 @@ func loadMemory(log zerolog.Logger) (*memory, error) {
 	}
 	week := time.Now().Add(-defaultWindow)
 
-	if raw := os.Getenv("DUVA_SINCE"); raw != "" {
+	raw, err := settings.String(settings.Since, "")
+	if err != nil {
+		return nil, err
+	}
+	if raw != "" {
 		m := &memory{st: memStore, services: map[string]serviceState{}, override: true}
 		if d, err := time.ParseDuration(raw); err == nil {
-			m.fallback, m.why = time.Now().Add(-d), fmt.Sprintf("DUVA_SINCE=%s", raw)
+			m.fallback, m.why = time.Now().Add(-d), fmt.Sprintf("%s=%s", settings.EnvVar(settings.Since), raw)
 			return m, nil
 		}
 		t, err := time.Parse(time.RFC3339, raw)
 		if err != nil {
 			return nil, fmt.Errorf(
-				"DUVA_SINCE=%q is neither a duration (168h) nor an RFC 3339 time", raw)
+				"%s is neither a duration (168h) nor an RFC 3339 time", settings.EnvVar(settings.Since))
 		}
-		m.fallback, m.why = t, "DUVA_SINCE"
+		m.fallback, m.why = t, settings.EnvVar(settings.Since)
 		return m, nil
 	}
 

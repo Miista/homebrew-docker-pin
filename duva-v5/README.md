@@ -37,9 +37,9 @@ duva:
     DUVA_QUEUE_TOKEN: ${DUVA_QUEUE_TOKEN}
     # The host prefix is literal text: this repository's commit-msg hook
     # requires <box>/<service>.
-    DUVA_COMMIT_TEMPLATE: "optiplex/{{.Container}}: update to {{if eq .OldVersion .NewVersion}}{{.NewDigest}}{{else}}{{.NewVersion}}{{end}}"
-    DUVA_NTFY_ENDPOINT: https://ntfy.example.com
-    DUVA_NTFY_TOPIC: duva
+    DUVA_SETTING_COMMIT_TEMPLATE: "optiplex/{{.Container}}: update to {{if eq .OldVersion .NewVersion}}{{.NewDigest}}{{else}}{{.NewVersion}}{{end}}"
+    DUVA_SETTING_NTFY_ENDPOINT: https://ntfy.example.com
+    DUVA_SETTING_NTFY_TOPIC: duva
   volumes:
     # The repository at the path it has on the host, read-write: the pin is
     # rewritten here, and a relative bind in a compose file must resolve to a
@@ -146,7 +146,7 @@ Go durations work too (`72h`); `0` or no label is no soak; an unreadable value
 is refused. There is no host-wide default.
 
 A soaking release sits in the queue as "soaking until …" and is not announced.
-It is released on the queue's reconcile, at most `DUVA_RECONCILE_INTERVAL`
+It is released on the queue's reconcile, at most `DUVA_SETTING_RECONCILE_INTERVAL`
 late (ten minutes by default), or as soon as a container event prompts one.
 From then on it is an ordinary auto-apply. Clicking Update applies it at once.
 
@@ -184,7 +184,7 @@ the last, per service, so repeated clicks cannot spend a registry's rate limit.
 ### Updating by hand
 
 The queue rechecks what is waiting against the compose file when it starts,
-every `DUVA_RECONCILE_INTERVAL`, and whenever a container is created, started,
+every `DUVA_SETTING_RECONCILE_INTERVAL`, and whenever a container is created, started,
 stopped or removed. An entry goes once the file has what it offered, or has
 moved somewhere it no longer leads from. The log says why each entry went.
 
@@ -204,27 +204,44 @@ duva's own container without its compose labels or network aliases.
 
 ## Configuration
 
+Settings are read through [configy](https://github.com/miista/configy), as in
+every app here: `DUVA_SETTING_<KEY>` (the key upper-cased, `.` as `_`) when it
+is set, and otherwise the value stored in duva's database -- where nothing
+writes yet, so in practice the environment or the default. An empty variable
+counts as unset. A value that does not parse refuses to start, never falls
+back.
+
+| setting | variable | |
+|---|---|---|
+| `commit_template` | `DUVA_SETTING_COMMIT_TEMPLATE` | the commit message; fields `.Container`, `.Image`, `.OldVersion`, `.NewVersion`, `.OldDigest`, `.NewDigest`. Unset gets a default; a template that does not render refuses to start |
+| `git.push` | `DUVA_SETTING_GIT_PUSH` | push each commit; default false |
+| `schedule` | `DUVA_SETTING_SCHEDULE` | when to look for new tags, 5-field cron; default `0 3 * * *`. Also once at startup |
+| `since` | `DUVA_SETTING_SINCE` | override how far back the next check looks (RFC 3339, or a duration such as `168h`) |
+| `reconcile_interval` | `DUVA_SETTING_RECONCILE_INTERVAL` | how often the queue rechecks what is waiting, and releases soaks; default `10m` |
+| `update_timeout` | `DUVA_SETTING_UPDATE_TIMEOUT` | how long an apply may run before it is called failed; default `30m` |
+| `ntfy.endpoint`, `ntfy.topic` | `DUVA_SETTING_NTFY_ENDPOINT`, `_TOPIC` | where to announce what waits for a person, and failed auto-applies |
+| `ntfy.click` | `DUVA_SETTING_NTFY_CLICK` | the link a notification opens, usually the page |
+| `ntfy.token` | `DUVA_SETTING_NTFY_TOKEN` | ntfy access token, when the topic needs one |
+| `log_level` | `DUVA_SETTING_LOG_LEVEL` | trace, debug, info (default), warn, error |
+| `read_only` | `DUVA_SETTING_READ_ONLY` | the page shows the queue and approves nothing |
+
+What duva needs before its database is open, or what would lock people out if
+it were edited from behind the sign-in, is a plain variable instead:
+
 | variable | |
 |---|---|
 | `DUVA_HOST` | what this host is called on the page; default the hostname |
 | `DUVA_REPO` | the repository, mounted at the path it has on the host. Required |
 | `DUVA_COMPOSE_DIR` | the compose project, relative to `DUVA_REPO`; default its root |
 | `DUVA_QUEUE_TOKEN` | the token the page must present to this host's queue. Required |
-| `DUVA_COMMIT_TEMPLATE` | the commit message; fields `.Container`, `.Image`, `.OldVersion`, `.NewVersion`, `.OldDigest`, `.NewDigest`. Unset gets a default; set-but-empty, or a template that does not render, refuses to start |
-| `DUVA_GIT_PUSH` | push each commit; default false |
-| `DUVA_SCHEDULE` | when to look for new tags, 5-field cron; default `0 3 * * *`. Also once at startup |
-| `DUVA_SINCE` | override how far back the next check looks (RFC 3339, or a duration such as `168h`) |
-| `DUVA_RECONCILE_INTERVAL` | how often the queue rechecks what is waiting, and releases soaks; default `10m` |
-| `DUVA_UPDATE_TIMEOUT` | how long an apply may run before it is called failed; default `30m` |
-| `DUVA_NTFY_ENDPOINT`, `DUVA_NTFY_TOPIC` | where to announce what waits for a person, and failed auto-applies |
-| `DUVA_NTFY_CLICK` | the link a notification opens, usually the page |
-| `NTFY_TOKEN` | ntfy access token, when the topic needs one |
-| `DUVA_LOG_LEVEL` | trace, debug, info (default), warn, error |
 | `DUVA_UI` | serve the page on 8081 |
 | `DUVA_UI_OIDC_ISSUER`, `_CLIENT_ID`, `_CLIENT_SECRET`, `_BASE_URL` | sign-in; all four required with `DUVA_UI` |
 | `DUVA_QUEUES` | the other hosts' queues, `host=url,host=url` |
 | `DUVA_QUEUE_TOKEN_<HOST>` | each other host's `DUVA_QUEUE_TOKEN` |
-| `DUVA_READ_ONLY` | the page shows the queue and approves nothing |
+
+A setting set under its old name (`DUVA_SCHEDULE`, `NTFY_TOKEN`, ...) refuses
+to start, naming the new one: read under the old name it would be silently
+ignored, and duva would run on a default nobody chose.
 
 `/data` holds `duva.db`, a SQLite database -- what is waiting, the history of
 every decision and who made it, the blocklist, the services duva knows, and
@@ -244,7 +261,9 @@ v5 replaces the four v4 containers on each host with one.
    `detector.json` out of the watcher's, with `docker cp`, into v5's `/data`
    before its first start. v5 imports them into its database on that start
    and renames them `.migrated`; going back to v4 can rename them back.
-2. **Rename and drop variables.** `DUVA_WEBHOOK_URL`, `DUVA_UPDATE_URL` and
+2. **Rename and drop variables.** Settings are `DUVA_SETTING_*` now (see
+   Configuration); duva names any it finds under the old name.
+   `DUVA_WEBHOOK_URL`, `DUVA_UPDATE_URL` and
    `DUVA_UPDATE_TOKEN` are gone: nothing talks over a network inside a host
    any more. The page's local account and `DUVA_UI_AUTH_DISABLED` are gone.
 3. **Set `DUVA_QUEUE_TOKEN` on every host.** v4 minted one when it was unset;

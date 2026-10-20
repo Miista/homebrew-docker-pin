@@ -3,8 +3,8 @@ package gate
 import (
 	"bytes"
 	"fmt"
+	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/settings"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -42,30 +42,41 @@ type ntfy struct {
 // Nil means nobody is notified, which is a legitimate way to run a queue and
 // the default: this host had no notifier before and must not gain one by
 // upgrading.
-func newNtfy(log zerolog.Logger) *ntfy {
-	endpoint := strings.TrimSuffix(os.Getenv("DUVA_NTFY_ENDPOINT"), "/")
-	if endpoint == "" {
-		return nil
+func newNtfy(log zerolog.Logger) (*ntfy, error) {
+	var endpoint, topic, token, click string
+	for _, s := range []struct {
+		key string
+		to  *string
+	}{{settings.NtfyEndpoint, &endpoint}, {settings.NtfyTopic, &topic}, {settings.NtfyToken, &token}, {settings.NtfyClick, &click}} {
+		v, err := settings.String(s.key, "")
+		if err != nil {
+			return nil, err
+		}
+		*s.to = v
 	}
-	topic := os.Getenv("DUVA_NTFY_TOPIC")
+	endpoint = strings.TrimSuffix(endpoint, "/")
+	if endpoint == "" {
+		return nil, nil
+	}
 	if topic == "" {
 		// An endpoint with no topic is a half-configuration, and publishing
 		// to a guessed topic would be worse than saying so.
-		log.Warn().Msg("DUVA_NTFY_ENDPOINT is set but DUVA_NTFY_TOPIC is not, so nothing will be notified")
-		return nil
+		log.Warn().Msgf("%s is set but %s is not, so nothing will be notified",
+			settings.EnvVar(settings.NtfyEndpoint), settings.EnvVar(settings.NtfyTopic))
+		return nil, nil
 	}
 	n := &ntfy{
 		endpoint: endpoint,
 		topic:    topic,
-		token:    os.Getenv("NTFY_TOKEN"),
-		clickURL: os.Getenv("DUVA_NTFY_CLICK"),
+		token:    token,
+		clickURL: click,
 		// Short: a notification nobody is waiting on must not hold a
 		// watcher's request open.
 		client: &http.Client{Timeout: 10 * time.Second},
 		log:    log,
 	}
 	log.Info().Msgf("notifying %s on topic %q", endpoint, topic)
-	return n
+	return n, nil
 }
 
 // What a notification is about.

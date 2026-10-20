@@ -23,6 +23,7 @@ package webui
 import (
 	"context"
 	"fmt"
+	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/settings"
 	"net/http"
 	"os"
 	"strconv"
@@ -92,12 +93,16 @@ func Run(ctx context.Context, log zerolog.Logger, opts Options) error {
 	if err != nil {
 		return fmt.Errorf("auth: %w", err)
 	}
+	ap, err := approver(collector, log)
+	if err != nil {
+		return err
+	}
 
 	srv := &http.Server{
 		Addr: listen,
 		Handler: newHandler(&ui.Server{
 			Source:   collector,
-			Approver: approver(collector, log),
+			Approver: ap,
 			Actor:    signedIn,
 			Version:  Version,
 		}, gate),
@@ -144,12 +149,16 @@ func newHandler(s *ui.Server, gate *authy.Gate) http.Handler {
 // Nil rather than a refusing implementation, because ui.Server leaves the
 // endpoint unregistered when there is none: a UI meant only to report should
 // not carry a route that triggers updates, even one that says no.
-func approver(c *ui.Collector, log zerolog.Logger) ui.Approver {
-	if !boolEnv("DUVA_READ_ONLY", false) {
-		return &loggedApprover{c: c, log: log}
+func approver(c *ui.Collector, log zerolog.Logger) (ui.Approver, error) {
+	readOnly, err := settings.Bool(settings.ReadOnly, false)
+	if err != nil {
+		return nil, err
+	}
+	if !readOnly {
+		return &loggedApprover{c: c, log: log}, nil
 	}
 	log.Info().Msg("read-only: the page will show the queue and nothing can be approved through it")
-	return nil
+	return nil, nil
 }
 
 // loggedApprover records who was approved before asking the queue to do it.

@@ -25,6 +25,7 @@ package updater
 import (
 	"errors"
 	"fmt"
+	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/settings"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -136,7 +137,8 @@ func New(log zerolog.Logger, blocked func(image, digest string) (string, bool)) 
 // SelfUpdate is the helper's whole life, started as `duva self-update`: see
 // selfUpdate.
 func SelfUpdate(args []string) error {
-	return selfUpdate(newLogger(os.Getenv("DUVA_LOG_LEVEL")), args)
+	level, _ := settings.String(settings.LogLevel, "")
+	return selfUpdate(newLogger(level), args)
 }
 
 // ProjectFile is the compose file the updater rewrites: DUVA_REPO, and
@@ -163,7 +165,9 @@ func setup() (push bool, tmpl string, err error) {
 		return false, "", err
 	}
 
-	push = boolEnv("DUVA_GIT_PUSH", false)
+	if push, err = settings.Bool(settings.GitPush, false); err != nil {
+		return false, "", err
+	}
 
 	// Loaded once, at startup, and a bad one refuses to start. A template
 	// that does not parse would otherwise be discovered by an apply -- after

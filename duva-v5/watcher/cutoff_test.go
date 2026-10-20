@@ -92,14 +92,14 @@ func TestOneServicesLineDoesNotAffectAnothers(t *testing.T) {
 // disturbing what is recorded.
 func TestSinceOverrideAcceptsADuration(t *testing.T) {
 	useTempState(t)
-	t.Setenv("DUVA_SINCE", "24h")
+	t.Setenv("DUVA_SETTING_SINCE", "24h")
 
 	mem := loadOrFail(t)
 	got := mem.Cutoff("app")
 	if d := time.Since(got); d < 23*time.Hour || d > 25*time.Hour {
 		t.Errorf("cutoff is %v ago, want about 24h", d)
 	}
-	if !strings.Contains(mem.why, "DUVA_SINCE") {
+	if !strings.Contains(mem.why, "DUVA_SETTING_SINCE") {
 		t.Errorf("why = %q, want it to name the override", mem.why)
 	}
 }
@@ -107,7 +107,7 @@ func TestSinceOverrideAcceptsADuration(t *testing.T) {
 func TestSinceOverrideAcceptsATimestamp(t *testing.T) {
 	useTempState(t)
 	want := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
-	t.Setenv("DUVA_SINCE", want.Format(time.RFC3339))
+	t.Setenv("DUVA_SETTING_SINCE", want.Format(time.RFC3339))
 
 	if got := loadOrFail(t).Cutoff("app"); !got.Equal(want) {
 		t.Errorf("cutoff = %v, want %v", got, want)
@@ -125,14 +125,14 @@ func TestAnOverrideRecordsNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	t.Setenv("DUVA_SINCE", "1h")
+	t.Setenv("DUVA_SETTING_SINCE", "1h")
 	overridden := loadOrFail(t)
 	overridden.Checked("app", time.Now())
 	if err := overridden.save(); err != nil {
 		t.Fatal(err)
 	}
 
-	t.Setenv("DUVA_SINCE", "")
+	t.Setenv("DUVA_SETTING_SINCE", "")
 	if got := loadOrFail(t).Cutoff("app"); !got.Equal(recorded) {
 		t.Errorf("an override overwrote the recorded line: %v, want %v", got, recorded)
 	}
@@ -140,10 +140,10 @@ func TestAnOverrideRecordsNothing(t *testing.T) {
 
 func TestAMalformedSinceIsAnError(t *testing.T) {
 	useTempState(t)
-	t.Setenv("DUVA_SINCE", "yesterday-ish")
+	t.Setenv("DUVA_SETTING_SINCE", "yesterday-ish")
 
 	if _, err := loadMemory(zerolog.Nop()); err == nil {
-		t.Error("a malformed DUVA_SINCE was accepted")
+		t.Error("a malformed DUVA_SETTING_SINCE was accepted")
 	}
 }
 
@@ -252,13 +252,13 @@ func TestFirstCheckIsOnlyForAServiceWithNoHistory(t *testing.T) {
 	}
 }
 
-// An override is not a first check: DUVA_SINCE asks a question against a
+// An override is not a first check: DUVA_SETTING_SINCE asks a question against a
 // window someone chose, and widening it would make the flag mean something
 // else.
 func TestAnOverrideIsNeverAFirstCheck(t *testing.T) {
 	m := &memory{services: map[string]serviceState{}, override: true}
 	if m.FirstCheck("anything") {
-		t.Error("DUVA_SINCE was treated as a first check, so it would report more than it was asked for")
+		t.Error("DUVA_SETTING_SINCE was treated as a first check, so it would report more than it was asked for")
 	}
 }
 

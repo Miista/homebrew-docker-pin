@@ -178,11 +178,13 @@ start is the migration (`duva-v5/README.md`, "Moving from v4").
 
 ### Configuration
 
-What is left after the removals: `DUVA_HOST`, `DUVA_QUEUE_TOKEN` (required),
-`DUVA_SCHEDULE`, `DUVA_RECONCILE_INTERVAL`, `DUVA_UPDATE_TIMEOUT`,
-`DUVA_REPO`, `DUVA_COMMIT_TEMPLATE`, `DUVA_GIT_PUSH`, `DUVA_NTFY_*`,
-`DUVA_LOG_LEVEL`, and with the UI on: `DUVA_UI`, `DUVA_UI_QUEUES` (the
-**other** hosts), `DUVA_QUEUE_TOKEN_<HOST>`, `DUVA_UI_OIDC_*` (required).
+What is left after the removals: settings, read through configy as
+`DUVA_SETTING_<KEY>` (`schedule`, `reconcile_interval`, `update_timeout`,
+`commit_template`, `git.push`, `ntfy.*`, `log_level`, `read_only`, `since`),
+and the plain variables needed before the store opens or that would lock
+people out if edited: `DUVA_HOST`, `DUVA_REPO`, `DUVA_COMPOSE_DIR`,
+`DUVA_QUEUE_TOKEN` (required), and with the UI on: `DUVA_UI`, `DUVA_QUEUES`
+(the **other** hosts), `DUVA_QUEUE_TOKEN_<HOST>`, `DUVA_UI_OIDC_*` (required).
 
 ### Testing
 

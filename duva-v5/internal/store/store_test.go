@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"io/fs"
 	"path/filepath"
 	"testing"
 )
@@ -18,13 +19,24 @@ func open(t *testing.T) *Store {
 	return s
 }
 
+// latest is the newest migration's number.
+func latest(t *testing.T) int {
+	t.Helper()
+	files, _ := fs.Glob(migrations, "migrations/*.sql")
+	n, err := versionOf(files[len(files)-1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
 func TestOpenBringsTheSchemaUpToDate(t *testing.T) {
 	s := open(t)
 	v, err := s.Version()
-	if err != nil || v != 1 {
-		t.Errorf("version = %d %v, want 1", v, err)
+	if err != nil || v != latest(t) {
+		t.Errorf("version = %d %v, want %d", v, err, latest(t))
 	}
-	for _, table := range []string{"images", "services", "watch_cutoffs", "watch_held", "queue_entries", "queue_events", "blocked_releases"} {
+	for _, table := range []string{"images", "services", "watch_cutoffs", "watch_held", "settings", "queue_entries", "queue_events", "blocked_releases"} {
 		var n int
 		if err := s.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&n); err != nil || n != 1 {
 			t.Errorf("table %s is missing", table)
@@ -42,8 +54,8 @@ func TestReopeningIsIdempotent(t *testing.T) {
 		}
 		v, _ := s.Version()
 		s.Close()
-		if v != 1 {
-			t.Errorf("open %d: version %d, want 1", i, v)
+		if v != latest(t) {
+			t.Errorf("open %d: version %d, want %d", i, v, latest(t))
 		}
 	}
 }

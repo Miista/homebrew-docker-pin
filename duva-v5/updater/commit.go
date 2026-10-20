@@ -2,6 +2,7 @@ package updater
 
 import (
 	"fmt"
+	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/settings"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -109,15 +110,16 @@ func commitSubject(tmpl string, f commitFields) (string, error) {
 // default and configure nothing. Set-but-empty is an error, because someone
 // meant to say something and said nothing.
 func loadCommitTemplate() (string, error) {
-	raw, ok := os.LookupEnv("DUVA_COMMIT_TEMPLATE")
-	if !ok {
-		return defaultCommitTemplate, nil
+	// Empty is unset, as configy reads every setting: an unset compose
+	// variable must not blank the template.
+	raw, err := settings.String(settings.CommitTemplate, "")
+	if err != nil {
+		return "", err
 	}
-	tmpl := strings.TrimSpace(raw)
-	if tmpl == "" {
-		return "", fmt.Errorf("DUVA_COMMIT_TEMPLATE is set but empty")
+	if tmpl := strings.TrimSpace(raw); tmpl != "" {
+		return tmpl, nil
 	}
-	return tmpl, nil
+	return defaultCommitTemplate, nil
 }
 
 // checkMessageAccepted renders a representative subject and asks the

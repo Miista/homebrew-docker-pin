@@ -26,6 +26,7 @@ package watcher
 import (
 	"context"
 	"fmt"
+	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/settings"
 	"os"
 	"regexp"
 	"strings"
@@ -80,11 +81,8 @@ const slowCheck = 10 * time.Second
 //
 // Daily because that is how often these registries actually publish. Hourly
 // would multiply the request count by twenty-four to learn the same thing.
-func scheduleFromEnv() string {
-	if s := os.Getenv("DUVA_SCHEDULE"); s != "" {
-		return s
-	}
-	return defaultSchedule
+func scheduleFromEnv() (string, error) {
+	return settings.String(settings.Schedule, defaultSchedule)
 }
 
 const defaultSchedule = "0 3 * * *"
@@ -106,7 +104,10 @@ type Options struct {
 
 // Serve checks once now and then on DUVA_SCHEDULE, until ctx is done.
 func Serve(ctx context.Context, log zerolog.Logger, opts Options) error {
-	expr := scheduleFromEnv()
+	expr, err := scheduleFromEnv()
+	if err != nil {
+		return err
+	}
 	// Validated before the first check rather than at the first tick: a
 	// schedule that does not parse should stop this now, not in a day, with
 	// nothing in the log to say why nothing happened.

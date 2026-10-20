@@ -20,6 +20,7 @@ import (
 
 	"github.com/Miista/homebrew-docker-pin/duva-v5/gate"
 	q "github.com/Miista/homebrew-docker-pin/duva-v5/internal/queue"
+	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/settings"
 	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/store"
 	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/ui"
 	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/watch"
@@ -44,17 +45,26 @@ import (
 // the host -- and every component reads that one, rather than v4's read-only
 // copy at /compose.
 func serve() error {
-	log := newLogger(os.Getenv("DUVA_LOG_LEVEL"))
-
-	root, err := updater.ProjectFile()
-	if err != nil {
+	if err := settings.CheckRenamed(os.Getenv); err != nil {
 		return err
 	}
+	// The store first: settings are read through it, the log level included.
 	st, err := store.Open(dataFile)
 	if err != nil {
 		return err
 	}
 	defer st.Close()
+	settings.Use(st)
+	level, err := settings.String(settings.LogLevel, "")
+	if err != nil {
+		return err
+	}
+	log := newLogger(level)
+
+	root, err := updater.ProjectFile()
+	if err != nil {
+		return err
+	}
 	if err := importJSON(st, filepath.Dir(dataFile), root, log); err != nil {
 		return err
 	}

@@ -25,6 +25,7 @@ package gate
 import (
 	"context"
 	"fmt"
+	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/settings"
 	"net/http"
 	"os"
 	"time"
@@ -137,7 +138,10 @@ type Gate struct {
 // New assembles a queue: it reads the compose project, restores what was
 // waiting, and connects whatever applies.
 func New(log zerolog.Logger, opts Options) (*Gate, error) {
-	cfg := loadConfig()
+	cfg, err := loadConfig()
+	if err != nil {
+		return nil, err
+	}
 	token, err := tokenFromEnv()
 	if err != nil {
 		return nil, err
@@ -207,7 +211,11 @@ func New(log zerolog.Logger, opts Options) (*Gate, error) {
 	if live != nil {
 		handler.Applicable = live.Applicable
 	}
-	notify(newNtfy(log), cfg.Host, handler, live)
+	notifier, err := newNtfy(log)
+	if err != nil {
+		return nil, err
+	}
+	notify(notifier, cfg.Host, handler, live)
 
 	return &Gate{
 		log:     log,
@@ -299,12 +307,8 @@ type config struct {
 	ReconcileInterval time.Duration
 }
 
-func loadConfig() config {
-	c := config{
-		Host:              os.Getenv("DUVA_HOST"),
-		ApplyTimeout:      defaultApplyTimeout,
-		ReconcileInterval: defaultReconcileInterval,
-	}
+func loadConfig() (config, error) {
+	c := config{Host: os.Getenv("DUVA_HOST")}
 	if c.Host == "" {
 		if h, err := os.Hostname(); err == nil && h != "" {
 			c.Host = h
@@ -312,26 +316,17 @@ func loadConfig() config {
 			c.Host = "unknown-host"
 		}
 	}
-	if raw := os.Getenv("DUVA_UPDATE_TIMEOUT"); raw != "" {
-		d, err := time.ParseDuration(raw)
-		if err != nil {
-			// A timeout that does not parse is not one to fall back from:
-			// the fallback would be silently different from what was asked
-			// for, and nobody would know until an apply hung.
-			fmt.Fprintf(os.Stderr, "Error: DUVA_UPDATE_TIMEOUT=%q is not a duration\n", raw)
-			os.Exit(1)
-		}
-		c.ApplyTimeout = d
+	// A duration that does not parse is not one to fall back from: the
+	// fallback would be silently different from what was asked for, and
+	// nobody would know until an apply hung.
+	var err error
+	if c.ApplyTimeout, err = settings.Duration(settings.UpdateTimeout, defaultApplyTimeout); err != nil {
+		return c, err
 	}
-	if raw := os.Getenv("DUVA_RECONCILE_INTERVAL"); raw != "" {
-		d, err := time.ParseDuration(raw)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: DUVA_RECONCILE_INTERVAL=%q is not a duration\n", raw)
-			os.Exit(1)
-		}
-		c.ReconcileInterval = d
+	if c.ReconcileInterval, err = settings.Duration(settings.ReconcileInterval, defaultReconcileInterval); err != nil {
+		return c, err
 	}
-	return c
+	return c, nil
 }
 
 // projectFile is the compose file to read, which must be at the root of what

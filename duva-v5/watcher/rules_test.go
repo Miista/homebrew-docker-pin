@@ -287,15 +287,15 @@ func TestACleanRunWithNoFindingsStillAdvances(t *testing.T) {
 // daily and checking never, and never is not something to arrive at by
 // omission.
 func TestAnUnsetScheduleIsDaily(t *testing.T) {
-	t.Setenv("DUVA_SCHEDULE", "")
-	if got := scheduleFromEnv(); got != defaultSchedule {
+	t.Setenv("DUVA_SETTING_SCHEDULE", "")
+	if got, _ := scheduleFromEnv(); got != defaultSchedule {
 		t.Errorf("schedule = %q, want the default %q", got, defaultSchedule)
 	}
 }
 
 func TestAnExplicitScheduleWins(t *testing.T) {
-	t.Setenv("DUVA_SCHEDULE", "0 */6 * * *")
-	if got := scheduleFromEnv(); got != "0 */6 * * *" {
+	t.Setenv("DUVA_SETTING_SCHEDULE", "0 */6 * * *")
+	if got, _ := scheduleFromEnv(); got != "0 */6 * * *" {
 		t.Errorf("schedule = %q, want what was set", got)
 	}
 }
@@ -312,7 +312,7 @@ func TestTheDefaultScheduleParses(t *testing.T) {
 // the first tick -- which for a daily schedule would be a day later, with
 // nothing in the log to say why nothing happened.
 func TestServeRefusesAnUnparseableSchedule(t *testing.T) {
-	t.Setenv("DUVA_SCHEDULE", "every tuesday-ish")
+	t.Setenv("DUVA_SETTING_SCHEDULE", "every tuesday-ish")
 	err := Serve(context.Background(), zerolog.Nop(), Options{})
 	if err == nil {
 		t.Fatal("an unparseable schedule was accepted")

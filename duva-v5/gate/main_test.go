@@ -11,8 +11,11 @@ import (
 
 func TestConfigDefaults(t *testing.T) {
 	t.Setenv("DUVA_HOST", "")
-	t.Setenv("DUVA_UPDATE_TIMEOUT", "")
-	c := loadConfig()
+	t.Setenv("DUVA_SETTING_UPDATE_TIMEOUT", "")
+	c, err := loadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if c.ApplyTimeout != defaultApplyTimeout {
 		t.Errorf("timeout = %v, want the default", c.ApplyTimeout)
 	}
@@ -25,9 +28,12 @@ func TestConfigDefaults(t *testing.T) {
 
 func TestConfigReadsTheEnvironment(t *testing.T) {
 	t.Setenv("DUVA_HOST", "pi")
-	t.Setenv("DUVA_UPDATE_TIMEOUT", "5m")
+	t.Setenv("DUVA_SETTING_UPDATE_TIMEOUT", "5m")
 
-	c := loadConfig()
+	c, err := loadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if c.Host != "pi" {
 		t.Errorf("host = %q", c.Host)
 	}
