@@ -2,10 +2,7 @@ package watcher
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"net/http"
-	"net/http/httptest"
 	"regexp"
 	"strings"
 	"testing"
@@ -58,13 +55,15 @@ func service(name, image, tag string) watch.Service {
 // Per service now, because the rule is: one service's failure must not move
 // or hold another's line.
 func check(t *testing.T, services []watch.Service, reg watch.Registry) (before, after map[string]time.Time, found, failed int) {
-	return checkPublishing(t, services, reg, "")
+	return checkPublishing(t, services, reg, nowhere)
 }
 
-// checkPublishing is check with a webhook. An empty url means there is nowhere
-// to publish, which is the case every other test here runs under -- and which
-// now means findings are *held* rather than dropped.
-func checkPublishing(t *testing.T, services []watch.Service, reg watch.Registry, url string) (before, after map[string]time.Time, found, failed int) {
+// nowhere takes no finding, which is the case every other test here runs
+// under -- and which means findings are *held* rather than dropped.
+func nowhere(watch.Finding) bool { return false }
+
+// checkPublishing is check handing findings to report.
+func checkPublishing(t *testing.T, services []watch.Service, reg watch.Registry, report func(watch.Finding) bool) (before, after map[string]time.Time, found, failed int) {
 	t.Helper()
 
 	mem, err := loadMemory(zerolog.Nop())
@@ -73,9 +72,8 @@ func checkPublishing(t *testing.T, services []watch.Service, reg watch.Registry,
 	}
 	before = lines(mem, services)
 
-	reporter := newReporter(url, "testhost", zerolog.Nop())
-	handHeld(mem, reporter.report, zerolog.Nop())
-	found, failed = checkAll(services, mem, reg, reporter.report, zerolog.Nop())
+	handHeld(mem, report, zerolog.Nop())
+	found, failed = checkAll(services, mem, reg, report, zerolog.Nop())
 	if err := mem.save(); err != nil {
 		t.Fatalf("save: %v", err)
 	}
@@ -330,60 +328,6 @@ func TestServeRefusesAnUnparseableSchedule(t *testing.T) {
 // and ORs as cron does. Asserting a refusal here would be asserting a rule
 // that lives in a function this never calls.
 
-// An unreachable webhook must be given up on, not retried per finding: one
-// DNS lookup each across hundreds of findings is what exhausts a resolver's
-// rate limit and costs the watcher the registry lookups it actually needs.
-func TestAnUnreachableWebhookIsTriedOnce(t *testing.T) {
-	log := zerolog.Nop()
-	// Port 9 is discard: nothing listens, so the dial is refused immediately
-	// rather than hanging on a timeout.
-	r := newReporter("http://127.0.0.1:9/notify", "testhost", log)
-
-	for i := 0; i < 50; i++ {
-		r.report(watch.Finding{Service: "app", Tag: "1.0.1"})
-	}
-
-	if !r.unreachable {
-		t.Fatal("a refused dial did not mark the webhook unreachable")
-	}
-	// One attempt, then 49 skipped without touching the network.
-	if r.skipped != 49 {
-		t.Errorf("skipped = %d, want 49 (one attempt, the rest dropped)", r.skipped)
-	}
-	// But every one of them still counts as unpublished, or the cutoff would
-	// advance past findings nothing ever heard about.
-	if r.unpublished() != 50 {
-		t.Errorf("unpublished = %d, want 50", r.unpublished())
-	}
-}
-
-// A refusal is not unreachability. A webhook that answers 500 is there, and
-// the next finding must still be offered to it -- writing it off would drop
-// findings over one bad request.
-func TestARefusalDoesNotWriteOffTheWebhook(t *testing.T) {
-	var got int
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		got++
-		http.Error(w, "no", http.StatusInternalServerError)
-	}))
-	defer srv.Close()
-
-	r := newReporter(srv.URL, "testhost", zerolog.Nop())
-	for i := 0; i < 5; i++ {
-		r.report(watch.Finding{Service: "app", Tag: "1.0.1"})
-	}
-
-	if r.unreachable {
-		t.Error("a 500 was treated as the webhook being unreachable")
-	}
-	if got != 5 {
-		t.Errorf("the webhook was offered %d of 5 findings", got)
-	}
-	if r.unpublished() != 5 {
-		t.Errorf("unpublished = %d, want 5", r.unpublished())
-	}
-}
-
 // seedCutoff gives every named service a starting line, so "advanced" means
 // something rather than "a first run wrote one".
 func seedCutoff(t *testing.T, at time.Time, services ...string) {
@@ -402,9 +346,9 @@ func seedCutoff(t *testing.T, at time.Time, services ...string) {
 
 // --- what is held, and when it is handed on ----------------------------------
 
-// No webhook configured is a legitimate way to run: findings go to the log and
-// wait. The moment there is somewhere to send them, they are sent.
-func TestFindingsHeldWithNoWebhookAreSentWhenOneAppears(t *testing.T) {
+// A queue that cannot take a finding -- its compose file unreadable for a
+// moment -- leaves it held. The next run that can hand it on does, first.
+func TestFindingsHeldAreHandedOnWhenTheQueueTakesThem(t *testing.T) {
 	useTempState(t)
 	seedCutoff(t, time.Now().Add(-48*time.Hour), "app")
 
@@ -414,7 +358,7 @@ func TestFindingsHeldWithNoWebhookAreSentWhenOneAppears(t *testing.T) {
 		dates: map[string]time.Time{"1.1.0": time.Now().Add(-time.Hour)},
 	}
 
-	// Run with nowhere to publish.
+	// Run with nothing taking findings.
 	_, _, found, _ := check(t, []watch.Service{svc}, reg.registry())
 	if found != 1 {
 		t.Fatalf("found %d, want the one new tag", found)
@@ -423,22 +367,18 @@ func TestFindingsHeldWithNoWebhookAreSentWhenOneAppears(t *testing.T) {
 		t.Fatalf("held %d findings, want the one that could not be published", h)
 	}
 
-	// A webhook appears. The backlog goes first, and the tag is not found
-	// again -- the line moved when it was *checked*, not when it was sent.
-	var got []Event
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var e Event
-		json.NewDecoder(r.Body).Decode(&e)
-		got = append(got, e)
-	}))
-	defer srv.Close()
+	// The queue takes them now. The backlog goes first, and the tag is not
+	// found again -- the line moved when it was *checked*, not when it was
+	// handed on.
+	var got []watch.Finding
+	take := func(f watch.Finding) bool { got = append(got, f); return true }
 
-	_, _, secondFound, _ := checkPublishing(t, []watch.Service{svc}, reg.registry(), srv.URL)
+	_, _, secondFound, _ := checkPublishing(t, []watch.Service{svc}, reg.registry(), take)
 	if secondFound != 0 {
 		t.Errorf("the second run found %d, want 0: the line advanced when it was checked", secondFound)
 	}
 	if len(got) != 1 || got[0].Tag != "1.1.0" {
-		t.Fatalf("the webhook received %+v, want the held 1.1.0", got)
+		t.Fatalf("the queue received %+v, want the held 1.1.0", got)
 	}
 	if h := held(t)["app"]; h != 0 {
 		t.Errorf("%d findings are still held after being handed on", h)
@@ -446,7 +386,8 @@ func TestFindingsHeldWithNoWebhookAreSentWhenOneAppears(t *testing.T) {
 }
 
 // The line moves when a service is checked, not when its findings land. That
-// separation is what stops an unreachable webhook costing a weekly re-scan.
+// separation is what stops a queue that cannot take findings costing a weekly
+// re-scan.
 func TestAnUnpublishableFindingStillAdvancesTheLine(t *testing.T) {
 	useTempState(t)
 	seedCutoff(t, time.Now().Add(-48*time.Hour), "app")
@@ -455,10 +396,9 @@ func TestAnUnpublishableFindingStillAdvancesTheLine(t *testing.T) {
 		tags:  map[string][]string{"example.com/app": {"1.1.0"}},
 		dates: map[string]time.Time{"1.1.0": time.Now().Add(-time.Hour)},
 	}
-	// Port 9 is discard: nothing listens, so the webhook is unreachable.
 	before, after, found, failed := checkPublishing(t,
 		[]watch.Service{service("app", "example.com/app", "1.0.0")},
-		reg.registry(), "http://127.0.0.1:9/notify")
+		reg.registry(), nowhere)
 
 	if found != 1 || failed != 0 {
 		t.Fatalf("found=%d failed=%d, want the tag found and the check clean", found, failed)

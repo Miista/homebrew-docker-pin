@@ -1,38 +1,23 @@
 // watcher finds tags that appeared since it last looked.
 //
 // It reads the compose project, asks each service's registry which tags
-// exist, keeps the ones published since the last check, and publishes them to
-// a webhook. It
-// knows nothing about versions: not semver, not calver, not whether 4.39.25
-// beats 4.39.20. Deciding what a tag means belongs to the gate, and a
+// exist, keeps the ones published since the last check, and hands them to the
+// queue. It knows nothing about versions: not semver, not calver, not whether
+// 4.39.25 beats 4.39.20. Deciding what a tag means belongs to the gate, and a
 // watcher that also understood versions would be a second thing that had to
 // agree with the gate about ordering.
 //
-// It does not know what is subscribed to its webhook, either. A gate, a
-// notifier, a script that appends to a file -- it publishes what it observed
-// in its own shape, and what that means is the subscriber's business.
+// Its state is two things per service: how far back to look, and what it
+// found and could not hand on yet. Losing that costs a noisy run, not a
+// rebuild -- which is why it is a cutoff and an outbox rather than a baseline
+// of what each image pointed at.
 //
-// It holds no docker socket. Its state is two things per service: how far
-// back to look, and what it found and has not handed on yet. Losing that
-// costs a noisy run, not a rebuild -- which is why it is a cutoff and an
-// outbox rather than a baseline of what each image pointed at.
-
-//	/compose   the compose project directory, read-only
 //	/data      per-service cutoffs, and findings not yet handed on
-//
-// Subcommands:
-//
-//	run [service]  check everything, or just the named service (its service
-//	               name or its container name). A schedule always checks
-//	               everything; narrowing is for asking about one thing.
-//	serve          check on DUVA_SCHEDULE
-//	health         exit 0 if the webhook is reachable
 //
 // Configuration:
 //
 //	DUVA_HOST            what this watcher calls itself
-//	DUVA_WEBHOOK_URL     where to publish findings; empty means log only
-//	DUVA_SCHEDULE        a 5-field cron expression, for `serve`
+//	DUVA_SCHEDULE        a 5-field cron expression
 //	DUVA_SINCE           override the cutoff for one run (RFC 3339, or a
 //	                         duration like 168h meaning "the last week")
 //	DUVA_LOG_LEVEL       trace/debug/info/warn/error
@@ -105,8 +90,8 @@ const defaultSchedule = "0 3 * * *"
 type Options struct {
 	// Root is the compose file. Empty means the one mounted at /compose.
 	Root string
-	// Report hands one finding to the queue, reporting whether it landed. Nil
-	// POSTs it to DUVA_WEBHOOK_URL.
+	// Report hands one finding to the queue, reporting whether it landed. A
+	// finding that did not land is held and offered again next run.
 	Report func(watch.Finding) bool
 	// Labels reads a service's tag rules from its container, by
 	// container_name. Nil reads them from the compose file.
@@ -218,23 +203,18 @@ func run(log zerolog.Logger, only string, opts Options) error {
 	}
 
 	report := opts.Report
-	var reporter *reporter
 	if report == nil {
-		reporter = newReporter(os.Getenv("DUVA_WEBHOOK_URL"), host, log)
-		report = reporter.report
+		return fmt.Errorf("nothing to hand findings to")
 	}
 
-	// The backlog first: a webhook that has come back should hear what earlier
-	// runs could not hand on before it hears anything new.
+	// The backlog first: the queue should hear what earlier runs could not
+	// hand on before it hears anything new.
 	handHeld(mem, report, log)
 
 	found, failed := checkAll(services, mem, reg, report, log)
 
 	log.Info().Msgf("check complete: %d new tag(s) across %d service(s), %d could not be checked",
 		found, len(services), failed)
-	if reporter != nil {
-		reporter.summarise()
-	}
 
 	// Saved whatever happened. Each service's cutoff moved only if that
 	// service was checked, and anything that could not be handed on is held --

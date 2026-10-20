@@ -14,7 +14,7 @@ import (
 // Two things happen per service and they are independent. A service checked
 // without error moves its cutoff, whether or not anything was published --
 // looking is not publishing. A finding that could not be handed on is held,
-// and the next run that can reach a webhook sends it.
+// and the next run offers it again.
 //
 // The rule that matters, and the one thing a watcher must never get wrong:
 // **a service's cutoff never moves past something that service published and
@@ -30,8 +30,8 @@ import (
 // service because the failure is.
 //
 // A publish failure does not hold any line at all. It holds the *finding*,
-// which is a different thing and is what makes running with no webhook
-// configured a legitimate way to run rather than a way to lose work.
+// which is a different thing: a queue that could not take one finding loses
+// nothing, and costs no re-scan.
 //
 // Split out from run so a test can drive the whole cycle -- read the memory,
 // check services against a registry that behaves however the test says, see
@@ -83,9 +83,7 @@ func checkAll(
 					f.Service, f.Tag, f.Published.Local().Format("2006-01-02 15:04:05 MST"))
 			}
 			// Held or dropped, but never merely lost. A finding that did not
-			// land waits in the memory until something can take it, which is
-			// what makes running with no webhook a legitimate way to run
-			// rather than a way to throw findings away.
+			// land waits in the memory until the queue can take it.
 			if hand(f) {
 				mem.Handed(f)
 			} else {
@@ -116,9 +114,9 @@ func checkAll(
 
 // handHeld tries to hand on what earlier runs could not.
 //
-// Before the check rather than after: a webhook that has come back should hear
-// about the backlog first, in the order it was found, rather than after a run
-// that may take minutes.
+// Before the check rather than after: the queue should hear about the
+// backlog first, in the order it was found, rather than after a run that may
+// take minutes.
 func handHeld(mem *memory, hand func(watch.Finding) bool, log zerolog.Logger) {
 	held := mem.Held()
 	if len(held) == 0 {

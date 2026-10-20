@@ -19,11 +19,9 @@ import (
 // not publishing, and conflating them is what made one unreachable registry
 // cost every other service a weekly re-scan.
 //
-// **Pending** is what was found and has not been handed on. A watcher with
-// no webhook configured is a legitimate way to run: findings go to the log
-// and wait here, and the moment a webhook exists they are sent. So is a
-// webhook that is down -- the findings are not lost, they are just still in
-// the outbox.
+// **Pending** is what was found and has not been handed on: the queue could
+// not take it -- its compose file unreadable for a moment, say. It is not
+// lost; it waits here and is offered again first thing next run.
 //
 // Per service, because both failures are per service. One image whose
 // registry refuses says nothing about whether another was checked.
