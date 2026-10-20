@@ -118,6 +118,8 @@ type Gate struct {
 	applying q.Applier
 	live     *applier
 	labels   func(container string) (map[string]string, bool, error)
+	// poke holds at most one request for a reconcile; see Poke.
+	poke chan struct{}
 }
 
 // New assembles a queue: it reads the compose project, restores what was
@@ -205,11 +207,26 @@ func New(log zerolog.Logger, opts Options) (*Gate, error) {
 		applying: applying,
 		live:     live,
 		labels:   opts.Labels,
+		poke:     make(chan struct{}, 1),
 	}, nil
 }
 
 // Host is what this queue calls itself.
 func (g *Gate) Host() string { return g.cfg.Host }
+
+// Poke asks for the queue to be reconciled now rather than on its next tick:
+// a container was created, started, stopped or removed, so what is waiting --
+// and whether a soak held for a stopped container can go -- may have changed.
+//
+// Coalesced. A request already pending absorbs this one, so a compose up that
+// starts ten containers costs one reconcile, not ten, and a caller never
+// blocks.
+func (g *Gate) Poke() {
+	select {
+	case g.poke <- struct{}{}:
+	default:
+	}
+}
 
 // Handle decides about one notice: what a watcher in the same process calls
 // instead of POSTing the webhook.
@@ -227,7 +244,7 @@ func (g *Gate) Run(ctx context.Context) error {
 
 	reconcileDone := make(chan struct{})
 	rec := &reconciler{queue: g.queue, root: g.root, interval: cfg.ReconcileInterval, log: log,
-		applier: g.applying, labels: g.labels}
+		applier: g.applying, labels: g.labels, poke: g.poke}
 	if g.live != nil {
 		rec.applicable = g.live.Applicable
 	}

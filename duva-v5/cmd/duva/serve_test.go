@@ -132,3 +132,32 @@ func TestHealthIsEveryListenerAnswering(t *testing.T) {
 		t.Errorf("nothing listening = %d, want 1", got)
 	}
 }
+
+// A stream that breaks is watched again, and every event on either pokes.
+func TestEventsAreFollowedAcrossABrokenStream(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	opened, pokes := 0, 0
+	watch := func(ctx context.Context, changed func()) error {
+		opened++
+		changed()
+		if opened == 2 {
+			cancel()
+			return nil
+		}
+		return errors.New("the daemon closed its event stream")
+	}
+	done := make(chan struct{})
+	go func() {
+		follow(ctx, zerolog.Nop(), watch, func() { pokes++ })
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("follow did not stop when ctx was done")
+	}
+	if opened != 2 || pokes != 2 {
+		t.Errorf("opened %d stream(s) and poked %d time(s), want 2 and 2", opened, pokes)
+	}
+}

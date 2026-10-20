@@ -75,6 +75,9 @@ type reconciler struct {
 	applicable func(service string) (bool, string)
 	// labels reads policy from the container; nil reads the compose file.
 	labels func(container string) (map[string]string, bool, error)
+	// poke asks for a tick now: a container started or stopped, and what is
+	// waiting may have changed with it. Nil never asks.
+	poke <-chan struct{}
 	// now is the clock, injected so a test can pin it.
 	now func() time.Time
 }
@@ -91,6 +94,9 @@ func (r *reconciler) run(done <-chan struct{}) {
 	for {
 		select {
 		case <-t.C:
+			r.tick()
+		case <-r.poke:
+			r.log.Debug().Msg("a container changed; reconciling now")
 			r.tick()
 		case <-done:
 			return

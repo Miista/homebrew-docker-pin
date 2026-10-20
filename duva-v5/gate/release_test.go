@@ -2,6 +2,8 @@ package gate
 
 import (
 	"net/http"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -13,17 +15,26 @@ import (
 
 // startRecorder is an Applier that records what it was handed.
 type startRecorder struct {
+	mu      sync.Mutex
 	started []q.Entry
 	err     error
 }
 
 func (s *startRecorder) Start(e q.Entry) error { return s.StartUnattended(e) }
 func (s *startRecorder) StartUnattended(e q.Entry) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.err != nil {
 		return s.err
 	}
 	s.started = append(s.started, e)
 	return nil
+}
+
+func (s *startRecorder) count() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.started)
 }
 func (s *startRecorder) Stream(string, http.ResponseWriter, *http.Request) {}
 
@@ -166,5 +177,35 @@ services:
 
 	if len(app.started) != 1 {
 		t.Errorf("started = %+v, want the due entry", app.started)
+	}
+}
+
+// A poke is a tick now, without waiting out the interval: a container that
+// came back releases what was held for it at once.
+func TestAPokeReconcilesNow(t *testing.T) {
+	queue, app := q.NewPending(), &startRecorder{}
+	soaking(queue, time.Now().Add(-time.Minute))
+	poke := make(chan struct{}, 1)
+	r := releaserOver(queue, app)
+	r.now = time.Now
+	r.interval = time.Hour
+	r.poke = poke
+	var running atomic.Bool
+	r.applicable = func(string) (bool, string) { return running.Load(), "stopped" }
+
+	done := make(chan struct{})
+	defer close(done)
+	go r.run(done)
+
+	time.Sleep(50 * time.Millisecond) // the first tick, which holds it
+	running.Store(true)
+	poke <- struct{}{}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for app.count() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if app.count() != 1 {
+		t.Errorf("released %d after a poke, want 1 without waiting the hour", app.count())
 	}
 }

@@ -66,7 +66,7 @@ func serve() error {
 	defer stop()
 
 	var wg sync.WaitGroup
-	failed := make(chan error, 3)
+	failed := make(chan error, 4)
 	run := func(name string, fn func(context.Context) error) {
 		wg.Add(1)
 		go func() {
@@ -83,6 +83,11 @@ func serve() error {
 			Report: func(f watch.Finding) bool { return hand(queue, f) },
 			Labels: dockerapi.Labels,
 		})
+	})
+
+	run("events", func(ctx context.Context) error {
+		follow(ctx, component(log, "events"), dockerapi.ContainerEvents, queue.Poke)
+		return nil
 	})
 
 	if withUI, err := boolEnv("DUVA_UI"); err != nil {
@@ -123,6 +128,35 @@ func boolEnv(key string) (bool, error) {
 		return false, fmt.Errorf("%s=%q is not a boolean", key, raw)
 	}
 	return v, nil
+}
+
+// follow keeps watching the daemon's container events, poking the queue on
+// each, until ctx is done.
+//
+// Never fatal. Events only make the queue look sooner: its reconcile tick
+// looks anyway, so a daemon whose stream keeps breaking costs promptness and
+// nothing else. A broken stream is opened again after a pause that doubles up
+// to a minute, and is back to quick once one has stayed up.
+func follow(ctx context.Context, log zerolog.Logger, watch func(context.Context, func()) error, poke func()) {
+	const first, ceiling = time.Second, time.Minute
+	wait := first
+	for {
+		began := time.Now()
+		err := watch(ctx, poke)
+		if ctx.Err() != nil {
+			return
+		}
+		if time.Since(began) > ceiling {
+			wait = first
+		}
+		log.Warn().Msgf("%v; watching again in %s", err, wait)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(wait):
+		}
+		wait = min(wait*2, ceiling)
+	}
 }
 
 // hand gives one finding to the queue, reporting whether it landed.
