@@ -67,11 +67,11 @@ func tokenEnv(host string) string {
 // tokenFromEnv is a host's queue token.
 //
 // Per host, with no shared fallback. There used to be one, for the operator
-// with a single token set on every queue -- but each queue mints its own when
-// none is injected, so in practice every host has a different one, and the
-// "shared" variable ended up holding whichever host was configured first. A
-// default that is really one host's secret is worse than no default: the
-// others fail with a token mismatch rather than with "no token for that host".
+// with a single token set on every queue -- but in practice every host has a
+// different one, and the "shared" variable ended up holding whichever host
+// was configured first. A default that is really one host's secret is worse
+// than no default: the others fail with a token mismatch rather than with "no
+// token for that host".
 //
 // The name is the queue's own -- DUVA_QUEUE_TOKEN_<HOST>, matching the
 // DUVA_QUEUE_TOKEN that host's queue reads -- because what is being named is

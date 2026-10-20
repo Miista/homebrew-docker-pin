@@ -1,7 +1,9 @@
 # duva v5: one binary
 
-**Status: design note, decisions locked 2026-10-19.** Nothing here is built.
-Soak (`duva.soak`, commit `2c95716`) landed in v4 first and carries over.
+**Status: phase 1 built** on `feature/duva-v5` (2026-10-20), in
+`duva-v5/`; phase 2 not started. Decisions locked 2026-10-19. Soak
+(`duva.soak`, commit `2c95716`) landed in v4 first and carries over. Where
+phase 1 came out differently from this note, the section says so.
 
 v4 split detection, gating, applying and the UI into four containers so that
 each held only what it needed. On a real host the first three run on the same
@@ -29,7 +31,7 @@ integration suite can tell whether the merge alone broke anything.
 | | decision |
 |---|---|
 | shape | one `duva` binary and image; watch, queue, updater and UI are components in one process |
-| UI | in-process, turned on by an environment variable on **one** host; one page over both hosts, as today |
+| UI | in-process, turned on by `DUVA_UI` on **one** host, on port 8081 apart from the queue API's 8080; one page over both hosts, as today |
 | other hosts | reached by the UI through the queue API |
 | identity | `container_name`, as today |
 | policy | read from the **running container's** labels, not the compose file |
@@ -152,25 +154,27 @@ while duva itself restarts.
 
 ### Self-update
 
-The container being replaced is now all of duva. The self-update helper stays,
-with one change: it reports its outcome through a file in `/data` instead of an
-HTTP stream. The sequence:
+The container being replaced is now all of duva. The self-update helper stays
+as it was, run as `duva self-update`.
 
-1. Stop starting new applies, and let any in flight finish.
-2. Record the triggering entry as being applied, and flush state.
-3. Start the helper, which replaces the container.
-4. The new process reads the helper's outcome from `/data` and completes or
-   fails the entry.
-
-`TestV4TheUpdaterUpdatesItself` becomes a test that the queue's state survives
-the handoff.
+**As built, no outcome file was needed.** The plan was for the helper to
+report its outcome through `/data` for the new process to read. In practice
+the existing pieces already settle it: a self-update is deferred while
+anything else is applying (the drain), and on success the helper commits the
+new pin, so the replacement's first reconcile drops the entry as satisfied.
+On failure the old process is still running and follows the helper's stream
+as before. `TestV5DuvaUpdatesItself` holds that the entry leaves the queue.
 
 ### State
 
-Unchanged in format: `queue.json` and `detector.json` (without its outbox)
-under one `/data`, owned by the single runtime user. On first start, v5 reads
-v4's files from their old locations if they are mounted, so the queue carries
-over.
+Unchanged in format: `queue.json` and `detector.json` under one `/data`,
+owned by the single runtime user, with the page's session key in
+`/data/auth`. The watcher keeps its outbox: a finding the queue could not take
+(its compose file unreadable for a moment) is held and offered again.
+
+**As built, v4's state carries over by copying, not code**: the formats are
+unchanged, so `docker cp` of the two files into v5's `/data` before its first
+start is the migration (`duva-v5/README.md`, "Moving from v4").
 
 ### Configuration
 
@@ -318,6 +322,5 @@ precheck. Every UI action is an event carrying the OIDC identity.
 - Socket proxy and container hardening (`read_only`, `cap_drop`,
   `no-new-privileges`).
 - `/healthz` on loopback only.
-- Constant-time token comparison.
 - The UI for several releases per service, discard, block, re-scan and
   history.

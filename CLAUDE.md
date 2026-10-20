@@ -12,8 +12,10 @@ hand.
 
 ## Modules
 
-Five modules, because Go's `internal/` is invisible across a module boundary
-and `docker pin` and duva v4 share file-format code and nothing else. They
+Six modules, because Go's `internal/` is invisible across a module boundary
+and `docker pin` and duva share file-format code and nothing else. duva v4 and
+v5 are a module each, side by side until v5 replaces v4 on both hosts, as v4
+did v3. They
 replace each other by relative path, not version: a version would mean tagging
 a release to change one line.
 
@@ -90,6 +92,43 @@ The soak counts from the watcher's publish time, so the build cache's
 
 Each binary has its own Dockerfile because each needs different things; the
 build context is the repo root since modules replace siblings by relative path.
+
+## duva v5
+
+v4's components in one process: `duva serve`. Released under `duva-v5/vX.Y`
+tags as one image, `ghcr.io/miista/duva`. See `docs/duva-v5-one-binary.md`
+and `duva-v5/README.md`.
+
+- **The same responsibilities, enforced by packages instead of processes.**
+  `watcher`, `gate` (the queue), `updater` and `webui` are the v4 binaries as
+  packages; `cmd/duva` connects them. The watcher hands findings to
+  `Gate.Handle`, the queue applies through `updater.Server.Local()`, and the
+  page reads its own host's queue through `ui.LocalQueue`. The rules above
+  about what watch, queue and updater may know still hold.
+- **Nothing inside a host talks over a network.** No `/v1/notify`, no updater
+  HTTP API, no internal URLs or tokens. The queue API on 8080 exists only for
+  the page on another host; the page is on 8081, apart, because the page is
+  published and the API is not. The self-update helper still serves its
+  progress over HTTP, read with `update.WatchURL`.
+- **Policy is read from the running container's labels** (`dockerapi.Labels`,
+  by `container_name`), not the compose file: a label edited but not
+  deployed has not taken effect. The pin still comes from the file. This is
+  only safe because recreate is the API clone, which takes nothing but the
+  image from the file; `compose up -d <service>` would deploy undeployed
+  edits along with it. Held by `TestV5PolicyComesFromTheRunningContainer`.
+- **Auth is OIDC, always.** The page refuses to start without all four
+  `DUVA_UI_OIDC_*`, and refuses `DUVA_UI_AUTH_DISABLED`,
+  `DUVA_UI_LOCAL_ENABLED` and `DUVA_UI_AUTH_PUBLIC_PATHS` by name. The queue
+  refuses to start without `DUVA_QUEUE_TOKEN`. The page runs in the process
+  holding the docker socket; that risk was accepted (see the design note).
+- **Each component recovers from its own panic**; three in ten minutes takes
+  the process down. Container events poke the queue's reconcile; the tick is
+  the fallback.
+- **Self-update needs nothing new:** the replacement's first reconcile drops
+  the entry the helper's commit already satisfied.
+- An image that declares `VOLUME` broke two things in `dockerapi`, both fixed:
+  `containerID` must match `/containers/<id>/`, not any 64-hex string, and
+  `createSpec` must not bind what compose already put in `HostConfig.Mounts`.
 
 ## `docker pin` semantics
 
