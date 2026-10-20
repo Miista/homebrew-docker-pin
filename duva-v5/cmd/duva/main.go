@@ -20,7 +20,7 @@ import (
 
 var version = "dev"
 
-const usage = "Usage: duva <serve|queue|health|version>"
+const usage = "Usage: duva <serve|queue|discard|block|unblock|check|rescan|health|version>"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -44,6 +44,11 @@ func main() {
 		}
 	case "queue":
 		if err := listQueue(dataFile); err != nil {
+			fmt.Fprintln(os.Stderr, "Error:", err)
+			os.Exit(1)
+		}
+	case "discard", "block", "unblock", "check", "rescan":
+		if err := act(os.Args[1], os.Args[2:]); err != nil {
 			fmt.Fprintln(os.Stderr, "Error:", err)
 			os.Exit(1)
 		}

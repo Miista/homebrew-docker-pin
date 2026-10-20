@@ -113,7 +113,7 @@ func TestApproveGoesToTheNamedHost(t *testing.T) {
 		{Host: "optiplex", URL: sa.URL},
 		{Host: "pi", URL: sb.URL},
 	})
-	if err := c.Approve(Key("pi", "caddy")); err != nil {
+	if err := c.Approve(Key("pi", "caddy"), ""); err != nil {
 		t.Fatalf("approve: %v", err)
 	}
 	if len(a.applied) != 0 {
@@ -131,7 +131,7 @@ func TestRefusalSurfacesAsAnError(t *testing.T) {
 	s := d.serve(t)
 	c := NewCollector([]Upstream{{Host: "pi", URL: s.URL}})
 
-	err := c.Approve(Key("pi", "caddy"))
+	err := c.Approve(Key("pi", "caddy"), "")
 	if err == nil {
 		t.Fatal("a refusal was reported as success")
 	}
@@ -142,10 +142,10 @@ func TestRefusalSurfacesAsAnError(t *testing.T) {
 
 func TestApproveRejectsUnknownHostAndBadKey(t *testing.T) {
 	c := NewCollector([]Upstream{{Host: "pi", URL: "http://127.0.0.1:1"}})
-	if err := c.Approve("caddy"); err == nil {
+	if err := c.Approve("caddy", ""); err == nil {
 		t.Error("a key with no host was accepted")
 	}
-	if err := c.Approve(Key("nowhere", "caddy")); err == nil {
+	if err := c.Approve(Key("nowhere", "caddy"), ""); err == nil {
 		t.Error("an unknown host was accepted")
 	}
 }

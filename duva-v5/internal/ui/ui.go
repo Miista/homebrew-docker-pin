@@ -60,7 +60,7 @@ type Source interface {
 type Approver interface {
 	// Approve tells the owning queue to apply one queued entry, keyed
 	// "host/service".
-	Approve(key string) error
+	Approve(key, actor string) error
 }
 
 // Server serves the queue.
@@ -71,6 +71,9 @@ type Server struct {
 	// endpoint that triggers updates should not exist on a UI meant only to
 	// report.
 	Approver Approver
+	// Actor names who a request is from, for the record of an approval.
+	// Nil records no one in particular.
+	Actor func(*http.Request) string
 	Version  string
 }
 
@@ -236,7 +239,7 @@ func (s *Server) apply(w http.ResponseWriter, r *http.Request) {
 	}
 
 	level, message := "ok", "update started"
-	if err := s.Approver.Approve(key); err != nil {
+	if err := s.Approver.Approve(key, s.actor(r)); err != nil {
 		level, message = "error", err.Error()
 	}
 	_, service, _ := SplitKey(key)
@@ -387,9 +390,16 @@ func (s *Server) applyJSON(w http.ResponseWriter, r *http.Request) {
 	}
 
 	message := ""
-	if err := s.Approver.Approve(key); err != nil {
+	if err := s.Approver.Approve(key, s.actor(r)); err != nil {
 		message = err.Error()
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	json.NewEncoder(w).Encode(map[string]string{"message": message})
+}
+
+func (s *Server) actor(r *http.Request) string {
+	if s.Actor == nil {
+		return ""
+	}
+	return s.Actor(r)
 }

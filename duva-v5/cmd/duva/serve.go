@@ -15,6 +15,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/Miista/homebrew-docker-pin/dockerapi"
+	"github.com/Miista/homebrew-docker-pin/oci/registry"
 
 	"github.com/Miista/homebrew-docker-pin/duva-v5/gate"
 	q "github.com/Miista/homebrew-docker-pin/duva-v5/internal/queue"
@@ -61,6 +62,14 @@ func serve() error {
 	if err != nil {
 		return err
 	}
+	watching := watcher.Options{
+		Root:   root,
+		Report: func(f watch.Finding) bool { return hand(queue, f) },
+		Labels: dockerapi.Labels,
+		Store:  st,
+	}
+	watchLog := component(log, "watch")
+
 	queue, err = gate.New(component(log, "queue"), gate.Options{
 		Updater: up.Local(),
 		Root:    root,
@@ -68,6 +77,11 @@ func serve() error {
 		// Policy from the running container: what governs a service is what
 		// it was started with, until it is recreated.
 		Labels: dockerapi.Labels,
+		// A person's "check now" and "rescan", and the lookup a block of a
+		// version change needs: the watcher's, and its registry client's.
+		Check:   func(service string) error { return watcher.Check(watchLog, service, watching) },
+		Rescan:  func(service string) error { return watcher.Rescan(watchLog, service, watching) },
+		Resolve: registry.RemoteDigest,
 		// The service sync's view of this host. Translated here: the queue
 		// knows nothing about docker.
 		Containers: func() ([]q.Container, error) {
@@ -99,12 +113,7 @@ func serve() error {
 	}
 	run("queue", queue.Run)
 	run("watch", func(ctx context.Context) error {
-		return watcher.Serve(ctx, component(log, "watch"), watcher.Options{
-			Root:   root,
-			Report: func(f watch.Finding) bool { return hand(queue, f) },
-			Labels: dockerapi.Labels,
-			Store:  st,
-		})
+		return watcher.Serve(ctx, watchLog, watching)
 	})
 
 	run("events", func(ctx context.Context) error {

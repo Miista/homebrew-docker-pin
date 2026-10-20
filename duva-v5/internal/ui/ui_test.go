@@ -28,7 +28,7 @@ type fakeApprover struct {
 	err      error
 }
 
-func (f *fakeApprover) Approve(key string) error {
+func (f *fakeApprover) Approve(key, _ string) error {
 	f.approved = append(f.approved, key)
 	return f.err
 }

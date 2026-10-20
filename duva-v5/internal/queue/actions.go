@@ -187,3 +187,15 @@ func (q *Pending) MarkBlocked(e Entry, reason string, now time.Time) {
 		return setStatus(tx, e.ID, serviceID, now, "blocked", reason)
 	}))
 }
+
+// Asked records that a person asked for a service to be checked or
+// rescanned. What it found arrives in the queue as any finding does.
+func (q *Pending) Asked(service, what, actor string, now time.Time) {
+	q.fail(q.st.Tx(func(tx *sql.Tx) error {
+		var serviceID int64
+		if err := tx.QueryRow(`SELECT id FROM services WHERE name = ?`, service).Scan(&serviceID); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		return actorEvent(tx, 0, serviceID, now, what, actor, service)
+	}))
+}

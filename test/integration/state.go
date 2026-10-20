@@ -189,6 +189,7 @@ func (s *Scenario) Notifications() []string {
 // up here as a test reading an empty string rather than as a compile error --
 // which is the reason Queued() asserts on more than presence.
 type queueEntry struct {
+	ID        int64  `json:"id"`
 	Service   string `json:"service"`
 	From      string `json:"from"`
 	To        string `json:"to"`
@@ -280,6 +281,23 @@ type PendingRow struct {
 	// ReleaseAt is when a soak lets policy apply it. Empty for an entry
 	// waiting for a person.
 	ReleaseAt string
+}
+
+// Duva runs a duva command inside the scenario's duva container, as an
+// operator would with docker exec, and fails the test if it fails.
+func (s *Scenario) Duva(args ...string) string {
+	s.t.Helper()
+	out, err := s.compose(append([]string{"exec", "-T", "duva", "/duva"}, args...)...)
+	if err != nil {
+		s.t.Fatalf("duva %s: %v\n%s", strings.Join(args, " "), err, out)
+	}
+	return out
+}
+
+// EntryID is the row of what is waiting for a service.
+func (s *Scenario) EntryID(service string) int64 {
+	s.t.Helper()
+	return s.state()[service].ID
 }
 
 // Queue fetches duva's approval queue over HTTP.

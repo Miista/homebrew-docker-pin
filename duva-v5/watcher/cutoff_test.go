@@ -261,3 +261,27 @@ func TestAnOverrideIsNeverAFirstCheck(t *testing.T) {
 		t.Error("DUVA_SINCE was treated as a first check, so it would report more than it was asked for")
 	}
 }
+
+// A rescan forgets one service's cutoff, and only that one's.
+func TestRescanForgetsOneCutoff(t *testing.T) {
+	useTempState(t)
+	at := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	mem := loadOrFail(t)
+	mem.Checked("app", at)
+	mem.Checked("db", at)
+	if err := mem.save(); err != nil {
+		t.Fatal(err)
+	}
+
+	// The check itself fails here -- there is no compose project -- but the
+	// cutoff is forgotten first, which is the part under test.
+	Rescan(zerolog.Nop(), "app", Options{Root: "/nonexistent/docker-compose.yml", Report: func(watch.Finding) bool { return true }})
+
+	after := loadOrFail(t)
+	if after.Cutoff("app").Equal(at) {
+		t.Error("app's cutoff survived a rescan")
+	}
+	if !after.Cutoff("db").Equal(at) {
+		t.Error("a rescan of app forgot db's cutoff")
+	}
+}

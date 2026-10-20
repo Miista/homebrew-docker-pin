@@ -1,0 +1,5 @@
+# For the sandbox. The test pushes its own, with content unique to the run:
+# a soak counts from when an image was built.
+updates:
+  block-app:
+    - 1.0.1

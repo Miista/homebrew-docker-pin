@@ -3,6 +3,7 @@ package webui
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/miista/authy"
@@ -55,4 +56,20 @@ func newGate(ctx context.Context, getenv func(string) string) (*authy.Gate, erro
 		LocalLogin: &local,
 		DataDir:    authData,
 	})
+}
+
+// signedIn names the person a request is from, for the record of what they
+// did: their username if the provider gave one, else their email, else the
+// provider's ID for them.
+func signedIn(r *http.Request) string {
+	u, ok := authy.UserFrom(r)
+	if !ok {
+		return ""
+	}
+	for _, name := range []string{u.Name, u.Email, u.Subject} {
+		if name != "" {
+			return name
+		}
+	}
+	return ""
 }

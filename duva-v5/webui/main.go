@@ -98,6 +98,7 @@ func Run(ctx context.Context, log zerolog.Logger, opts Options) error {
 		Handler: newHandler(&ui.Server{
 			Source:   collector,
 			Approver: approver(collector, log),
+			Actor:    signedIn,
 			Version:  Version,
 		}, gate),
 		ReadHeaderTimeout: 10 * time.Second,
@@ -161,9 +162,9 @@ type loggedApprover struct {
 	log zerolog.Logger
 }
 
-func (a *loggedApprover) Approve(key string) error {
+func (a *loggedApprover) Approve(key, actor string) error {
 	host, service, _ := ui.SplitKey(key)
-	if err := a.c.Approve(key); err != nil {
+	if err := a.c.Approve(key, actor); err != nil {
 		a.log.Error().Msgf("approving %s on %s failed: %v", service, host, err)
 		return err
 	}

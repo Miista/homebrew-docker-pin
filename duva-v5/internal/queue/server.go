@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
+	"sync"
+	"time"
 )
 
 // Applier is whatever carries out a decision.
@@ -43,6 +46,17 @@ type Server struct {
 	Version string
 	// Token guards the endpoints a UI uses. Empty leaves them open.
 	Token string
+
+	// Check and Rescan ask the watcher to look at one service now; Rescan
+	// forgets its cutoff first. Nil: the action is not offered.
+	Check, Rescan func(service string) error
+	// Resolve is what a tag points at now, for blocking a version change
+	// whose digest the queue has not learned. Nil: only entries that carry
+	// a digest can be blocked.
+	Resolve func(image, tag string) (string, error)
+
+	cooldownMu sync.Mutex
+	lastAsked  map[string]time.Time
 }
 
 // Handler returns the routes.
@@ -58,6 +72,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/snapshot", s.guard(s.snapshot))
 	mux.HandleFunc("/v1/apply/", s.guard(s.apply))
 	mux.HandleFunc("/v1/stream/", s.guard(s.stream))
+	mux.HandleFunc("/v1/discard/", s.guard(s.post("/v1/discard/", s.discardBy)))
+	mux.HandleFunc("/v1/block/", s.guard(s.post("/v1/block/", s.blockBy)))
+	mux.HandleFunc("/v1/unblock", s.guard(s.post("/v1/unblock", s.unblockBy)))
+	mux.HandleFunc("/v1/check/", s.guard(s.post("/v1/check/", s.checkBy)))
+	mux.HandleFunc("/v1/rescan/", s.guard(s.post("/v1/rescan/", s.rescanBy)))
 	return mux
 }
 
@@ -179,13 +198,13 @@ func (s *Server) apply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeMessage(w, s.Approve(service))
+	writeMessage(w, s.Approve(service, actorOf(r)))
 }
 
 // Approve starts applying what is queued for a service: what /v1/apply
 // does, for a UI in the same process. The answer is a message for a person,
 // empty when it started.
-func (s *Server) Approve(service string) string {
+func (s *Server) Approve(service, actor string) string {
 	// No updater is a configuration, not a fault: a queue without one queues
 	// every decision and applies nothing, which is how this runs before an
 	// updater is trusted with the socket. Said plainly, and before the queue is
@@ -202,6 +221,7 @@ func (s *Server) Approve(service string) string {
 	if err := s.Applier.Start(e); err != nil {
 		return err.Error()
 	}
+	s.Queue.Approved(e, actor, time.Now())
 	// Approved is no longer waiting on a person, but it is not applied either
 	// until the updater says so. The entry stays in the queue until then --
 	// removing it here meant a failed apply left no trace anywhere that the
@@ -274,4 +294,146 @@ func (s *Server) actorReadiness() (bool, Blocker, string) {
 		return false, ActorNotReady, reason
 	}
 	return true, "", ""
+}
+
+// actorOf is who a request is on behalf of. The queue API is called by a UI
+// holding this queue's token, which signs its person in and names them here;
+// the token is the trust, and the name is the record.
+func actorOf(r *http.Request) string {
+	if a := strings.TrimSpace(r.Header.Get("X-Duva-Actor")); a != "" {
+		return a
+	}
+	return "the queue API"
+}
+
+// post is the shape every action route shares: POST only, the rest of the
+// path as the subject, an answer that is a message for a person.
+func (s *Server) post(prefix string, do func(subject string, r *http.Request) string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		writeMessage(w, do(strings.TrimPrefix(r.URL.Path, prefix), r))
+	}
+}
+
+func entryID(raw string) (int64, bool) {
+	id, err := strconv.ParseInt(raw, 10, 64)
+	return id, err == nil && id > 0
+}
+
+func (s *Server) discardBy(subject string, r *http.Request) string {
+	id, ok := entryID(subject)
+	if !ok {
+		return "no such entry"
+	}
+	return s.Discard(id, actorOf(r))
+}
+
+func (s *Server) blockBy(subject string, r *http.Request) string {
+	id, ok := entryID(subject)
+	if !ok {
+		return "no such entry"
+	}
+	return s.Block(id, r.FormValue("reason"), actorOf(r))
+}
+
+func (s *Server) unblockBy(_ string, r *http.Request) string {
+	return s.Unblock(r.FormValue("image"), r.FormValue("digest"), actorOf(r))
+}
+
+func (s *Server) checkBy(service string, r *http.Request) string {
+	return s.CheckNow(service, actorOf(r))
+}
+
+func (s *Server) rescanBy(service string, r *http.Request) string {
+	return s.RescanNow(service, actorOf(r))
+}
+
+// Discard drops an entry for now. The answer is a message, empty on success.
+func (s *Server) Discard(id int64, actor string) string {
+	if err := s.Queue.Discard(id, actor, time.Now()); err != nil {
+		return err.Error()
+	}
+	return ""
+}
+
+// Block blocks the release an entry offers, by its digest: the one it
+// carries, or the one its tag points at now.
+func (s *Server) Block(id int64, reason, actor string) string {
+	e, ok := s.Queue.ByID(id)
+	if !ok {
+		return ErrNotOpen.Error()
+	}
+	digest := e.Digest
+	if digest == "" {
+		if s.Resolve == nil {
+			return "this release's digest is not known yet, and nothing here can look it up"
+		}
+		var err error
+		if digest, err = s.Resolve(e.Image, e.Tag); err != nil {
+			return fmt.Sprintf("looking up what %s:%s points at: %v", e.Image, e.Tag, err)
+		}
+	}
+	if err := s.Queue.Block(id, digest, reason, actor, time.Now()); err != nil {
+		return err.Error()
+	}
+	return ""
+}
+
+// Unblock lifts a block.
+func (s *Server) Unblock(image, digest, actor string) string {
+	if err := s.Queue.Unblock(image, digest, actor, time.Now()); err != nil {
+		return err.Error()
+	}
+	return ""
+}
+
+// cooldown is how soon the same service may be checked again on request: a
+// person clicking twice must not spend a registry's rate limit.
+const cooldown = time.Minute
+
+func (s *Server) cooled(service string) bool {
+	s.cooldownMu.Lock()
+	defer s.cooldownMu.Unlock()
+	if s.lastAsked == nil {
+		s.lastAsked = map[string]time.Time{}
+	}
+	if last, ok := s.lastAsked[service]; ok && time.Since(last) < cooldown {
+		return false
+	}
+	s.lastAsked[service] = time.Now()
+	return true
+}
+
+// CheckNow asks the watcher to look at a service now.
+func (s *Server) CheckNow(service, actor string) string {
+	return s.ask(service, actor, "check", s.Check)
+}
+
+// RescanNow asks the watcher to forget a service's cutoff and look again.
+func (s *Server) RescanNow(service, actor string) string {
+	return s.ask(service, actor, "rescan", s.Rescan)
+}
+
+func (s *Server) ask(service, actor, what string, do func(string) error) string {
+	if do == nil {
+		return "nothing here can " + what
+	}
+	if service == "" {
+		return "no service"
+	}
+	if !s.cooled(service) {
+		return fmt.Sprintf("%s was asked for a moment ago; try again in a minute", service)
+	}
+	s.Queue.Asked(service, what, actor, time.Now())
+	// In the background: a check is minutes of registry calls, and the
+	// answer is what it finds, which arrives in the queue.
+	go func() {
+		if err := do(service); err != nil {
+			s.Queue.fail(fmt.Errorf("%s of %s: %w", what, service, err))
+		}
+	}()
+	return ""
 }

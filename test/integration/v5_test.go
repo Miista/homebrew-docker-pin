@@ -188,6 +188,53 @@ func TestV5PolicyComesFromTheRunningContainer(t *testing.T) {
 	}
 }
 
+// A blocked release is never applied: not as found, and not when a rescan
+// finds it again and its digest is only learned on pulling it.
+func TestV5ABlockedReleaseIsNeverApplied(t *testing.T) {
+	s := Up(t, "duva-v5/block")
+	run := fmt.Sprint(time.Now().UnixNano())
+	s.Push("block-app", "1.0.1", "1.0.1 "+run)
+	s.Pin("app")
+	s.Start()
+
+	id := s.EntryID("app")
+	if id == 0 {
+		t.Fatalf("the patch was not queued to soak:\n%s", s.Logs("duva"))
+	}
+	s.Duva("block", fmt.Sprint(id), "missing", "migrations")
+
+	t.Run("blocking settles what was waiting", func(t *testing.T) {
+		if row := s.Pending("app"); row.Candidate != "" {
+			t.Errorf("still waiting after the block: %+v", row)
+		}
+	})
+
+	// Found again, it soaks again: a version change's digest is not known
+	// until it is pulled, so the block is the updater's to catch.
+	s.Duva("rescan", "app")
+	s.waitFor("the updater to refuse the blocked release", 3*time.Minute,
+		func() bool { return strings.Contains(s.Logs("duva"), "app: 1.0.0 -> 1.0.1 is blocked") },
+		func() string { return s.Logs("duva") })
+
+	t.Run("and it is not applied", func(t *testing.T) {
+		if got := s.RunningImage("block-app"); strings.Contains(got, "1.0.1") {
+			t.Errorf("a blocked release was applied:\n  got %s", got)
+		}
+		if got := s.Image("app"); strings.Contains(got, "1.0.1") {
+			t.Errorf("the pin was written for a blocked release:\n  got %s", got)
+		}
+		if got := s.Status(); got != "" {
+			t.Errorf("the repository is dirty after a refused apply:\n%s", got)
+		}
+	})
+
+	t.Run("nobody is told what they decided", func(t *testing.T) {
+		if got := s.Notifications(); len(got) != 0 {
+			t.Errorf("announced:\n  %v", got)
+		}
+	})
+}
+
 // An auto-apply that fails tells someone, and a successful one does not.
 //
 // The half that was silent: policy applied something without asking, it did

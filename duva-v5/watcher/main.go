@@ -29,6 +29,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 	// The timezone database, embedded in the binary. Go reads TZ on its own,
 	// but resolves a name like Europe/Copenhagen against the host's
@@ -149,7 +150,44 @@ func Serve(ctx context.Context, log zerolog.Logger, opts Options) error {
 	}
 }
 
+// runMu serialises checks: the scheduled one, and any a person asks for.
+// Each loads the memory, checks, and saves it whole, so two at once would
+// each overwrite what the other learned.
+var runMu sync.Mutex
+
+// Check checks one service now, by its compose name or container name: what
+// the page's "check now" asks for. Its cutoff is kept, so only what is new
+// since the last check is found.
+func Check(log zerolog.Logger, service string, opts Options) error {
+	return run(log, service, opts)
+}
+
+// Rescan forgets one service's cutoff and checks it, so it looks back the
+// whole default window again: what deleting the state file and restarting
+// the watcher used to be, for one service instead of every one. What is
+// found again is offered again, except what is blocked.
+func Rescan(log zerolog.Logger, service string, opts Options) error {
+	runMu.Lock()
+	st := opts.Store
+	if st == nil {
+		st = memStore
+	}
+	var err error
+	if st == nil {
+		err = fmt.Errorf("no store to forget the cutoff in")
+	} else {
+		_, err = st.DB().Exec(`DELETE FROM watch_cutoffs WHERE service = ?`, service)
+	}
+	runMu.Unlock()
+	if err != nil {
+		return err
+	}
+	return run(log, service, opts)
+}
+
 func run(log zerolog.Logger, only string, opts Options) error {
+	runMu.Lock()
+	defer runMu.Unlock()
 	host := os.Getenv("DUVA_HOST")
 	if host == "" {
 		if h, err := os.Hostname(); err == nil && h != "" {

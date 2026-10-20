@@ -46,8 +46,9 @@ type Upstream struct {
 // asks of a queue, answered without HTTP.
 type LocalQueue interface {
 	Snapshot() queue.Snapshot
-	// Approve starts an apply; the answer is a message, empty on success.
-	Approve(service string) string
+	// Approve starts an apply on someone's behalf; the answer is a message,
+	// empty on success.
+	Approve(service, actor string) string
 	Stream(service string, w http.ResponseWriter, r *http.Request) error
 }
 
@@ -302,7 +303,7 @@ func (c *Collector) Unreachable() []Problem {
 // Routed by an explicit host rather than by searching every queue: two hosts
 // run services of the same name -- caddy, ofelia, cloudflared and restic are
 // on both -- and a search would approve on whichever answered first.
-func (c *Collector) Approve(key string) error {
+func (c *Collector) Approve(key, actor string) error {
 	host, service, ok := SplitKey(key)
 	if !ok {
 		return fmt.Errorf("%q is not a host/service key", key)
@@ -312,7 +313,7 @@ func (c *Collector) Approve(key string) error {
 			continue
 		}
 		if d.Local != nil {
-			if msg := d.Local.Approve(service); msg != "" {
+			if msg := d.Local.Approve(service, actor); msg != "" {
 				return fmt.Errorf("%s", msg)
 			}
 			return nil
@@ -324,6 +325,11 @@ func (c *Collector) Approve(key string) error {
 		}
 		if d.Token != "" {
 			req.Header.Set("Authorization", "Bearer "+d.Token)
+		}
+		// Who, for the other host's history. The token is what that queue
+		// trusts; this is only the record of whom it was for.
+		if actor != "" {
+			req.Header.Set("X-Duva-Actor", actor)
 		}
 		resp, err := c.client().Do(req)
 		if err != nil {

@@ -101,6 +101,11 @@ type Options struct {
 	// Containers lists this host's containers, for the service sync. Nil
 	// skips it.
 	Containers func() ([]q.Container, error)
+	// Check and Rescan ask the watcher to look at one service now, for the
+	// queue API's actions. Resolve is what a tag points at now, for blocking
+	// a version change. Nil leaves each action unavailable.
+	Check, Rescan func(service string) error
+	Resolve       func(image, tag string) (string, error)
 	// Store is where the queue is kept. Nil opens /data/duva.db.
 	Store *store.Store
 	// Labels reads a service's policy from its container. Nil reads it from
@@ -216,6 +221,9 @@ func New(log zerolog.Logger, opts Options) (*Gate, error) {
 			Host:    cfg.Host,
 			Version: Version,
 			Token:   cfg.Token,
+			Check:   opts.Check,
+			Rescan:  opts.Rescan,
+			Resolve: opts.Resolve,
 		},
 		applying:   applying,
 		live:       live,
