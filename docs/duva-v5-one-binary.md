@@ -1,7 +1,7 @@
 # duva v5: one binary
 
-**Status: phase 1 built** on `feature/duva-v5` (2026-10-20), in
-`duva-v5/`; phase 2 not started. Decisions locked 2026-10-19. Soak
+**Status: phases 1 and 2 built** on `feature/duva-v5` (2026-10-20), in
+`duva-v5/`. Decisions locked 2026-10-19. Soak
 (`duva.soak`, commit `2c95716`) landed in v4 first and carries over. Where
 phase 1 came out differently from this note, the section says so.
 
@@ -282,6 +282,14 @@ blocked_releases (
 - The watch → queue handoff becomes one transaction: enqueue and advance the
   cutoff together.
 
+**As built, not one transaction.** The queue already ignores a release it
+holds, and the watcher's held findings already cover a queue that could not
+take one, so "enqueue, then advance the cutoff" is safe across a crash at any
+point: the worst case is a re-report the queue drops. A shared transaction
+would have meant splitting the queue's handler into decide, persist and act
+across components, for no correctness gained. The watcher's tables are keyed
+by service name and reference nothing.
+
 ### The service sync
 
 Driven by docker events, with the tick as a fallback. A new container is
@@ -308,10 +316,17 @@ time: applying a release marks every **older** open entry for that service
 | **Re-scan** | delete the service's cutoff, `watch.Check(svc)` | yes; that is the point |
 | **Block** | add to `blocked_releases`; matching open entries → `blocked` | no, until unblocked |
 
-Block is by index digest, never by tag, and scoped to the image. It is only
-ever done from a release duva has already seen, so the digest always comes from
-an entry. The blocklist is checked at enqueue and again in the updater's
-precheck. Every UI action is an event carrying the OIDC identity.
+Block is by index digest, never by tag, and scoped to the image. Every UI
+action is an event carrying the OIDC identity.
+
+**As built:** a version change's digest is not known when it is queued -- it
+is learned on pulling -- so "the digest always comes from an entry" did not
+hold. Blocking a version change resolves what its tag points at now, through
+the registry client, and the updater checks the blocklist after every pull,
+returning a new terminal status, `blocked`. That second check is also what
+catches a release queued or approved before the block. Until the page has
+buttons, the actions are `duva discard|block|unblock|check|rescan`, through
+the queue API.
 
 ## Deferred
 

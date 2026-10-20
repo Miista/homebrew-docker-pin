@@ -126,6 +126,20 @@ and `duva-v5/README.md`.
   the fallback.
 - **Self-update needs nothing new:** the replacement's first reconcile drops
   the entry the helper's commit already satisfied.
+- **State is one SQLite database**, `/data/duva.db` (`internal/store`,
+  `modernc.org/sqlite`, numbered embedded migrations; never edit a released
+  one). The queue is a row per release with a status and a history
+  (`queue_events`): a soaking release keeps its own clock, a release for a
+  person supersedes older ones for a person, and applying supersedes
+  everything older. The watcher's cutoffs and held findings are its own
+  tables, which nothing references. `services` mirrors the host's
+  containers, disabled never deleted, gone only when missing twice running
+  (a recreate is not a removal).
+- **The blocklist is by index digest, per image, never by tag**, and is
+  checked twice: at enqueue where the digest is known, and by the updater
+  after the pull, which is the only point a version change's digest is
+  certain. The contract's `blocked` status is that refusal. Held by
+  `TestV5ABlockedReleaseIsNeverApplied`.
 - An image that declares `VOLUME` broke two things in `dockerapi`, both fixed:
   `containerID` must match `/containers/<id>/`, not any 64-hex string, and
   `createSpec` must not bind what compose already put in `HostConfig.Mounts`.

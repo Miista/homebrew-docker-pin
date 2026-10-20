@@ -150,6 +150,37 @@ It is released on the queue's reconcile, at most `DUVA_RECONCILE_INTERVAL`
 late (ten minutes by default), or as soon as a container event prompts one.
 From then on it is an ordinary auto-apply. Clicking Update applies it at once.
 
+Each release soaks on its own clock. A project that releases faster than its
+soak does not keep restarting the wait: an older release that comes due while
+a newer one is still soaking is applied, and the newer one is then offered
+from there. A release waiting for a person is different -- only the newest
+matters, so a newer one supersedes it. The page shows the newest per service.
+
+### Seeing what is waiting, and acting on it
+
+`duva queue` prints what is waiting, by service, with each entry's id. Until
+the page has buttons for them, the other actions are commands too, run inside
+duva's container (`docker exec <duva> duva ...`). They go through this host's
+queue API with its own token, as the page does, and the history records them
+as the CLI's.
+
+| | |
+|---|---|
+| `duva discard <entry>` | drop it for now; found again, it is offered again |
+| `duva block <entry> <reason>` | never apply this release, on any service running the image, until unblocked |
+| `duva unblock <image> <digest>` | lift a block |
+| `duva check <service>` | look for new tags now |
+| `duva rescan <service>` | forget how far back it was checked, and look again over the whole window |
+
+**A block is by digest, never by tag**, so a release re-pushed under the same
+tag with a fix is not blocked with the broken one. A version change's digest
+is not known until it is pulled, so blocking one looks up what its tag points
+at now, and the updater checks the blocklist again after every pull: a
+release blocked after it was queued, or approved, is still refused, with
+nothing written. A refused release is settled as blocked, and nobody is
+notified of what they decided. Check and rescan are refused within a minute of
+the last, per service, so repeated clicks cannot spend a registry's rate limit.
+
 ### Updating by hand
 
 The queue rechecks what is waiting against the compose file when it starts,
@@ -195,19 +226,21 @@ duva's own container without its compose labels or network aliases.
 | `DUVA_QUEUE_TOKEN_<HOST>` | each other host's `DUVA_QUEUE_TOKEN` |
 | `DUVA_READ_ONLY` | the page shows the queue and approves nothing |
 
-`/data` holds `queue.json` (what is waiting), `detector.json` (how far back
-each service was checked, and findings not yet handed on) and `auth/` (the
-page's session key). Losing `detector.json` costs one noisy check; losing
-`auth/` signs people out.
+`/data` holds `duva.db`, a SQLite database -- what is waiting, the history of
+every decision and who made it, the blocklist, the services duva knows, and
+how far back each was checked -- and `auth/`, the page's session key. Losing
+`auth/` signs people out. Back the database up with `sqlite3 duva.db
+"VACUUM INTO 'backup.db'"`, not by copying the live file.
 
 ## Moving from v4
 
 v5 replaces the four v4 containers on each host with one.
 
 1. **Carry the state over**, or accept one noisy first check and an empty
-   queue. The files are the same format: copy `queue.json` out of the v4
-   queue container's `/data` and `detector.json` out of the watcher's, with
-   `docker cp`, into v5's `/data` before its first start.
+   queue. Copy `queue.json` out of the v4 queue container's `/data` and
+   `detector.json` out of the watcher's, with `docker cp`, into v5's `/data`
+   before its first start. v5 imports them into its database on that start
+   and renames them `.migrated`; going back to v4 can rename them back.
 2. **Rename and drop variables.** `DUVA_WEBHOOK_URL`, `DUVA_UPDATE_URL` and
    `DUVA_UPDATE_TOKEN` are gone: nothing talks over a network inside a host
    any more. The page's local account and `DUVA_UI_AUTH_DISABLED` are gone.

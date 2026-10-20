@@ -107,12 +107,17 @@ queue does not parse it. Write whatever a person would want to read.
 status: completed
 status: failed: the container refused the new image
 status: deferred: the repository has uncommitted changes
+status: blocked: missing migrations
 ```
 
-Only `completed`, `failed` and `deferred` are terminal. `deferred` means nothing
-was done because a precondition does not hold *yet* (a dirty working tree);
-the queue keeps the entry, raises no failure notification, and offers it again
-later. **A status nobody defined is not
+Only `completed`, `failed`, `deferred` and `blocked` are terminal. `deferred`
+means nothing was done because a precondition does not hold *yet* (a dirty
+working tree); the queue keeps the entry, raises no failure notification, and
+offers it again later. `blocked` (duva v5) means nothing was done because the
+release is on the blocklist -- checked once its digest is known, after the
+pull for a version change; the reason is the block's. The queue settles the
+entry as blocked, notifies nobody and does not retry. An updater with no
+blocklist never answers it. **A status nobody defined is not
 terminal** — a typo would otherwise read as success, where leaving it as
 progress means the queue's timeout catches it.
 
