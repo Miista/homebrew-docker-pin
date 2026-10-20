@@ -124,6 +124,11 @@ type Gate struct {
 // waiting, and connects whatever applies.
 func New(log zerolog.Logger, opts Options) (*Gate, error) {
 	cfg := loadConfig()
+	token, err := tokenFromEnv()
+	if err != nil {
+		return nil, err
+	}
+	cfg.Token = token
 
 	root := opts.Root
 	if root == "" {
@@ -231,14 +236,6 @@ func (g *Gate) Run(ctx context.Context) error {
 
 	go func() {
 		log.Info().Msgf("deciding for %s, serving on %s", cfg.Host, addr)
-		if os.Getenv("DUVA_QUEUE_TOKEN") == "" {
-			// Printed, because a token nobody can read is a queue nobody
-			// can approve through. It is in the container's log rather than
-			// anywhere durable on purpose: it lasts as long as this process
-			// does, and the next restart mints another.
-			log.Warn().Msgf("no DUVA_QUEUE_TOKEN was given, so one was minted: %s", cfg.Token)
-			log.Warn().Msg("it changes on every restart — set DUVA_QUEUE_TOKEN to keep it stable")
-		}
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Error().Msgf("stopped serving: %v", err)
 		}
@@ -261,7 +258,6 @@ type config struct {
 func loadConfig() config {
 	c := config{
 		Host:              os.Getenv("DUVA_HOST"),
-		Token:             tokenFromEnv(),
 		ApplyTimeout:      defaultApplyTimeout,
 		ReconcileInterval: defaultReconcileInterval,
 	}

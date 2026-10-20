@@ -1,6 +1,7 @@
 package queue
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -64,7 +65,10 @@ func (s *Server) guard(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if s.Token != "" {
 			got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-			if got != s.Token {
+			// Constant time: the queue API is reachable from another host,
+			// and a comparison that returns at the first wrong byte says how
+			// many were right.
+			if subtle.ConstantTimeCompare([]byte(got), []byte(s.Token)) != 1 {
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}

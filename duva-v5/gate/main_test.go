@@ -25,12 +25,11 @@ func TestConfigDefaults(t *testing.T) {
 
 func TestConfigReadsTheEnvironment(t *testing.T) {
 	t.Setenv("DUVA_HOST", "pi")
-	t.Setenv("DUVA_QUEUE_TOKEN", "s3cret")
 	t.Setenv("DUVA_UPDATE_TIMEOUT", "5m")
 
 	c := loadConfig()
-	if c.Host != "pi" || c.Token != "s3cret" {
-		t.Errorf("host/token = %q/%q", c.Host, c.Token)
+	if c.Host != "pi" {
+		t.Errorf("host = %q", c.Host)
 	}
 	if c.ApplyTimeout != 5*time.Minute {
 		t.Errorf("timeout = %v, want 5m", c.ApplyTimeout)
@@ -83,30 +82,16 @@ func TestTheProjectIsWhatIsMounted(t *testing.T) {
 // An injected token is used as given.
 func TestAnInjectedTokenIsUsed(t *testing.T) {
 	t.Setenv("DUVA_QUEUE_TOKEN", "s3cret")
-	if got := tokenFromEnv(); got != "s3cret" {
+	if got, err := tokenFromEnv(); err != nil || got != "s3cret" {
 		t.Errorf("token = %q, want what was injected", got)
 	}
 }
 
-// No token means one is minted, not that the endpoint is left open. An
-// approval is a container being replaced on this host, and a default that
-// open is one nobody chose.
-func TestNoTokenMintsOne(t *testing.T) {
+// No token is a refusal to start, not a queue left open and not one with a
+// token minted and printed to the log.
+func TestNoTokenIsARefusal(t *testing.T) {
 	t.Setenv("DUVA_QUEUE_TOKEN", "")
-	got := tokenFromEnv()
-	if got == "" {
-		t.Fatal("no token was minted; the approval endpoint would be open")
-	}
-	if len(got) != 64 {
-		t.Errorf("token is %d characters, want 64 (32 bytes hex)", len(got))
-	}
-}
-
-// Minted tokens differ. One that did not would be a shared secret pretending
-// to be a random one.
-func TestMintedTokensDiffer(t *testing.T) {
-	t.Setenv("DUVA_QUEUE_TOKEN", "")
-	if tokenFromEnv() == tokenFromEnv() {
-		t.Error("two mints produced the same token")
+	if _, err := tokenFromEnv(); err == nil {
+		t.Fatal("a queue with no token was allowed to start")
 	}
 }

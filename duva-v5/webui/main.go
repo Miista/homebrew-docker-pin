@@ -84,17 +84,13 @@ func Run(ctx context.Context, log zerolog.Logger, opts Options) error {
 		log.Warn().Msgf("could not reach the queue on %s, so its queue is not shown: %s", host, err)
 	}
 
-	// Sign-in is owned by authy: OIDC when the DUVA_UI_OIDC_* variables are
-	// set, otherwise a local account the first visitor creates.
-	// DUVA_UI_AUTH_DISABLED=true turns the gate off (gate is nil and Wrap
-	// leaves the handler unchanged). Misconfigured: refuse to start rather
-	// than serve the approval queue unprotected.
-	gate, err := authy.FromEnv(ctx, "duva-ui")
+	// Sign-in is OIDC, always. A gate that is off, or a local account, is
+	// a way into the button that replaces containers on an internet-facing
+	// page, so neither is offered, and settings that ask for them are
+	// refused rather than ignored.
+	gate, err := newGate(ctx, os.Getenv)
 	if err != nil {
 		return fmt.Errorf("auth: %w", err)
-	}
-	if gate == nil {
-		log.Warn().Msg("login is OFF (DUVA_UI_AUTH_DISABLED): everyone who can reach this port can approve updates")
 	}
 
 	srv := &http.Server{
