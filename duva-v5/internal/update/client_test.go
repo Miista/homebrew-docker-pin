@@ -66,10 +66,6 @@ func streamFor(t *testing.T, f *fakeActor) string {
 	return f.server(t).URL + "/v1/stream/abc"
 }
 
-
-
-
-
 // --- watching ---------------------------------------------------------------
 
 func TestWatchReturnsTheTerminalStatus(t *testing.T) {
@@ -187,6 +183,3 @@ func TestWatchReportsAnUnreachableStream(t *testing.T) {
 		t.Fatal("want an error when the stream cannot be reached")
 	}
 }
-
-
-

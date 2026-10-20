@@ -600,3 +600,47 @@ func Running(service string) (bool, error) {
 	}
 	return found[0].State == "running", nil
 }
+
+// ProjectContainer is one container of the compose project duva runs in.
+type ProjectContainer struct {
+	// Name is the container's name, without docker's leading slash.
+	Name string
+	// Service is the compose service it was created for.
+	Service string
+	// Image is the reference it was created from, tag and digest included.
+	Image string
+}
+
+// ProjectContainers lists every container of duva's own compose project,
+// stopped ones included: a stopped container is still a service duva knows.
+func ProjectContainers() ([]ProjectContainer, error) {
+	name, err := project(realSelf)
+	if err != nil {
+		return nil, err
+	}
+	filters := url.QueryEscape(fmt.Sprintf(`{"label":["com.docker.compose.project=%s"]}`, name))
+	raw, err := dockerDo(http.MethodGet, "/containers/json?all=true&filters="+filters, nil)
+	if err != nil {
+		return nil, err
+	}
+	var found []struct {
+		Names  []string          `json:"Names"`
+		Image  string            `json:"Image"`
+		Labels map[string]string `json:"Labels"`
+	}
+	if err := json.Unmarshal(raw, &found); err != nil {
+		return nil, fmt.Errorf("listing the project's containers: %w", err)
+	}
+	out := make([]ProjectContainer, 0, len(found))
+	for _, c := range found {
+		if len(c.Names) == 0 {
+			continue
+		}
+		out = append(out, ProjectContainer{
+			Name:    strings.TrimPrefix(c.Names[0], "/"),
+			Service: c.Labels["com.docker.compose.service"],
+			Image:   c.Image,
+		})
+	}
+	return out, nil
+}

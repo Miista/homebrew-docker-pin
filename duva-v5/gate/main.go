@@ -98,6 +98,9 @@ type Options struct {
 	Updater update.Updater
 	// Root is the compose file. Empty means the one mounted at /compose.
 	Root string
+	// Containers lists this host's containers, for the service sync. Nil
+	// skips it.
+	Containers func() ([]q.Container, error)
 	// Store is where the queue is kept. Nil opens /data/duva.db.
 	Store *store.Store
 	// Labels reads a service's policy from its container. Nil reads it from
@@ -117,10 +120,11 @@ type Gate struct {
 	handler *q.Handler
 	// API is the queue's HTTP surface, for a UI. Exposed so a UI in the same
 	// process can serve it without a network in between.
-	API      *q.Server
-	applying q.Applier
-	live     *applier
-	labels   func(container string) (map[string]string, bool, error)
+	API        *q.Server
+	applying   q.Applier
+	live       *applier
+	labels     func(container string) (map[string]string, bool, error)
+	containers func() ([]q.Container, error)
 	// poke holds at most one request for a reconcile; see Poke.
 	poke chan struct{}
 }
@@ -213,10 +217,11 @@ func New(log zerolog.Logger, opts Options) (*Gate, error) {
 			Version: Version,
 			Token:   cfg.Token,
 		},
-		applying: applying,
-		live:     live,
-		labels:   opts.Labels,
-		poke:     make(chan struct{}, 1),
+		applying:   applying,
+		live:       live,
+		labels:     opts.Labels,
+		containers: opts.Containers,
+		poke:       make(chan struct{}, 1),
 	}, nil
 }
 
@@ -253,7 +258,7 @@ func (g *Gate) Run(ctx context.Context) error {
 
 	reconcileDone := make(chan struct{})
 	rec := &reconciler{queue: g.queue, root: g.root, interval: cfg.ReconcileInterval, log: log,
-		applier: g.applying, labels: g.labels, poke: g.poke}
+		applier: g.applying, labels: g.labels, poke: g.poke, containers: g.containers}
 	if g.live != nil {
 		rec.applicable = g.live.Applicable
 	}

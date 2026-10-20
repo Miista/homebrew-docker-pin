@@ -212,7 +212,7 @@ func (q *Pending) put(e Entry, now time.Time) (Entry, bool) {
 	}
 
 	err = q.st.Tx(func(tx *sql.Tx) error {
-		serviceID, err := ensureService(tx, e)
+		serviceID, err := entryService(tx, e)
 		if err != nil {
 			return err
 		}
@@ -255,31 +255,36 @@ func (q *Pending) put(e Entry, now time.Time) (Entry, bool) {
 	return e, isNewest
 }
 
-// ensureService finds or creates the service an entry is for.
+// ensureService finds or creates a service, enabling it if it was disabled.
 //
-// Created on demand, so the first finding for a service needs nothing to
-// have run first. A service that was disabled and comes back is enabled
-// again: the same row, so the same history.
-func ensureService(tx *sql.Tx, e Entry) (int64, error) {
-	container := e.Container
-	if container == "" {
-		container = e.Service
-	}
-	if _, err := tx.Exec(`INSERT INTO images (repo) VALUES (?) ON CONFLICT (repo) DO NOTHING`, e.Image); err != nil {
+// Created on demand as well as by the sync, so the first finding for a
+// service needs nothing to have run first. A service that comes back is the
+// same row, so the same history.
+func ensureService(tx *sql.Tx, container, name, image string) (int64, error) {
+	if _, err := tx.Exec(`INSERT INTO images (repo) VALUES (?) ON CONFLICT (repo) DO NOTHING`, image); err != nil {
 		return 0, err
 	}
 	var imageID int64
-	if err := tx.QueryRow(`SELECT id FROM images WHERE repo = ?`, e.Image).Scan(&imageID); err != nil {
+	if err := tx.QueryRow(`SELECT id FROM images WHERE repo = ?`, image).Scan(&imageID); err != nil {
 		return 0, err
 	}
 	if _, err := tx.Exec(`INSERT INTO services (container, name, image_id) VALUES (?, ?, ?)
 		ON CONFLICT (container) DO UPDATE SET name = excluded.name, image_id = excluded.image_id, removed_at = NULL`,
-		container, e.Service, imageID); err != nil {
+		container, name, imageID); err != nil {
 		return 0, err
 	}
 	var id int64
 	err := tx.QueryRow(`SELECT id FROM services WHERE container = ?`, container).Scan(&id)
 	return id, err
+}
+
+// entryService is ensureService for the service an entry is about.
+func entryService(tx *sql.Tx, e Entry) (int64, error) {
+	container := e.Container
+	if container == "" {
+		container = e.Service
+	}
+	return ensureService(tx, container, e.Service, e.Image)
 }
 
 // event appends to the history.

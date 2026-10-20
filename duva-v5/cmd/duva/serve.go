@@ -64,6 +64,16 @@ func serve() error {
 		// Policy from the running container: what governs a service is what
 		// it was started with, until it is recreated.
 		Labels: dockerapi.Labels,
+		// The service sync's view of this host. Translated here: the queue
+		// knows nothing about docker.
+		Containers: func() ([]q.Container, error) {
+			found, err := dockerapi.ProjectContainers()
+			out := make([]q.Container, 0, len(found))
+			for _, c := range found {
+				out = append(out, q.Container{Name: c.Name, Service: c.Service, Image: c.Image})
+			}
+			return out, err
+		},
 	})
 	if err != nil {
 		return err

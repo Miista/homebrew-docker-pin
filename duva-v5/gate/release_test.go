@@ -209,3 +209,24 @@ func TestAPokeReconcilesNow(t *testing.T) {
 		t.Errorf("released %d after a poke, want 1 without waiting the hour", app.count())
 	}
 }
+
+// A container missing for one sync is in a recreate; missing for two, gone.
+func TestAContainerIsGoneOnlyWhenMissingTwice(t *testing.T) {
+	r := &reconciler{}
+	app := q.Container{Name: "app", Service: "app", Image: "example.com/app:1"}
+	db := q.Container{Name: "db", Service: "db", Image: "postgres:17"}
+
+	r.graced([]q.Container{app, db})
+	if got := r.graced([]q.Container{db}); len(got) != 2 {
+		t.Errorf("app went after one missed sync: %+v", got)
+	}
+	if got := r.graced([]q.Container{db}); len(got) != 1 {
+		t.Errorf("app stayed after two missed syncs: %+v", got)
+	}
+	// And one that comes back mid-grace is simply present.
+	r.graced([]q.Container{app, db})
+	r.graced([]q.Container{db})
+	if got := r.graced([]q.Container{app, db}); len(got) != 2 {
+		t.Errorf("a returning container was not present: %+v", got)
+	}
+}

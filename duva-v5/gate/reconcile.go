@@ -75,6 +75,13 @@ type reconciler struct {
 	applicable func(service string) (bool, string)
 	// labels reads policy from the container; nil reads the compose file.
 	labels func(container string) (map[string]string, bool, error)
+	// containers lists this host's containers, for the service sync. Nil
+	// leaves the services table to grow as entries arrive.
+	containers func() ([]q.Container, error)
+	// seen and missing are the last sync's containers, and those of them
+	// that had just gone missing; see graced.
+	seen    []q.Container
+	missing map[string]q.Container
 	// poke asks for a tick now: a container started or stopped, and what is
 	// waiting may have changed with it. Nil never asks.
 	poke <-chan struct{}
@@ -105,6 +112,7 @@ func (r *reconciler) run(done <-chan struct{}) {
 }
 
 func (r *reconciler) tick() {
+	r.syncServices()
 	r.reconcile()
 	r.release()
 }
@@ -157,4 +165,58 @@ func (r *reconciler) release() {
 		}
 		r.log.Info().Msgf("%s: soak is over, applying %s -> %s", e.Service, e.From, e.To)
 	}
+}
+
+// syncServices mirrors this host's containers into the services table, so a
+// service whose container is gone is disabled -- its history kept -- and one
+// that comes back is the same service again.
+func (r *reconciler) syncServices() {
+	if r.containers == nil {
+		return
+	}
+	cs, err := r.containers()
+	if err != nil {
+		r.log.Warn().Msgf("could not list this host's containers: %v", err)
+		return
+	}
+	cs = r.graced(cs)
+	added, removed, err := r.queue.SyncServices(cs, time.Now())
+	if err != nil {
+		r.log.Error().Msgf("could not record this host's services: %v", err)
+		return
+	}
+	for _, c := range added {
+		r.log.Debug().Msgf("%s: a service duva knows", c)
+	}
+	for _, c := range removed {
+		r.log.Info().Msgf("%s: its container is gone; the service is disabled, its history kept", c)
+	}
+}
+
+// graced keeps a container that has just gone missing for one more sync.
+//
+// Gone means missing twice running. A recreate -- duva's own apply, or a
+// compose up -- removes the old container before creating the new one, and
+// a sync prompted by the removal lands in between: without this every apply
+// would record the service as removed and then back again.
+func (r *reconciler) graced(cs []q.Container) []q.Container {
+	present := map[string]bool{}
+	for _, c := range cs {
+		present[c.Name] = true
+	}
+	missing := map[string]q.Container{}
+	out := cs
+	for _, c := range r.seen {
+		if present[c.Name] {
+			continue
+		}
+		if _, already := r.missing[c.Name]; already {
+			continue // missing twice: let it go
+		}
+		missing[c.Name] = c
+		out = append(out, c)
+	}
+	r.missing = missing
+	r.seen = out
+	return out
 }
