@@ -99,13 +99,14 @@ func (l Lookup) declared(container string, ref compose.ServiceRef) (Service, boo
 	}
 
 	return Service{
-		Name:   ref.Service,
-		File:   ref.File,
-		Image:  base,
-		Tag:    tag,
-		Digest: compose.DigestOf(raw),
-		Auto:   auto,
-		Soak:   soak,
+		Name:      ref.Service,
+		Container: container,
+		File:      ref.File,
+		Image:     base,
+		Tag:       tag,
+		Digest:    compose.DigestOf(raw),
+		Auto:      auto,
+		Soak:      soak,
 	}, true, nil
 }
 

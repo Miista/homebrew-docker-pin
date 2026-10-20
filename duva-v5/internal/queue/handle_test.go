@@ -360,14 +360,14 @@ func TestNoAnnouncerStillQueues(t *testing.T) {
 // forgotten the entry, called it new, and told someone a second time -- once
 // per entry still pending, on every deploy.
 func TestARestartDoesNotReAnnounceWhatWasAlreadyWaiting(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "queue.json")
+	path := filepath.Join(t.TempDir(), "duva.db")
 	n := Notice{Container: "my-app", Image: "example.com/app:1.1.0", Digest: "sha256:new"}
 
 	var told []string
 	announce := func(e Entry) { told = append(told, e.Service) }
 
 	before := &Handler{
-		Lookup: project(t, pinnedProject), Queue: Load(path, nil),
+		Lookup: project(t, pinnedProject), Queue: Load(t, path),
 		Applier: &fakeApplier{}, Announce: announce, Now: func() time.Time { return now },
 	}
 	before.Handle(n)
@@ -377,7 +377,7 @@ func TestARestartDoesNotReAnnounceWhatWasAlreadyWaiting(t *testing.T) {
 
 	// The queue restarts and the watcher re-sends the same finding.
 	after := &Handler{
-		Lookup: project(t, pinnedProject), Queue: Load(path, nil),
+		Lookup: project(t, pinnedProject), Queue: Load(t, path),
 		Applier: &fakeApplier{}, Announce: announce, Now: func() time.Time { return now },
 	}
 	after.Handle(n)

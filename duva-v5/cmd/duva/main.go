@@ -20,7 +20,7 @@ import (
 
 var version = "dev"
 
-const usage = "Usage: duva <serve|health|version>"
+const usage = "Usage: duva <serve|queue|health|version>"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -39,6 +39,11 @@ func main() {
 		// Not in the usage: duva starts this itself, in a copy of its own
 		// container, to replace that container. See updater.SelfUpdate.
 		if err := updater.SelfUpdate(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "Error:", err)
+			os.Exit(1)
+		}
+	case "queue":
+		if err := listQueue(dataFile); err != nil {
 			fmt.Fprintln(os.Stderr, "Error:", err)
 			os.Exit(1)
 		}

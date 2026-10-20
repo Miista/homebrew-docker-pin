@@ -42,6 +42,7 @@ import (
 	// Aliased: this binary lives in queue/, so the bare name would be
 	// ambiguous with the package it is the command for.
 	q "github.com/Miista/homebrew-docker-pin/duva-v5/internal/queue"
+	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/store"
 )
 
 var Version = "dev"
@@ -56,7 +57,7 @@ var composeDir = "/compose"
 
 // stateFile is where the queue is kept across a restart. A named volume
 // mounted at /data, like the watcher's.
-var stateFile = "/data/queue.json"
+var stateFile = "/data/duva.db"
 
 // defaultApplyTimeout bounds an apply.
 //
@@ -97,6 +98,8 @@ type Options struct {
 	Updater update.Updater
 	// Root is the compose file. Empty means the one mounted at /compose.
 	Root string
+	// Store is where the queue is kept. Nil opens /data/duva.db.
+	Store *store.Store
 	// Labels reads a service's policy from its container. Nil reads it from
 	// the compose file, which is all a queue without the socket can do.
 	Labels func(container string) (map[string]string, bool, error)
@@ -147,10 +150,16 @@ func New(log zerolog.Logger, opts Options) (*Gate, error) {
 	}
 
 	// Restored from /data, so a restart is not a decision about what is
-	// waiting. Without a volume the path is still /data and load finds
-	// nothing there, which is the same queue this had before.
-	queue := q.Load(stateFile, func(err error) {
-		log.Error().Msgf("the queue could not be kept across a restart: %v", err)
+	// waiting.
+	st := opts.Store
+	if st == nil {
+		var err error
+		if st, err = store.Open(stateFile); err != nil {
+			return nil, err
+		}
+	}
+	queue := q.Over(st, func(err error) {
+		log.Error().Msgf("the queue could not record a change: %v", err)
 	})
 	if n := queue.Len(); n > 0 {
 		log.Info().Msgf("%d entr(ies) were still waiting from before the restart", n)

@@ -243,9 +243,9 @@ func TestWithoutAnUpdaterNothingSoaks(t *testing.T) {
 
 func TestReleaseClearsTheSoak(t *testing.T) {
 	q := NewPending()
-	q.Put(Entry{Service: "app", From: "1.0.0", To: "1.0.1", ReleaseAt: now.Format(time.RFC3339)}, now)
+	put, _ := q.PutEntry(Entry{Service: "app", From: "1.0.0", To: "1.0.1", ReleaseAt: now.Format(time.RFC3339)}, now)
 
-	e, ok := q.Release("app", now)
+	e, ok := q.Release(put, now)
 	if !ok {
 		t.Fatal("a due entry was not released")
 	}
@@ -263,12 +263,12 @@ func TestReleaseClearsTheSoak(t *testing.T) {
 
 func TestReleaseRefusesWhatIsNotDue(t *testing.T) {
 	q := NewPending()
-	q.Put(Entry{Service: "app", From: "1.0.0", To: "1.0.1", ReleaseAt: now.Add(time.Hour).Format(time.RFC3339)}, now)
-	q.Put(Entry{Service: "manual", From: "1.0.0", To: "1.1.0"}, now)
+	soaking, _ := q.PutEntry(Entry{Service: "app", From: "1.0.0", To: "1.0.1", ReleaseAt: now.Add(time.Hour).Format(time.RFC3339)}, now)
+	manual, _ := q.PutEntry(Entry{Service: "manual", From: "1.0.0", To: "1.1.0"}, now)
 
-	for _, service := range []string{"app", "manual", "absent"} {
-		if _, ok := q.Release(service, now); ok {
-			t.Errorf("%s was released", service)
+	for name, e := range map[string]Entry{"soaking": soaking, "manual": manual, "absent": {ID: 999}} {
+		if _, ok := q.Release(e, now); ok {
+			t.Errorf("%s was released", name)
 		}
 	}
 	if got, _ := q.Get("app"); got.ReleaseAt == "" {

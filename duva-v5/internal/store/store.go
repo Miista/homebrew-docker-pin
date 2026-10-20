@@ -62,13 +62,17 @@ func Open(path string) (*Store, error) {
 	return s, nil
 }
 
+// DB is the database, for reads and single statements. Anything that writes
+// more than one statement goes through Tx.
+func (s *Store) DB() *sql.DB { return s.db }
+
 // Close closes the database.
 func (s *Store) Close() error { return s.db.Close() }
 
 // Tx runs fn in a transaction, committing if it returns nil and rolling back
 // otherwise.
-func (s *Store) Tx(ctx context.Context, fn func(*sql.Tx) error) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+func (s *Store) Tx(fn func(*sql.Tx) error) error {
+	tx, err := s.db.BeginTx(context.Background(), nil)
 	if err != nil {
 		return err
 	}
@@ -119,7 +123,7 @@ func (s *Store) migrate() error {
 		if err != nil {
 			return err
 		}
-		err = s.Tx(context.Background(), func(tx *sql.Tx) error {
+		err = s.Tx(func(tx *sql.Tx) error {
 			if _, err := tx.Exec(string(body)); err != nil {
 				return err
 			}

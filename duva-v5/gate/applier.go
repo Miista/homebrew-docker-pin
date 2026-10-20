@@ -161,7 +161,7 @@ func (a *applier) apply(e queue.Entry, l *live, unattended bool, attempt int) {
 		// than at Start, so a failure anywhere above leaves the entry exactly
 		// where a person or the next notice can still find it.
 		if a.queue != nil {
-			a.queue.Remove(e.Service)
+			a.queue.Complete(e, time.Now())
 		}
 	case status == update.Deferred:
 		// Not a failure: the updater touched nothing and said so. No
@@ -205,7 +205,7 @@ func (a *applier) retryLater(e queue.Entry, attempt int) {
 		if a.queue == nil {
 			return
 		}
-		cur, ok := a.queue.Get(e.Service)
+		cur, ok := a.queue.ByID(e.ID)
 		if !ok {
 			return
 		}

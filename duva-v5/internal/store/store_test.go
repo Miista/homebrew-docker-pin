@@ -1,7 +1,6 @@
 package store
 
 import (
-	"context"
 	"database/sql"
 	"path/filepath"
 	"testing"
@@ -72,7 +71,7 @@ func TestTheJournalIsWAL(t *testing.T) {
 
 func TestATransactionThatFailsLeavesNothing(t *testing.T) {
 	s := open(t)
-	err := s.Tx(context.Background(), func(tx *sql.Tx) error {
+	err := s.Tx(func(tx *sql.Tx) error {
 		if _, err := tx.Exec(`INSERT INTO images (repo) VALUES ('example.com/app')`); err != nil {
 			return err
 		}

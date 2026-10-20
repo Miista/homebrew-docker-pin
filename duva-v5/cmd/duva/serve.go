@@ -18,6 +18,7 @@ import (
 
 	"github.com/Miista/homebrew-docker-pin/duva-v5/gate"
 	q "github.com/Miista/homebrew-docker-pin/duva-v5/internal/queue"
+	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/store"
 	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/ui"
 	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/watch"
 	"github.com/Miista/homebrew-docker-pin/duva-v5/updater"
@@ -47,6 +48,11 @@ func serve() error {
 	if err != nil {
 		return err
 	}
+	st, err := store.Open(dataFile)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
 	up, err := updater.New(component(log, "update"))
 	if err != nil {
 		return err
@@ -54,6 +60,7 @@ func serve() error {
 	queue, err := gate.New(component(log, "queue"), gate.Options{
 		Updater: up.Local(),
 		Root:    root,
+		Store:   st,
 		// Policy from the running container: what governs a service is what
 		// it was started with, until it is recreated.
 		Labels: dockerapi.Labels,

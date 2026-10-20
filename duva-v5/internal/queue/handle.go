@@ -127,7 +127,8 @@ func (h *Handler) Handle(n Notice) Result {
 			e.ReleaseAt = at.UTC().Format(time.RFC3339)
 			e.Why = fmt.Sprintf("%s; soaking until %s", v.Why, at.Local().Format("2006-01-02 15:04 MST"))
 		}
-		added := h.Queue.Put(e, h.now())
+		e.Published = published(n)
+		stored, added := h.Queue.PutEntry(e, h.now())
 		if h.Applier == nil {
 			// No updater configured: queue it rather than lose it. A queue
 			// that decided to apply and then dropped the decision would be
@@ -151,6 +152,13 @@ func (h *Handler) Handle(n Notice) Result {
 			}
 			return Result{Outcome: Queue, Service: svc.Name, Message: "soaking until " + e.ReleaseAt, Status: http.StatusOK}
 		}
+		// What is started is the entry as stored, with its row, so the
+		// applier can settle that entry and no other. A release older than
+		// one already waiting is not started: it is not what the queue holds.
+		if stored.To != e.To || stored.From != e.From {
+			return Result{Outcome: Ignore, Service: svc.Name, Message: "a newer release is already waiting", Status: http.StatusOK}
+		}
+		e = stored
 		if err := h.Applier.StartUnattended(e); err != nil {
 			// Failing to start is not failing to queue. It stays queued, so
 			// the next notice tries again and a person can see it waiting.
@@ -167,6 +175,7 @@ func (h *Handler) Handle(n Notice) Result {
 
 	default: // Queue
 		e := EntryFrom(v, svc, digestFor(v, n))
+		e.Published = published(n)
 		if h.enqueue(e) {
 			h.logf("%s: %s -> %s is available, waiting for approval (%s)", svc.Name, v.From, v.To, v.Why)
 		}
@@ -212,4 +221,13 @@ func digestFor(v Verdict, n Notice) string {
 		return n.Digest
 	}
 	return ""
+}
+
+// published is a notice's publish time as an entry records it, empty when the
+// watcher did not say.
+func published(n Notice) string {
+	if n.Published.IsZero() {
+		return ""
+	}
+	return n.Published.UTC().Format(time.RFC3339)
 }

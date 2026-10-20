@@ -394,12 +394,12 @@ func TestAFailedApplyNotifiesWithTheActorsReason(t *testing.T) {
 // early.
 func TestApplierRemovesFromQueueOnlyOnSuccess(t *testing.T) {
 	q := queue.NewPending()
-	q.Put(entryFor("app"), time.Now())
+	e, _ := q.PutEntry(entryFor("app"), time.Now())
 
 	s := &stubActor{lines: []string{"pulling", update.Terminal(update.Completed, "")}}
 	a := newTestApplierOver(t, s, q)
 
-	if err := a.Start(entryFor("app")); err != nil {
+	if err := a.Start(e); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	waitIdle(t, a)
@@ -414,12 +414,12 @@ func TestApplierRemovesFromQueueOnlyOnSuccess(t *testing.T) {
 // re-report a digest move it already handed on successfully.
 func TestApplierLeavesEntryQueuedOnFailure(t *testing.T) {
 	q := queue.NewPending()
-	q.Put(entryFor("app"), time.Now())
+	e, _ := q.PutEntry(entryFor("app"), time.Now())
 
 	s := &stubActor{lines: []string{"pulling", update.Terminal(update.Failed, "boom")}}
 	a := newTestApplierOver(t, s, q)
 
-	if err := a.Start(entryFor("app")); err != nil {
+	if err := a.Start(e); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	waitIdle(t, a)
@@ -486,8 +486,7 @@ func TestAnUnattendedDeferralIsRetried(t *testing.T) {
 	q := queue.NewPending()
 	a := newTestApplierOver(t, s, q)
 	a.retryAfter = 20 * time.Millisecond
-	e := entryFor("app")
-	q.Put(e, time.Now())
+	e, _ := q.PutEntry(entryFor("app"), time.Now())
 
 	if err := a.StartUnattended(e); err != nil {
 		t.Fatal(err)
@@ -513,8 +512,7 @@ func TestAManualDeferralIsNotRetried(t *testing.T) {
 	q := queue.NewPending()
 	a := newTestApplierOver(t, s, q)
 	a.retryAfter = 20 * time.Millisecond
-	e := entryFor("app")
-	q.Put(e, time.Now())
+	e, _ := q.PutEntry(entryFor("app"), time.Now())
 
 	if err := a.Start(e); err != nil {
 		t.Fatal(err)

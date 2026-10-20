@@ -145,7 +145,7 @@ func (r *reconciler) release() {
 				continue
 			}
 		}
-		e, ok := r.queue.Release(due.Service, now)
+		e, ok := r.queue.Release(due, now)
 		if !ok {
 			continue
 		}

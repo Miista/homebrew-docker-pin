@@ -49,6 +49,8 @@ type Notice struct {
 type Service struct {
 	// Name is the compose service name.
 	Name string
+	// Container is its container_name, which is how duva identifies it.
+	Container string
 	// File is the compose file it is declared in — not necessarily the
 	// project root, since include: is resolved.
 	File string

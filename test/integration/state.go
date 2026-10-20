@@ -209,14 +209,31 @@ type queueEntry struct {
 // which is what made the v3 suite flaky.
 func (s *Scenario) state() map[string]queueEntry {
 	s.t.Helper()
-	// v5 keeps every component's state in one /data; v4's queue had its own.
-	path := filepath.Join(s.Dir, "data", "queue.json")
-	if _, err := os.Stat(path); err != nil {
-		path = filepath.Join(s.Dir, "queue-data", "queue.json")
-	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return map[string]queueEntry{} // nothing queued yet
+	// v5 keeps its queue in a database, read through the binary that owns
+	// it rather than parsed here; v4 kept it in queue.json.
+	var raw []byte
+	if s.suite() == "duva-v5" {
+		// Retried rather than read as empty: an exec that fails -- duva
+		// mid-recreate during a self-update -- says nothing about the
+		// queue, and "empty" is exactly what some tests wait for.
+		var out string
+		var err error
+		for deadline := time.Now().Add(15 * time.Second); ; {
+			if out, err = s.compose("exec", "-T", "duva", "/duva", "queue"); err == nil {
+				break
+			}
+			if time.Now().After(deadline) {
+				s.t.Fatalf("reading the queue: %v\n%s", err, out)
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+		raw = []byte(out)
+	} else {
+		var err error
+		raw, err = os.ReadFile(filepath.Join(s.Dir, "queue-data", "queue.json"))
+		if err != nil {
+			return map[string]queueEntry{} // nothing queued yet
+		}
 	}
 	var st map[string]queueEntry
 	if err := json.Unmarshal(raw, &st); err != nil {
