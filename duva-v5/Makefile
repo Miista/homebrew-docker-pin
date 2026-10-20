@@ -1,44 +1,20 @@
-# duva v4: detector, decider, actor, ui.
+# duva v5: one binary, one image.
 #
-# Its own build, because it is its own thing. The binaries are released and
-# versioned together -- they speak one contract and a version skew between
-# them is a bug -- but separately from `docker pin`, which they are not part of.
+# Released by GoReleaser from duva-v5/vX.Y tags (.goreleaser.duva-v5.yaml);
+# this is for working on it locally.
 
-BINARIES    := detector decider actor ui
-VERSION     ?= dev
-LDFLAGS     := -s -w -X main.version=$(VERSION)
-REGISTRY    ?= registry.example.com
+VERSION ?= dev
+LDFLAGS := -s -w -X main.version=$(VERSION)
 
-.PHONY: all build clean test images push
+.PHONY: all build clean test
 
 all: build
 
 build:
-	@for b in $(BINARIES); do \
-		echo "building $$b"; \
-		go build -trimpath -ldflags "$(LDFLAGS)" -o $$b ./$$b || exit 1; \
-	done
+	go build -trimpath -ldflags "$(LDFLAGS)" -o duva ./cmd/duva
 
 clean:
-	rm -f $(BINARIES)
+	rm -f duva
 
 test:
 	go test -shuffle=on ./...
-
-# Each binary has its own Dockerfile, because each needs a different thing:
-# the detector and decider hold no docker socket and shell out to nothing; the
-# actor holds the socket and carries git, for the commit. One shared image
-# would give all three the union of what any of them needs, which is the
-# opposite of why they are separate processes.
-images:
-	@for b in $(BINARIES); do \
-		echo "building image for $$b"; \
-		docker build -q -f $$b/Dockerfile \
-			--build-arg VERSION=$(VERSION) \
-			-t $(REGISTRY)/duva-$$b:$(VERSION) .. || exit 1; \
-	done
-
-push: images
-	@for b in $(BINARIES); do \
-		docker push $(REGISTRY)/duva-$$b:$(VERSION) || exit 1; \
-	done

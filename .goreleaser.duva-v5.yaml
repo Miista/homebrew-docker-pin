@@ -1,0 +1,54 @@
+# duva-v5's own GoReleaser config, separate from the root .goreleaser.yaml and
+# from duva-v4's.
+#
+# Its own tag namespace (duva-v5/vX.Y, pushed via
+# .github/workflows/duva-v5-release.yml) for the same reason v4 has one: duva
+# versions independently of docker-pin. Invoked with
+# --config .goreleaser.duva-v5.yaml.
+#
+# One build and one image, where v4 had four of each: watch, queue, updater
+# and UI are one process (docs/duva-v5-one-binary.md).
+#
+# GORELEASER_CURRENT_TAG must be set explicitly by the workflow to the pushed
+# tag. Without it, GoReleaser resolves "the current tag" via `git describe`,
+# which picks arbitrarily among tags on the same commit.
+version: 2
+
+builds:
+  - id: duva
+    dir: duva-v5
+    main: ./cmd/duva
+    binary: duva
+    goos: [linux]
+    goarch: [amd64, arm64]
+    # Static: the image is Alpine (musl), and a binary that needed a dynamic
+    # linker would be relying on musl's looser linking by luck.
+    env:
+      - CGO_ENABLED=0
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X main.version={{ trimprefix .Tag "duva-v5/" }}
+
+archives:
+  - id: default
+    ids: [duva]
+    formats: [binary]
+
+dockers_v2:
+  - id: duva
+    ids: [duva]
+    dockerfile: duva-v5/Dockerfile
+    platforms: ["linux/amd64", "linux/arm64"]
+    images:
+      # v3's name, free since v3 was retired. v4's four images keep theirs,
+      # so a host still on v4 is untouched until it switches.
+      - "ghcr.io/miista/duva"
+    tags:
+      - "{{ trimprefix .Tag \"duva-v5/\" }}"
+      - "latest"
+
+release:
+  name_template: "duva-v5 {{ trimprefix .Tag \"duva-v5/\" }}"
+
+checksum:
+  disable: true
