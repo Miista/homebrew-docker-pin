@@ -1,10 +1,8 @@
 package updater
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
@@ -20,11 +18,9 @@ import (
 // policy -- what happened is in the container log and the git history.
 const linger = 60 * time.Second
 
-// Server is the updater's HTTP surface: take work, and let it be watched.
-//
-// Internal only. The queue calls it over the host's own network, and
-// nothing outside has a path to it — which is why the token is about saying
-// who is asking rather than hiding what is said.
+// Server is the updater: it takes work, one apply per service at a time, and
+// lets it be watched. The queue in the same process reaches it through
+// Local; nothing reaches it over a network.
 type Server struct {
 	// Apply carries out one request, writing its progress to step. It
 	// returns the terminal status and a reason for a failure.
@@ -36,7 +32,7 @@ type Server struct {
 	//
 	// Injected like Apply, and for the same reason: what makes this updater
 	// ready is a git working tree, which a test should not have to build to
-	// exercise the endpoint. Nil means always ready -- an updater that cannot
+	// exercise it. Nil means always ready -- an updater that cannot
 	// tell should not claim to be broken.
 	Ready func() update.Readiness
 	// Applicable reports whether this updater would act on one service.
@@ -51,8 +47,6 @@ type Server struct {
 	// HandOff starts the helper that replaces this updater, for a request
 	// naming it. See selfupdate.go.
 	HandOff func(r update.Request) (Handoff, error)
-	// Token, when set, is required on /v1/apply.
-	Token string
 	// Version is the build.
 	Version string
 	// Log records what happened, for an operator reading the container's
@@ -81,79 +75,6 @@ func answer(status update.Status, reason string) work {
 	return func(update.Request, func(string, ...any)) (update.Status, string) {
 		return status, reason
 	}
-}
-
-// Handler returns the routes.
-func (s *Server) Handler() http.Handler {
-	s.running = map[string]*stream{}
-	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("ok\n"))
-	})
-	mux.HandleFunc("/v1/apply", s.guard(s.apply))
-	mux.HandleFunc("/v1/ready", s.ready)
-	mux.HandleFunc("/v1/applicable/", s.applicable)
-	// Deliberately unguarded: it returns nothing when no work is running, so
-	// there is no session to guess at and nothing to leak. Guarding it would
-	// mean a token for reading a log that is about to be shown to whoever
-	// asked for the update anyway.
-	mux.HandleFunc("/v1/stream/", s.stream)
-	return mux
-}
-
-// applicable answers whether one service would be acted on.
-//
-// Unguarded, like /v1/ready: it reports whether a service could be updated,
-// which is what the page already shows, and a token for reading it would be
-// a token for a fact the queue publishes anyway.
-func (s *Server) applicable(w http.ResponseWriter, r *http.Request) {
-	service := strings.TrimPrefix(r.URL.Path, "/v1/applicable/")
-	w.Header().Set("Content-Type", "application/json")
-	if service == "" {
-		http.Error(w, "no service named", http.StatusBadRequest)
-		return
-	}
-	if s.Applicable == nil {
-		json.NewEncoder(w).Encode(update.Applicable{Applicable: true})
-		return
-	}
-	json.NewEncoder(w).Encode(s.Applicable(service))
-}
-
-func (s *Server) guard(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if s.Token != "" {
-			if strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ") != s.Token {
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
-				return
-			}
-		}
-		next(w, r)
-	}
-}
-
-func (s *Server) apply(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	var req update.Request
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil {
-		http.Error(w, "unreadable request: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-	if req.Service == "" {
-		http.Error(w, "a request needs a service", http.StatusBadRequest)
-		return
-	}
-
-	acc, err := s.Start(req)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusConflict)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(acc)
 }
 
 // Start begins applying a request and says where to watch it. It is what
@@ -323,28 +244,6 @@ func (s *Server) run(req update.Request, st *stream, do work) {
 	}
 }
 
-// stream relays work in flight.
-//
-// Empty when nothing is running, which is the whole of its error handling:
-// either work is happening and its log is what the watcher wanted, or there
-// is nothing to say.
-func (s *Server) stream(w http.ResponseWriter, r *http.Request) {
-	service := strings.TrimPrefix(r.URL.Path, "/v1/stream/")
-	if service == "" {
-		http.Error(w, "no service", http.StatusBadRequest)
-		return
-	}
-	s.mu.Lock()
-	st, ok := s.running[service]
-	s.mu.Unlock()
-	if !ok {
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.Header().Set("Cache-Control", "no-store")
-		return
-	}
-	serveStream(w, r, st)
-}
-
 // serveStream relays one stream to one watcher, from its start, until it ends
 // or the watcher leaves.
 func serveStream(w http.ResponseWriter, r *http.Request, st *stream) {
@@ -384,18 +283,6 @@ func flush(w http.ResponseWriter) {
 
 func (s *Server) logf(format string, args ...any) {
 	s.Log.Info().Msgf(format, args...)
-}
-
-// ready reports whether work offered now would be attempted.
-//
-// Unguarded, like /healthz and for the same reason: the caller is a queue
-// asking a yes-or-no question about itself, and the answer names no service
-// and carries no secret. A token here would mean the UI could not show why a
-// button is grey without holding one.
-func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
-	json.NewEncoder(w).Encode(s.Readiness())
 }
 
 // Readiness is whether work offered now would be attempted: the /v1/ready

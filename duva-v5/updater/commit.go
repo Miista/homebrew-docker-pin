@@ -29,7 +29,7 @@ import (
 //
 // DUVA_COMMIT_TEMPLATE rather than a mounted file: it is one line, it is not
 // a secret, and it does not change without a restart, so it belongs beside
-// DUVA_UPDATE_TOKEN and DUVA_GIT_PUSH rather than being a mount to arrange.
+// DUVA_GIT_PUSH rather than being a mount to arrange.
 
 // defaultCommitTemplate is used when nothing is mounted -- which is the
 // common case, and should need no configuration.
@@ -102,7 +102,7 @@ func commitSubject(tmpl string, f commitFields) (string, error) {
 // An environment variable rather than a mounted file, which is what v3 had.
 // It is one line, it is not a secret, and it does not change without a
 // restart -- so a file would be a mount to arrange and a second mechanism
-// beside DUVA_UPDATE_TOKEN and DUVA_GIT_PUSH, for no benefit. It also reads where
+// beside DUVA_GIT_PUSH, for no benefit. It also reads where
 // an operator looks for it: next to the rest of the service's configuration.
 //
 // Unset is the normal case rather than a problem: most stacks want the

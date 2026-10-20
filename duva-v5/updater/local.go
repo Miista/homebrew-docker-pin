@@ -10,13 +10,11 @@ import (
 	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/update"
 )
 
-// Local is the updater answering a queue in the same process: the four
-// questions update.Client asks over HTTP, answered by calling the server
-// directly.
+// Local is the updater as the queue in the same process sees it: the four
+// questions of update.Updater, answered by calling the server directly.
 //
 // Not a second implementation of anything. Apply is Start, Ready is
-// Readiness, and Watch reads the same stream the HTTP endpoint relays, so a
-// request takes the same path either way -- the self-update handoff included.
+// Readiness, and Watch reads the stream the work writes to.
 func (s *Server) Local() update.Updater { return local{s} }
 
 type local struct{ s *Server }
@@ -41,7 +39,7 @@ func (l local) Applicable(_ context.Context, service string) update.Applicable {
 // so that is watched over HTTP as before.
 func (l local) Watch(ctx context.Context, loc string, tee io.Writer) (update.Status, string, error) {
 	if strings.HasPrefix(loc, "http://") || strings.HasPrefix(loc, "https://") {
-		return (&update.Client{}).Watch(ctx, loc, tee)
+		return update.WatchURL(ctx, loc, tee)
 	}
 	service := strings.TrimPrefix(loc, "/v1/stream/")
 	l.s.mu.Lock()

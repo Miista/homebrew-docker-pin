@@ -19,11 +19,11 @@ const selfRequest = `{"service":"duva-update","image":"ghcr.io/miista/duva-updat
 
 // selfServer is an updater whose own service is duva-update, with a hand-off
 // the test controls: exited is closed to make the helper exit.
-func selfServer(t *testing.T, apply work, handOffErr error) (srv *httptest.Server, exited chan error, handed *int) {
+func selfServer(t *testing.T, apply work, handOffErr error) (s *Server, exited chan error, handed *int) {
 	t.Helper()
 	exited = make(chan error, 1)
 	handed = new(int)
-	s := &Server{
+	s = &Server{
 		Version: "test",
 		Apply:   apply,
 		IsSelf:  func(service string) bool { return service == "duva-update" },
@@ -39,16 +39,7 @@ func selfServer(t *testing.T, apply work, handOffErr error) (srv *httptest.Serve
 			}, nil
 		},
 	}
-	srv = httptest.NewServer(s.Handler())
-	t.Cleanup(srv.Close)
-	return srv, exited, handed
-}
-
-func readyAt(t *testing.T, url string) update.Readiness {
-	t.Helper()
-	var r update.Readiness
-	json.NewDecoder(get(t, url+"/v1/ready").Body).Decode(&r)
-	return r
+	return s, exited, handed
 }
 
 // The queue follows the stream it is given, so handing over is answering with
@@ -59,9 +50,7 @@ func TestUpdatingItselfAnswersWithTheHelpersStream(t *testing.T) {
 		return update.Completed, ""
 	}, nil)
 
-	resp := post(t, srv.URL+"/v1/apply", "", selfRequest)
-	var acc update.Accepted
-	json.NewDecoder(resp.Body).Decode(&acc)
+	acc := start(t, srv, selfRequest)
 
 	if acc.Stream != "http://duva-update-self-update-1:8080/v1/stream/duva-update" {
 		t.Errorf("stream = %q, want the helper's", acc.Stream)
@@ -76,9 +65,9 @@ func TestUpdatingItselfAnswersWithTheHelpersStream(t *testing.T) {
 // recreate then kills.
 func TestNotReadyWhileTheHelperLives(t *testing.T) {
 	srv, exited, _ := selfServer(t, nil, nil)
-	post(t, srv.URL+"/v1/apply", "", selfRequest)
+	start(t, srv, selfRequest)
 
-	r := readyAt(t, srv.URL)
+	r := srv.Readiness()
 	if r.Ready {
 		t.Fatal("ready while a helper is replacing it")
 	}
@@ -90,7 +79,7 @@ func TestNotReadyWhileTheHelperLives(t *testing.T) {
 	// replacing anything, and this updater is the one running.
 	exited <- nil
 	deadline := time.Now().Add(time.Second)
-	for !readyAt(t, srv.URL).Ready {
+	for !srv.Readiness().Ready {
 		if time.Now().After(deadline) {
 			t.Fatal("still not ready after the helper exited")
 		}
@@ -105,10 +94,10 @@ func TestWorkWhileHandedOffIsDeferred(t *testing.T) {
 		t.Error("work ran on an updater that had handed off")
 		return update.Completed, ""
 	}, nil)
-	post(t, srv.URL+"/v1/apply", "", selfRequest)
+	start(t, srv, selfRequest)
 
-	post(t, srv.URL+"/v1/apply", "", oneRequest)
-	body := readAll(t, get(t, srv.URL+"/v1/stream/app"))
+	start(t, srv, oneRequest)
+	body := streamOf(t, srv, "app")
 	if !strings.Contains(body, "status: deferred") || !strings.Contains(body, "duva-update-self-update-1") {
 		t.Errorf("want a deferral naming the helper:\n%s", body)
 	}
@@ -117,11 +106,11 @@ func TestWorkWhileHandedOffIsDeferred(t *testing.T) {
 // Losing track of the helper is not a reason to guess it is gone.
 func TestALostHelperKeepsItNotReady(t *testing.T) {
 	srv, exited, _ := selfServer(t, nil, nil)
-	post(t, srv.URL+"/v1/apply", "", selfRequest)
+	start(t, srv, selfRequest)
 
 	exited <- errors.New("the daemon hung up")
 	time.Sleep(50 * time.Millisecond)
-	if readyAt(t, srv.URL).Ready {
+	if srv.Readiness().Ready {
 		t.Error("ready again without knowing whether the helper is still running")
 	}
 }
@@ -135,17 +124,17 @@ func TestItDoesNotHandOffWhileApplyingSomethingElse(t *testing.T) {
 		return update.Completed, ""
 	}, nil)
 
-	post(t, srv.URL+"/v1/apply", "", oneRequest)
-	post(t, srv.URL+"/v1/apply", "", selfRequest)
+	start(t, srv, oneRequest)
+	start(t, srv, selfRequest)
 
-	body := readAll(t, get(t, srv.URL+"/v1/stream/duva-update"))
+	body := streamOf(t, srv, "duva-update")
 	if !strings.Contains(body, "status: deferred") || !strings.Contains(body, "app") {
 		t.Errorf("want a deferral naming what it is busy with:\n%s", body)
 	}
 	if *handed != 0 {
 		t.Error("it handed off while applying something else")
 	}
-	if !readyAt(t, srv.URL).Ready {
+	if !srv.Readiness().Ready {
 		t.Error("a deferred self-update left it not ready")
 	}
 }
@@ -155,17 +144,15 @@ func TestItDoesNotHandOffWhileApplyingSomethingElse(t *testing.T) {
 func TestAHelperThatWillNotStartFails(t *testing.T) {
 	srv, _, _ := selfServer(t, nil, errors.New("no such image"))
 
-	resp := post(t, srv.URL+"/v1/apply", "", selfRequest)
-	var acc update.Accepted
-	json.NewDecoder(resp.Body).Decode(&acc)
+	acc := start(t, srv, selfRequest)
 	if acc.Stream != "/v1/stream/duva-update" {
 		t.Fatalf("stream = %q, want its own", acc.Stream)
 	}
-	body := readAll(t, get(t, srv.URL+acc.Stream))
+	body := streamOf(t, srv, strings.TrimPrefix(acc.Stream, "/v1/stream/"))
 	if !strings.Contains(body, "status: failed") || !strings.Contains(body, "no such image") {
 		t.Errorf("want the failure on the stream:\n%s", body)
 	}
-	if !readyAt(t, srv.URL).Ready {
+	if !srv.Readiness().Ready {
 		t.Error("a hand-off that never happened left it not ready")
 	}
 }

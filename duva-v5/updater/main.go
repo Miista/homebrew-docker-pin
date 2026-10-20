@@ -17,7 +17,6 @@
 //	                      host. Required: nothing can guess it.
 //	DUVA_COMPOSE_DIR      where the compose file is within it. Left out when
 //	                      it is at the repository root.
-//	DUVA_UPDATE_TOKEN     the bearer token the queue must present
 //	DUVA_COMMIT_TEMPLATE  what a change is committed under
 //	DUVA_GIT_PUSH         publish commits (default off)
 //	DUVA_LOG_LEVEL        trace/debug/info/warn/error
@@ -109,7 +108,7 @@ func projectFile() (string, error) {
 // Serving it is the caller's choice. As its own process it answers HTTP; in
 // duva v5's one process, the queue calls Local() instead.
 func New(log zerolog.Logger) (*Server, error) {
-	push, token, tmpl, err := setup()
+	push, tmpl, err := setup()
 	if err != nil {
 		return nil, err
 	}
@@ -117,7 +116,6 @@ func New(log zerolog.Logger) (*Server, error) {
 		log.Info().Msg("DUVA_GIT_PUSH is off: commits stay local")
 	}
 	return &Server{
-		Token:      token,
 		Version:    Version,
 		Log:        log,
 		Ready:      readiness,
@@ -143,7 +141,7 @@ func ProjectFile() (string, error) { return projectFile() }
 
 // setup is what the updater and a self-update helper both check before taking
 // work, and the configuration both work under.
-func setup() (push bool, token, tmpl string, err error) {
+func setup() (push bool, tmpl string, err error) {
 	// Before anything else: an updater that cannot write where the pins live
 	// would take work, do most of it, and fail at the step that matters. The
 	// same reasoning as duva's preflight -- discovering it later means
@@ -154,14 +152,13 @@ func setup() (push bool, token, tmpl string, err error) {
 	// and a process that started happily and then refused every request is a
 	// worse way to learn that than one that never started.
 	if _, err := projectFile(); err != nil {
-		return false, "", "", err
+		return false, "", err
 	}
 	if err := preflight(repoDir); err != nil {
-		return false, "", "", err
+		return false, "", err
 	}
 
 	push = boolEnv("DUVA_GIT_PUSH", false)
-	token = os.Getenv("DUVA_UPDATE_TOKEN")
 
 	// Loaded once, at startup, and a bad one refuses to start. A template
 	// that does not parse would otherwise be discovered by an apply -- after
@@ -169,13 +166,13 @@ func setup() (push bool, token, tmpl string, err error) {
 	// commit nobody made rather than a container nobody expected.
 	tmpl, err = loadCommitTemplate()
 	if err != nil {
-		return false, "", "", fmt.Errorf("the commit template: %w", err)
+		return false, "", fmt.Errorf("the commit template: %w", err)
 	}
 	commitTemplate = tmpl
 	if _, err := commitSubject(tmpl, commitFields{Container: "probe", NewVersion: "1"}); err != nil {
-		return false, "", "", fmt.Errorf("the commit template: %w", err)
+		return false, "", fmt.Errorf("the commit template: %w", err)
 	}
-	return push, token, tmpl, nil
+	return push, tmpl, nil
 }
 
 // writable reports whether this process can write in dir.

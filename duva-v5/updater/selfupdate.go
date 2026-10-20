@@ -235,7 +235,7 @@ func selfUpdate(log zerolog.Logger, args []string) error {
 		return fmt.Errorf("refusing: %s is not the updater that started this helper", req.Service)
 	}
 
-	push, _, tmpl, err := setup()
+	push, tmpl, err := setup()
 	if err != nil {
 		return err
 	}

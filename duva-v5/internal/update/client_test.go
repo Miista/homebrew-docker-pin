@@ -11,8 +11,8 @@ import (
 	"time"
 )
 
-// fakeUpdater is an HTTP server answering like an updater, so the client is
-// tested through a real transport. What is worth catching here -- a stream
+// fakeActor is an HTTP server streaming like a self-update helper, so
+// WatchURL is tested through a real transport. What is worth catching here -- a stream
 // that ends early, a terminal line that never comes -- only exists on a wire.
 type fakeActor struct {
 	// lines are streamed in order, then the connection closes.
@@ -60,58 +60,15 @@ func (f *fakeActor) server(t *testing.T) *httptest.Server {
 	return s
 }
 
-func clientFor(t *testing.T, f *fakeActor) *Client {
+// streamFor serves f and returns the URL of its stream.
+func streamFor(t *testing.T, f *fakeActor) string {
 	t.Helper()
-	return &Client{BaseURL: f.server(t).URL}
+	return f.server(t).URL + "/v1/stream/abc"
 }
 
-func TestApplySendsTheRequestAndReturnsTheStream(t *testing.T) {
-	f := &fakeActor{}
-	c := clientFor(t, f)
 
-	acc, err := c.Apply(context.Background(), Request{
-		Service: "authelia",
-		From:    "4.39.20", To: "4.39.25", Tag: "4.39.25",
-	})
-	if err != nil {
-		t.Fatalf("Apply: %v", err)
-	}
-	if acc.Stream != "/v1/stream/abc" {
-		t.Errorf("stream = %q", acc.Stream)
-	}
-	if f.got.Service != "authelia" || f.got.To != "4.39.25" {
-		t.Errorf("the actor received %+v", f.got)
-	}
-}
 
-// An updater that accepts work but says nowhere to watch it has broken the
-// contract, and pretending otherwise means a queue waiting on nothing.
-func TestApplyRejectsAnEmptyStream(t *testing.T) {
-	// An updater answering with an explicitly empty stream field.
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"stream":""}`))
-	}))
-	t.Cleanup(srv.Close)
-	c := &Client{BaseURL: srv.URL}
 
-	if _, err := c.Apply(context.Background(), Request{}); err == nil {
-		t.Fatal("want an error when the actor names no stream")
-	}
-}
-
-func TestApplyReportsARefusal(t *testing.T) {
-	c := clientFor(t, &fakeActor{applyStatus: http.StatusConflict})
-	if _, err := c.Apply(context.Background(), Request{}); err == nil {
-		t.Fatal("want an error for a non-OK response")
-	}
-}
-
-func TestApplyReportsAnUnreachableActor(t *testing.T) {
-	c := &Client{BaseURL: "http://127.0.0.1:1"}
-	if _, err := c.Apply(context.Background(), Request{}); err == nil {
-		t.Fatal("want an error when the actor cannot be reached")
-	}
-}
 
 // --- watching ---------------------------------------------------------------
 
@@ -121,9 +78,9 @@ func TestWatchReturnsTheTerminalStatus(t *testing.T) {
 		"recreating app",
 		Terminal(Completed, ""),
 	}}
-	c := clientFor(t, f)
+	url := streamFor(t, f)
 
-	status, reason, err := c.Watch(context.Background(), "/v1/stream/abc", nil)
+	status, reason, err := WatchURL(context.Background(), url, nil)
 	if err != nil {
 		t.Fatalf("Watch: %v", err)
 	}
@@ -137,9 +94,9 @@ func TestWatchReturnsAFailureAndItsReason(t *testing.T) {
 		"pulling",
 		Terminal(Failed, "the container refused the image"),
 	}}
-	c := clientFor(t, f)
+	url := streamFor(t, f)
 
-	status, reason, err := c.Watch(context.Background(), "/v1/stream/abc", nil)
+	status, reason, err := WatchURL(context.Background(), url, nil)
 	if err != nil {
 		t.Fatalf("Watch: %v", err)
 	}
@@ -161,10 +118,10 @@ func TestWatchTeesEveryLine(t *testing.T) {
 		"recreating app",
 		Terminal(Completed, ""),
 	}}
-	c := clientFor(t, f)
+	url := streamFor(t, f)
 
 	var seen bytes.Buffer
-	if _, _, err := c.Watch(context.Background(), "/v1/stream/abc", &seen); err != nil {
+	if _, _, err := WatchURL(context.Background(), url, &seen); err != nil {
 		t.Fatalf("Watch: %v", err)
 	}
 	for _, want := range []string{"pulling", "recreating app", "status: completed"} {
@@ -178,9 +135,9 @@ func TestWatchTeesEveryLine(t *testing.T) {
 // caused it. Silence is the one thing that must never read as success.
 func TestWatchTreatsSilenceAsFailure(t *testing.T) {
 	f := &fakeActor{lines: []string{"pulling", "recreating"}} // no terminal line
-	c := clientFor(t, f)
+	url := streamFor(t, f)
 
-	status, reason, err := c.Watch(context.Background(), "/v1/stream/abc", nil)
+	status, reason, err := WatchURL(context.Background(), url, nil)
 	if err != nil {
 		t.Fatalf("Watch: %v", err)
 	}
@@ -195,8 +152,8 @@ func TestWatchTreatsSilenceAsFailure(t *testing.T) {
 // An empty stream is the same case, and is what the updater serves when nothing
 // is running.
 func TestWatchTreatsAnEmptyStreamAsFailure(t *testing.T) {
-	c := clientFor(t, &fakeActor{})
-	status, _, err := c.Watch(context.Background(), "/v1/stream/abc", nil)
+	url := streamFor(t, &fakeActor{})
+	status, _, err := WatchURL(context.Background(), url, nil)
 	if err != nil {
 		t.Fatalf("Watch: %v", err)
 	}
@@ -208,14 +165,14 @@ func TestWatchTreatsAnEmptyStreamAsFailure(t *testing.T) {
 // The timeout is the queue's, expressed as a context -- it is what keeps an
 // updater that died mid-apply from wedging the queue forever.
 func TestWatchRespectsTheContext(t *testing.T) {
-	c := clientFor(t, &fakeActor{hang: true})
+	url := streamFor(t, &fakeActor{hang: true})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 
 	done := make(chan struct{})
 	go func() {
-		c.Watch(ctx, "/v1/stream/abc", nil)
+		WatchURL(ctx, url, nil)
 		close(done)
 	}()
 	select {
@@ -226,50 +183,10 @@ func TestWatchRespectsTheContext(t *testing.T) {
 }
 
 func TestWatchReportsAnUnreachableStream(t *testing.T) {
-	c := &Client{BaseURL: "http://127.0.0.1:1"}
-	if _, _, err := c.Watch(context.Background(), "/v1/stream/abc", nil); err == nil {
+	if _, _, err := WatchURL(context.Background(), "http://127.0.0.1:1/v1/stream/abc", nil); err == nil {
 		t.Fatal("want an error when the stream cannot be reached")
 	}
 }
 
-// The updater may answer with a path or a full URL, and neither is wrong: a
-// path is what it knows for certain, an absolute URL is what an updater behind
-// something else might need to say.
-func TestAbsoluteAcceptsBothForms(t *testing.T) {
-	c := &Client{BaseURL: "http://actor:8080"}
-	for in, want := range map[string]string{
-		"/v1/stream/abc":                  "http://actor:8080/v1/stream/abc",
-		"v1/stream/abc":                   "http://actor:8080/v1/stream/abc",
-		"http://elsewhere/v1/stream/abc":  "http://elsewhere/v1/stream/abc",
-		"https://elsewhere/v1/stream/abc": "https://elsewhere/v1/stream/abc",
-	} {
-		if got := c.absolute(in); got != want {
-			t.Errorf("absolute(%q) = %q, want %q", in, got, want)
-		}
-	}
-}
 
-// A trailing slash on the base must not produce a double slash.
-func TestAbsoluteToleratesATrailingSlash(t *testing.T) {
-	c := &Client{BaseURL: "http://actor:8080/"}
-	if got := c.absolute("/v1/stream/abc"); got != "http://actor:8080/v1/stream/abc" {
-		t.Errorf("absolute = %q", got)
-	}
-}
 
-func TestTokenIsSent(t *testing.T) {
-	var seen string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		seen = r.Header.Get("Authorization")
-		json.NewEncoder(w).Encode(Accepted{Stream: "/v1/stream/a"})
-	}))
-	t.Cleanup(srv.Close)
-
-	c := &Client{BaseURL: srv.URL, Token: "s3cret"}
-	if _, err := c.Apply(context.Background(), Request{}); err != nil {
-		t.Fatal(err)
-	}
-	if seen != "Bearer s3cret" {
-		t.Errorf("authorization = %q", seen)
-	}
-}

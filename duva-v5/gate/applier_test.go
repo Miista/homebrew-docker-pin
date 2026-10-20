@@ -2,8 +2,8 @@ package gate
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -17,8 +17,9 @@ import (
 	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/update"
 )
 
-// stubUpdater is an HTTP server standing in for an updater, so the applier is
-// exercised through the real client and the real contract.
+// stubActor stands in for the updater, answering the same contract the real
+// one does in-process: Apply starts work, Watch follows it to its terminal
+// line.
 type stubActor struct {
 	mu sync.Mutex
 	// lines are streamed for each apply, with a pause between them so a
@@ -31,53 +32,48 @@ type stubActor struct {
 	inFlight, peak int
 }
 
-func (s *stubActor) server(t *testing.T) *httptest.Server {
-	t.Helper()
-	mux := http.NewServeMux()
-	mux.HandleFunc("/v1/apply", func(w http.ResponseWriter, r *http.Request) {
-		s.mu.Lock()
-		s.applies++
-		s.mu.Unlock()
-		json.NewEncoder(w).Encode(update.Accepted{Stream: "/v1/stream/x"})
-	})
-	mux.HandleFunc("/v1/stream/", func(w http.ResponseWriter, r *http.Request) {
-		// Overlap is counted here, but only up to the terminal line: the
-		// client stops reading at it, so anything the stub writes afterwards
-		// is not work the applier is still doing, and counting it would
-		// report an overlap the lock is not responsible for.
-		s.mu.Lock()
-		s.inFlight++
-		if s.inFlight > s.peak {
-			s.peak = s.inFlight
-		}
-		s.mu.Unlock()
-		counted := true
-		release := func() {
-			if counted {
-				counted = false
-				s.mu.Lock()
-				s.inFlight--
-				s.mu.Unlock()
-			}
-		}
-		defer release()
+var _ update.Updater = (*stubActor)(nil)
 
-		for _, line := range s.lines {
-			fmt.Fprintln(w, line)
-			if f, ok := w.(http.Flusher); ok {
-				f.Flush()
-			}
-			if _, _, terminal := update.ParseTerminal(line); terminal {
-				release()
-			}
-			if s.pause > 0 {
-				time.Sleep(s.pause)
-			}
+func (s *stubActor) Apply(context.Context, update.Request) (update.Accepted, error) {
+	s.mu.Lock()
+	s.applies++
+	s.mu.Unlock()
+	return update.Accepted{Stream: "/v1/stream/x"}, nil
+}
+
+// Watch plays the lines. Overlap is counted only up to the terminal line:
+// the applier stops at it, so anything after is not work it is still doing.
+func (s *stubActor) Watch(_ context.Context, _ string, tee io.Writer) (update.Status, string, error) {
+	s.mu.Lock()
+	s.inFlight++
+	if s.inFlight > s.peak {
+		s.peak = s.inFlight
+	}
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		s.inFlight--
+		s.mu.Unlock()
+	}()
+
+	for _, line := range s.lines {
+		if tee != nil {
+			fmt.Fprintln(tee, line)
 		}
-	})
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
-	return srv
+		if status, reason, terminal := update.ParseTerminal(line); terminal {
+			return status, reason, nil
+		}
+		if s.pause > 0 {
+			time.Sleep(s.pause)
+		}
+	}
+	return update.Failed, "the stream ended without a status", nil
+}
+
+func (s *stubActor) Ready(context.Context) update.Readiness { return update.Readiness{Ready: true} }
+
+func (s *stubActor) Applicable(context.Context, string) update.Applicable {
+	return update.Applicable{Applicable: true}
 }
 
 func newTestApplier(t *testing.T, s *stubActor) *applier {
@@ -87,9 +83,8 @@ func newTestApplier(t *testing.T, s *stubActor) *applier {
 
 func newTestApplierOver(t *testing.T, s *stubActor, q *queue.Pending) *applier {
 	t.Helper()
-	srv := s.server(t)
 	// A logger writing nowhere: these tests assert on behaviour, not output.
-	return newApplier(&update.Client{BaseURL: srv.URL}, 10*time.Second, zerolog.Nop(), q)
+	return newApplier(s, 10*time.Second, zerolog.Nop(), q)
 }
 
 func entryFor(service string) queue.Entry {
