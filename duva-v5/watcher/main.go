@@ -41,6 +41,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/Miista/homebrew-docker-pin/compose"
+	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/store"
 	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/watch"
 	"github.com/Miista/homebrew-docker-pin/internal/croncal"
 	"github.com/Miista/homebrew-docker-pin/oci/registry"
@@ -51,7 +52,9 @@ var Version = "dev"
 
 var (
 	composeDir = "/compose"
-	stateFile  = "/data/detector.json"
+	// memStore is where the watcher keeps what it checked: duva's database,
+	// set from Options.Store.
+	memStore *store.Store
 )
 
 // slowCheck is how long one service may take before it is worth saying so.
@@ -96,6 +99,8 @@ type Options struct {
 	// Labels reads a service's tag rules from its container, by
 	// container_name. Nil reads them from the compose file.
 	Labels func(container string) (map[string]string, bool, error)
+	// Store is where the cutoffs and held findings are kept.
+	Store *store.Store
 }
 
 // Serve checks once now and then on DUVA_SCHEDULE, until ctx is done.
@@ -162,6 +167,9 @@ func run(log zerolog.Logger, only string, opts Options) error {
 		}
 	}
 
+	if opts.Store != nil {
+		memStore = opts.Store
+	}
 	mem, err := loadMemory(log)
 	if err != nil {
 		return err

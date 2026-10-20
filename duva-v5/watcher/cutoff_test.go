@@ -1,6 +1,7 @@
 package watcher
 
 import (
+	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/store"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,11 +13,17 @@ import (
 	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/watch"
 )
 
+// useTempState gives the test a database of its own, in a temporary
+// directory, the way serve gives the watcher duva's.
 func useTempState(t *testing.T) {
 	t.Helper()
-	old := stateFile
-	stateFile = filepath.Join(t.TempDir(), "detector.json")
-	t.Cleanup(func() { stateFile = old })
+	st, err := store.Open(filepath.Join(t.TempDir(), "duva.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := memStore
+	memStore = st
+	t.Cleanup(func() { memStore = old; st.Close() })
 }
 
 func loadOrFail(t *testing.T) *memory {
@@ -81,22 +88,6 @@ func TestOneServicesLineDoesNotAffectAnothers(t *testing.T) {
 	}
 }
 
-// An older state file, from when one line covered every service, still means
-// something: it seeds anything without a line of its own, so upgrading does
-// not re-report a week.
-func TestAnOldWholeRunCutoffSeedsEveryService(t *testing.T) {
-	useTempState(t)
-	old := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
-	if err := os.WriteFile(stateFile,
-		[]byte(`{"last_check":"`+old.Format(time.RFC3339)+`"}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	if got := loadOrFail(t).Cutoff("anything"); !got.Equal(old) {
-		t.Errorf("cutoff = %v, want the old whole-run line %v", got, old)
-	}
-}
-
 // The override is how you ask "what appeared in the last week" without
 // disturbing what is recorded.
 func TestSinceOverrideAcceptsADuration(t *testing.T) {
@@ -153,18 +144,6 @@ func TestAMalformedSinceIsAnError(t *testing.T) {
 
 	if _, err := loadMemory(zerolog.Nop()); err == nil {
 		t.Error("a malformed DUVA_SINCE was accepted")
-	}
-}
-
-func TestAnUnreadableStateFileFallsBackToTheWindow(t *testing.T) {
-	useTempState(t)
-	if err := os.WriteFile(stateFile, []byte("{not json"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	got := loadOrFail(t).Cutoff("app")
-	if time.Since(got) > defaultWindow+time.Minute {
-		t.Errorf("cutoff is %v ago, want about %v", time.Since(got), defaultWindow)
 	}
 }
 
@@ -228,44 +207,6 @@ func TestHoldingTheSameTagTwiceKeepsOne(t *testing.T) {
 }
 
 // --- writing ------------------------------------------------------------------
-
-func TestSaveCreatesItsDirectory(t *testing.T) {
-	dir := t.TempDir()
-	old := stateFile
-	stateFile = filepath.Join(dir, "nested", "detector.json")
-	t.Cleanup(func() { stateFile = old })
-
-	mem := loadOrFail(t)
-	mem.Checked("app", time.Now())
-	if err := mem.save(); err != nil {
-		t.Fatalf("save: %v", err)
-	}
-	if _, err := os.Stat(stateFile); err != nil {
-		t.Errorf("the state file was not written: %v", err)
-	}
-}
-
-// The write is atomic through a temp file and a rename, so a crash mid-write
-// cannot leave a truncated file. The temp must not survive a success.
-func TestSaveLeavesNoTempFiles(t *testing.T) {
-	useTempState(t)
-
-	mem := loadOrFail(t)
-	mem.Checked("app", time.Now())
-	if err := mem.save(); err != nil {
-		t.Fatal(err)
-	}
-
-	entries, err := os.ReadDir(filepath.Dir(stateFile))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), ".detector-") {
-			t.Errorf("a temp file survived the save: %s", e.Name())
-		}
-	}
-}
 
 // --- the project path --------------------------------------------------------
 

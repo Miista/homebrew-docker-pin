@@ -1,57 +1,23 @@
 package watcher
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/rs/zerolog"
 
+	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/store"
 	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/watch"
 )
 
-// The watcher's state: two things, per service, and they are independent.
-//
-// **Cutoff** is how far back to look. It advances whenever a service was
-// checked successfully, whether or not anything was handed on -- looking is
-// not publishing, and conflating them is what made one unreachable registry
-// cost every other service a weekly re-scan.
-//
-// **Pending** is what was found and has not been handed on: the queue could
-// not take it -- its compose file unreadable for a moment, say. It is not
-// lost; it waits here and is offered again first thing next run.
-//
-// Per service, because both failures are per service. One image whose
-// registry refuses says nothing about whether another was checked.
-//
-// Still cheap to lose. A cutoff is one timestamp and a pending finding is the
-// handful of fields already on the wire -- not a baseline of what each image
-// pointed at, which is what would make losing this file cost a full re-listing
-// of every repository rather than one noisy run.
-type state struct {
-	// Services is what is known per compose service.
-	Services map[string]serviceState `json:"services"`
-
-	// LastCheck is the old single cutoff, read but never written.
-	//
-	// Kept so an existing state file still means something: a service with no
-	// line of its own starts from it rather than from a week ago. Dropped on
-	// the first save.
-	LastCheck time.Time `json:"last_check,omitempty"`
-}
-
+// serviceState is one service's memory: how far back to look, and what was
+// found and not handed on yet.
 type serviceState struct {
-	// Cutoff is when this service was last checked completely.
-	Cutoff time.Time `json:"cutoff"`
-	// Pending is what was found for it and not yet handed on, keyed by tag.
-	//
-	// Keyed by tag rather than appended, so a moving tag that moves forty
-	// times during an outage leaves one entry rather than forty. That matches
-	// what the gate does with them anyway -- its queue is keyed by service,
-	// so all but the last would be discarded on arrival.
-	Pending map[string]watch.Finding `json:"pending,omitempty"`
+	Cutoff  time.Time
+	Pending map[string]watch.Finding
 }
 
 // defaultWindow is how far back a service with no recorded check looks.
@@ -64,6 +30,8 @@ const defaultWindow = 7 * 24 * time.Hour
 
 // memory is the state a run works against, and writes back.
 type memory struct {
+	// st is where this is kept between runs.
+	st       *store.Store
 	services map[string]serviceState
 	// fallback is the cutoff for a service with none recorded.
 	fallback time.Time
@@ -162,13 +130,13 @@ func sortedKeys[V any](m map[string]V) []string {
 // loadMemory reads what the watcher knows, and says where it came from so
 // the log can too.
 func loadMemory(log zerolog.Logger) (*memory, error) {
+	if memStore == nil {
+		return nil, fmt.Errorf("no store to keep what was checked in")
+	}
 	week := time.Now().Add(-defaultWindow)
 
-	// An override wins, for asking "what appeared in the last week" without
-	// disturbing what is recorded -- which is how you re-run a check after a
-	// failure without having to reason about state.
 	if raw := os.Getenv("DUVA_SINCE"); raw != "" {
-		m := &memory{services: map[string]serviceState{}, override: true}
+		m := &memory{st: memStore, services: map[string]serviceState{}, override: true}
 		if d, err := time.ParseDuration(raw); err == nil {
 			m.fallback, m.why = time.Now().Add(-d), fmt.Sprintf("DUVA_SINCE=%s", raw)
 			return m, nil
@@ -182,42 +150,59 @@ func loadMemory(log zerolog.Logger) (*memory, error) {
 		return m, nil
 	}
 
-	data, err := os.ReadFile(stateFile)
-	if os.IsNotExist(err) {
-		return &memory{services: map[string]serviceState{}, fallback: week,
-			why: "first run, looking back a week"}, nil
-	}
+	m := &memory{st: memStore, services: map[string]serviceState{}, fallback: week}
+	rows, err := memStore.DB().Query(`SELECT service, cutoff FROM watch_cutoffs`)
 	if err != nil {
-		return nil, fmt.Errorf("reading %s: %w", stateFile, err)
+		return nil, fmt.Errorf("reading the cutoffs: %w", err)
+	}
+	for rows.Next() {
+		var service, raw string
+		if err := rows.Scan(&service, &raw); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		at, err := time.Parse(time.RFC3339Nano, raw)
+		if err != nil {
+			// One unreadable line is that service looking back a week, not
+			// every service: the same cost as losing it, and no more.
+			log.Warn().Msgf("%s: its cutoff %q could not be read, looking back a week", service, raw)
+			continue
+		}
+		s := m.services[service]
+		s.Cutoff = at
+		m.services[service] = s
+	}
+	rows.Close()
+
+	held, err := memStore.DB().Query(`SELECT service, tag, finding FROM watch_held`)
+	if err != nil {
+		return nil, fmt.Errorf("reading what is held: %w", err)
+	}
+	defer held.Close()
+	for held.Next() {
+		var service, tag, raw string
+		if err := held.Scan(&service, &tag, &raw); err != nil {
+			return nil, err
+		}
+		var f watch.Finding
+		if err := json.Unmarshal([]byte(raw), &f); err != nil {
+			log.Warn().Msgf("%s: a held finding for %s could not be read, and is dropped", service, tag)
+			continue
+		}
+		s := m.services[service]
+		if s.Pending == nil {
+			s.Pending = map[string]watch.Finding{}
+		}
+		s.Pending[tag] = f
+		m.services[service] = s
 	}
 
-	var s state
-	if err := json.Unmarshal(data, &s); err != nil {
-		// A state file that cannot be read is not a reason to report
-		// everything ever published. It falls back to the default window and
-		// says so, which is noisy for one run rather than unreadable.
-		log.Warn().Msgf("%s could not be read (%v), falling back to the last week", stateFile, err)
-		return &memory{services: map[string]serviceState{}, fallback: week,
-			why: "unreadable state, looking back a week"}, nil
-	}
-
-	m := &memory{services: s.Services, fallback: week}
-	if m.services == nil {
-		m.services = map[string]serviceState{}
-	}
-	switch {
-	case !s.LastCheck.IsZero():
-		// An older file, from when one line covered every service. It seeds
-		// anything without a line of its own, so upgrading does not re-report
-		// a week.
-		m.fallback = s.LastCheck
-		m.why = fmt.Sprintf("%d service(s) recorded, the rest from the last whole-run check", len(m.services))
-	case len(m.services) > 0:
+	if len(m.services) > 0 {
 		m.why = fmt.Sprintf("%d service(s) recorded, the rest looking back a week", len(m.services))
-	default:
-		m.why = "no recorded checks, looking back a week"
+	} else {
+		m.why = "first run, looking back a week"
 	}
-	return m, nil
+	return m, held.Err()
 }
 
 // save writes what the watcher knows.
@@ -227,36 +212,34 @@ func loadMemory(log zerolog.Logger) (*memory, error) {
 // recorded checks and re-report a week of tags.
 func (m *memory) save() error {
 	if m.override {
-		// An override asked a question; it does not answer for the watcher's
-		// memory.
 		return nil
 	}
-
-	// LastCheck is deliberately not carried forward: once services have their
-	// own lines, a single fallback would be a second answer to the same
-	// question and the two would drift.
-	data, err := json.MarshalIndent(state{Services: m.services}, "", "  ")
-	if err != nil {
-		return err
-	}
-	dir := filepath.Dir(stateFile)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(dir, ".detector-*.json")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(tmp.Name()) // no-op once the rename succeeds
-	if _, err := tmp.Write(append(data, '\n')); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Chmod(tmp.Name(), 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp.Name(), stateFile)
+	return m.st.Tx(func(tx *sql.Tx) error {
+		// What is held is replaced whole: the memory is the truth for this
+		// run, and a finding handed on since the load must not survive.
+		if _, err := tx.Exec(`DELETE FROM watch_held`); err != nil {
+			return err
+		}
+		for _, name := range sortedKeys(m.services) {
+			s := m.services[name]
+			if !s.Cutoff.IsZero() {
+				if _, err := tx.Exec(`INSERT INTO watch_cutoffs (service, cutoff) VALUES (?, ?)
+					ON CONFLICT (service) DO UPDATE SET cutoff = excluded.cutoff`,
+					name, s.Cutoff.UTC().Format(time.RFC3339Nano)); err != nil {
+					return err
+				}
+			}
+			for _, tag := range sortedKeys(s.Pending) {
+				raw, err := json.Marshal(s.Pending[tag])
+				if err != nil {
+					return err
+				}
+				if _, err := tx.Exec(`INSERT INTO watch_held (service, tag, finding) VALUES (?, ?, ?)`,
+					name, tag, string(raw)); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	})
 }

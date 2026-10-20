@@ -1,6 +1,6 @@
 -- duva's state, phase 2 of docs/duva-v5-one-binary.md.
 --
--- Foreign keys go into services, never into watch_cutoffs: the watcher's
+-- Nothing references the watcher's tables, and they reference nothing: its
 -- state is disposable, and wiping it must cascade into nothing and be blocked
 -- by nothing. A queue entry copies what was found rather than referencing it.
 -- History is never cascaded away: services are disabled, not deleted.
@@ -20,9 +20,20 @@ CREATE TABLE services (
     removed_at TEXT                     -- disabled, never deleted
 );
 
+-- The watcher's memory, by compose service name. Losing it costs one noisy
+-- check, not a rebuild.
 CREATE TABLE watch_cutoffs (
-    service_id INTEGER PRIMARY KEY REFERENCES services,
-    cutoff     TEXT NOT NULL            -- look for tags published after this
+    service TEXT PRIMARY KEY,
+    cutoff  TEXT NOT NULL               -- look for tags published after this
+);
+
+-- Findings the queue could not take yet, offered again first thing next run.
+-- One per tag: a newer digest for the same tag supersedes the held one.
+CREATE TABLE watch_held (
+    service TEXT NOT NULL,
+    tag     TEXT NOT NULL,
+    finding TEXT NOT NULL,              -- the finding, as JSON
+    PRIMARY KEY (service, tag)
 );
 
 CREATE TABLE queue_entries (

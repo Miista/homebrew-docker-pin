@@ -89,6 +89,7 @@ func serve() error {
 			Root:   root,
 			Report: func(f watch.Finding) bool { return hand(queue, f) },
 			Labels: dockerapi.Labels,
+			Store:  st,
 		})
 	})
 

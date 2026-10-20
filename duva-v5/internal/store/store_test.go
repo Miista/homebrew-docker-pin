@@ -24,7 +24,7 @@ func TestOpenBringsTheSchemaUpToDate(t *testing.T) {
 	if err != nil || v != 1 {
 		t.Errorf("version = %d %v, want 1", v, err)
 	}
-	for _, table := range []string{"images", "services", "watch_cutoffs", "queue_entries", "queue_events", "blocked_releases"} {
+	for _, table := range []string{"images", "services", "watch_cutoffs", "watch_held", "queue_entries", "queue_events", "blocked_releases"} {
 		var n int
 		if err := s.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&n); err != nil || n != 1 {
 			t.Errorf("table %s is missing", table)
