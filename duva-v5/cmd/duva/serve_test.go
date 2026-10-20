@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -108,5 +110,25 @@ func TestAComponentErrorIsReturned(t *testing.T) {
 	})
 	if !errors.Is(err, want) || runs != 1 {
 		t.Errorf("err = %v after %d run(s), want %v after 1", err, runs, want)
+	}
+}
+
+func TestHealthIsEveryListenerAnswering(t *testing.T) {
+	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer ok.Close()
+	sick := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "no", http.StatusServiceUnavailable)
+	}))
+	defer sick.Close()
+	host := func(s *httptest.Server) string { return strings.TrimPrefix(s.URL, "http://") }
+
+	if got := healthOf([]string{host(ok)}); got != 0 {
+		t.Errorf("healthy = %d, want 0", got)
+	}
+	if got := healthOf([]string{host(ok), host(sick)}); got != 1 {
+		t.Errorf("one listener unhealthy = %d, want 1", got)
+	}
+	if got := healthOf([]string{"127.0.0.1:1"}); got != 1 {
+		t.Errorf("nothing listening = %d, want 1", got)
 	}
 }

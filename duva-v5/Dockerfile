@@ -28,5 +28,10 @@ COPY linux/${TARGETARCH}/duva /duva
 # (DUVA_REPO), which is the operator's choice, and declaring one here would
 # make docker invent an empty anonymous volume wherever it is not.
 VOLUME ["/data"]
-EXPOSE 8080
+# 8080 is the queue API, for a UI on another host. 8081 is the page, when
+# DUVA_UI is set -- apart, because the page is published and the API is not.
+EXPOSE 8080 8081
+# Exec form, no shell: duva asks its own listeners over loopback.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+  CMD ["/duva", "health"]
 ENTRYPOINT ["/duva"]

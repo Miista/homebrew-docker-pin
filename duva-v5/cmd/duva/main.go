@@ -20,7 +20,7 @@ import (
 
 var version = "dev"
 
-const usage = "Usage: duva <serve|version>"
+const usage = "Usage: duva <serve|health|version>"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -42,6 +42,8 @@ func main() {
 			fmt.Fprintln(os.Stderr, "Error:", err)
 			os.Exit(1)
 		}
+	case "health":
+		os.Exit(health())
 	case "version", "--version", "-v":
 		fmt.Println("duva", version)
 	default:
