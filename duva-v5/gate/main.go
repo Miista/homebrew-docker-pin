@@ -160,6 +160,9 @@ type Options struct {
 	Updater update.Updater
 	// Root is the compose file. Empty means the one mounted at /compose.
 	Root string
+	// Labels reads a service's policy from its container. Nil reads it from
+	// the compose file, which is all a queue without the socket can do.
+	Labels func(container string) (map[string]string, bool, error)
 }
 
 // Gate is the queue, assembled: what decides, what is waiting, and what
@@ -177,6 +180,7 @@ type Gate struct {
 	API      *q.Server
 	applying q.Applier
 	live     *applier
+	labels   func(container string) (map[string]string, bool, error)
 }
 
 // New assembles a queue: it reads the compose project, restores what was
@@ -230,7 +234,7 @@ func New(log zerolog.Logger, opts Options) (*Gate, error) {
 	}
 
 	handler := &q.Handler{
-		Lookup:  q.Lookup{Root: root},
+		Lookup:  q.Lookup{Root: root, Labels: opts.Labels},
 		Queue:   queue,
 		Applier: applying,
 		Log:     log,
@@ -263,6 +267,7 @@ func New(log zerolog.Logger, opts Options) (*Gate, error) {
 		},
 		applying: applying,
 		live:     live,
+		labels:   opts.Labels,
 	}, nil
 }
 
@@ -284,7 +289,8 @@ func (g *Gate) Run(ctx context.Context) error {
 	}
 
 	reconcileDone := make(chan struct{})
-	rec := &reconciler{queue: g.queue, root: g.root, interval: cfg.ReconcileInterval, log: log, applier: g.applying}
+	rec := &reconciler{queue: g.queue, root: g.root, interval: cfg.ReconcileInterval, log: log,
+		applier: g.applying, labels: g.labels}
 	if g.live != nil {
 		rec.applicable = g.live.Applicable
 	}

@@ -4,7 +4,9 @@ package integration
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -147,6 +149,43 @@ func TestV5ASoakHoldsBackWhatPolicyAllows(t *testing.T) {
 			t.Errorf("announced:\n  %v", got)
 		}
 	})
+}
+
+// What governs a service is the container it runs, not the file.
+//
+// A label edited and committed but never deployed has not taken effect: the
+// container was started under the old one, and until it is recreated that is
+// the policy it runs under. Reading the file would have applied a patch the
+// running service never agreed to.
+func TestV5PolicyComesFromTheRunningContainer(t *testing.T) {
+	s := Up(t, "duva-v5/policy-from-container")
+	s.PushUpdates()
+	s.Pin("app")
+
+	raw, err := os.ReadFile(filepath.Join(s.Dir, "docker-compose.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The label line, not the first mention: the fixture's header says
+	// "duva.auto: none" too.
+	edited := strings.Replace(string(raw), "      duva.auto: none\n", "      duva.auto: patch\n", 1)
+	if edited == string(raw) {
+		t.Fatal("the fixture has no duva.auto: none label to edit")
+	}
+	s.WriteCompose(edited)
+	s.Commit("allow patches, without recreating app")
+	s.Start()
+
+	row := s.Pending("app")
+	if row.Candidate != "1.0.1" {
+		t.Fatalf("the patch was not queued: %+v\n%s", row, s.Logs("duva"))
+	}
+	if row.Auto != "none" {
+		t.Errorf("decided under duva.auto: %s, want the container's none", row.Auto)
+	}
+	if got := s.RunningImage("policy-app"); strings.Contains(got, "1.0.1") {
+		t.Errorf("applied under the file's policy:\n  got %s", got)
+	}
 }
 
 // An auto-apply that fails tells someone, and a successful one does not.

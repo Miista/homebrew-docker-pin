@@ -31,7 +31,13 @@ const defaultReconcileInterval = 10 * time.Minute
 // v7.5's deploys both found entries from before a rename or an old path
 // layout, unreconcilable and warning on every tick).
 func recheck(root string, e q.Entry) (q.Recheck, error) {
-	svc, found, err := q.Lookup{Root: root}.ByService(e.Service)
+	return recheckWith(q.Lookup{Root: root}, e)
+}
+
+// recheckWith is recheck through a given Lookup, so policy is read from
+// wherever the queue reads it.
+func recheckWith(lookup q.Lookup, e q.Entry) (q.Recheck, error) {
+	svc, found, err := lookup.ByService(e.Service)
 	if err != nil {
 		return q.Recheck{}, fmt.Errorf("reading the compose project: %w", err)
 	}
@@ -67,6 +73,8 @@ type reconciler struct {
 	// asks it: a container stopped while its update soaked must not be
 	// started by applying it. Nil means every service is.
 	applicable func(service string) (bool, string)
+	// labels reads policy from the container; nil reads the compose file.
+	labels func(container string) (map[string]string, bool, error)
 	// now is the clock, injected so a test can pin it.
 	now func() time.Time
 }
@@ -97,7 +105,9 @@ func (r *reconciler) tick() {
 
 func (r *reconciler) reconcile() {
 	dropped := r.queue.Reconcile(
-		func(e q.Entry) (q.Recheck, error) { return recheck(r.root, e) },
+		func(e q.Entry) (q.Recheck, error) {
+			return recheckWith(q.Lookup{Root: r.root, Labels: r.labels}, e)
+		},
 		func(service string, err error) {
 			r.log.Warn().Msgf("%s: could not reconcile against the compose file: %v", service, err)
 		})

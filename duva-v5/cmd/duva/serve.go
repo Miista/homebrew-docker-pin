@@ -14,6 +14,8 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"github.com/Miista/homebrew-docker-pin/dockerapi"
+
 	"github.com/Miista/homebrew-docker-pin/duva-v5/gate"
 	q "github.com/Miista/homebrew-docker-pin/duva-v5/internal/queue"
 	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/ui"
@@ -49,7 +51,13 @@ func serve() error {
 	if err != nil {
 		return err
 	}
-	queue, err := gate.New(component(log, "queue"), gate.Options{Updater: up.Local(), Root: root})
+	queue, err := gate.New(component(log, "queue"), gate.Options{
+		Updater: up.Local(),
+		Root:    root,
+		// Policy from the running container: what governs a service is what
+		// it was started with, until it is recreated.
+		Labels: dockerapi.Labels,
+	})
 	if err != nil {
 		return err
 	}
@@ -73,6 +81,7 @@ func serve() error {
 		return watcher.Serve(ctx, component(log, "watch"), watcher.Options{
 			Root:   root,
 			Report: func(f watch.Finding) bool { return hand(queue, f) },
+			Labels: dockerapi.Labels,
 		})
 	})
 

@@ -24,6 +24,12 @@ func tagRules(composeFile, service string) (include, exclude *regexp.Regexp, err
 	if err != nil {
 		return nil, nil, fmt.Errorf("reading its labels: %w", err)
 	}
+	return rulesFrom(labels)
+}
+
+// rulesFrom compiles the tag rules from a set of labels, wherever they were
+// read from.
+func rulesFrom(labels map[string]string) (include, exclude *regexp.Regexp, err error) {
 
 	if raw := labels["diun.include_tags"]; raw != "" {
 		include, err = regexp.Compile(raw)

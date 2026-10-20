@@ -43,6 +43,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -187,6 +188,9 @@ type Options struct {
 	// Report hands one finding to the queue, reporting whether it landed. Nil
 	// POSTs it to DUVA_WEBHOOK_URL.
 	Report func(watch.Finding) bool
+	// Labels reads a service's tag rules from its container, by
+	// container_name. Nil reads them from the compose file.
+	Labels func(container string) (map[string]string, bool, error)
 }
 
 // Serve checks once now and then on DUVA_SCHEDULE, until ctx is done.
@@ -259,7 +263,7 @@ func run(log zerolog.Logger, only string, opts Options) error {
 	}
 	log.Info().Msgf("looking for tags published since each service's last check (%s)", mem.why)
 
-	services, err := readServices(root, log)
+	services, err := readServices(root, log, opts.Labels)
 	if err != nil {
 		return err
 	}
@@ -330,7 +334,7 @@ func run(log zerolog.Logger, only string, opts Options) error {
 //
 // Pin status is the opt-in, as everywhere else in this codebase: an unpinned
 // service has made no versioning decision, so there is nothing to watch over.
-func readServices(root string, log zerolog.Logger) ([]watch.Service, error) {
+func readServices(root string, log zerolog.Logger, labels func(string) (map[string]string, bool, error)) ([]watch.Service, error) {
 	index, err := compose.ContainerIndex(root)
 	if err != nil {
 		return nil, fmt.Errorf("reading the compose project at %s: %w", root, err)
@@ -369,7 +373,12 @@ func readServices(root string, log zerolog.Logger) ([]watch.Service, error) {
 			continue
 		}
 
-		include, exclude, err := tagRules(ref.File, ref.Service)
+		var include, exclude *regexp.Regexp
+		if labels == nil {
+			include, exclude, err = tagRules(ref.File, ref.Service)
+		} else {
+			include, exclude, err = containerRules(labels, container)
+		}
 		if err != nil {
 			log.Warn().Msgf("%s: %v", ref.Service, err)
 			continue
@@ -435,4 +444,19 @@ func justOne(services []watch.Service, name string) []watch.Service {
 		}
 	}
 	return nil
+}
+
+// containerRules reads a service's tag rules from its container.
+//
+// A service with no container is not watched: there is nothing running to
+// update, and the rules in the file describe a container that does not exist.
+func containerRules(labels func(string) (map[string]string, bool, error), container string) (include, exclude *regexp.Regexp, err error) {
+	set, found, err := labels(container)
+	if err != nil {
+		return nil, nil, fmt.Errorf("reading its container's labels: %w", err)
+	}
+	if !found {
+		return nil, nil, fmt.Errorf("no container named %s, so nothing to update", container)
+	}
+	return rulesFrom(set)
 }

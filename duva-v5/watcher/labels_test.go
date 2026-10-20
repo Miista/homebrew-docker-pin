@@ -93,3 +93,23 @@ services:
 		t.Fatal("want an error for a pattern that does not compile")
 	}
 }
+
+// In duva v5 the rules come from the container, which is what runs.
+func TestContainerRulesAreTheContainers(t *testing.T) {
+	labels := func(container string) (map[string]string, bool, error) {
+		if container != "my-app" {
+			return nil, false, nil
+		}
+		return map[string]string{"diun.include_tags": `^1\.`}, true, nil
+	}
+	include, exclude, err := containerRules(labels, "my-app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if include == nil || !include.MatchString("1.2.3") || exclude != nil {
+		t.Errorf("include/exclude = %v/%v", include, exclude)
+	}
+	if _, _, err := containerRules(labels, "gone"); err == nil {
+		t.Error("a service with no container was watched")
+	}
+}

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -538,6 +539,36 @@ func containerLabel(id, label string) (string, error) {
 func Exists(service string) error {
 	_, err := findContainer(service)
 	return err
+}
+
+// Labels returns the labels on the container with this name, and whether
+// there is one.
+//
+// The running container's labels, not the compose file's: a label edited in
+// the file takes effect when the container is recreated, and until then what
+// governs the service is what it was started with. Stopped containers count --
+// they still carry the labels they would come back with.
+func Labels(container string) (map[string]string, bool, error) {
+	// Anchored: the daemon's name filter matches substrings, and "app" must
+	// not find "app-db".
+	filters := url.QueryEscape(fmt.Sprintf(`{"name":["^/%s$"]}`, regexp.QuoteMeta(container)))
+	raw, err := dockerDo(http.MethodGet, "/containers/json?all=true&filters="+filters, nil)
+	if err != nil {
+		return nil, false, err
+	}
+	var found []struct {
+		Labels map[string]string `json:"Labels"`
+	}
+	if err := json.Unmarshal(raw, &found); err != nil {
+		return nil, false, fmt.Errorf("listing the container %s: %w", container, err)
+	}
+	if len(found) == 0 {
+		return nil, false, nil
+	}
+	if found[0].Labels == nil {
+		return map[string]string{}, true, nil
+	}
+	return found[0].Labels, true, nil
 }
 
 // Running reports whether a service's container exists and is running.

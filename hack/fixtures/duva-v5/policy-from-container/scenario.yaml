@@ -1,0 +1,5 @@
+# The patch duva finds, which the file's policy would apply and the
+# container's does not.
+updates:
+  policy-app:
+    - 1.0.1

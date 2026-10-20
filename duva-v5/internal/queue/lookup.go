@@ -16,6 +16,13 @@ import (
 type Lookup struct {
 	// Root is the compose file to read from. include: is resolved from it.
 	Root string
+	// Labels reads policy from the container itself, by container_name, and
+	// reports whether there is one. Nil reads it from the compose file.
+	//
+	// duva v5 sets it: the running container is the truth about what governs
+	// a service, and a label edited in the file takes effect when the
+	// container is recreated, not before.
+	Labels func(container string) (map[string]string, bool, error)
 }
 
 // Service returns what the project declares for a container name.
@@ -33,7 +40,7 @@ func (l Lookup) Service(container string) (Service, bool, error) {
 	if !ok {
 		return Service{}, false, nil
 	}
-	return declared(ref)
+	return l.declared(container, ref)
 }
 
 // ByService is Service for a compose service name, which is what a queued
@@ -46,16 +53,16 @@ func (l Lookup) ByService(name string) (Service, bool, error) {
 	if err != nil {
 		return Service{}, false, err
 	}
-	for _, ref := range index {
+	for container, ref := range index {
 		if ref.Service == name {
-			return declared(ref)
+			return l.declared(container, ref)
 		}
 	}
 	return Service{}, false, nil
 }
 
 // declared reads one service's image and policy.
-func declared(ref compose.ServiceRef) (Service, bool, error) {
+func (l Lookup) declared(container string, ref compose.ServiceRef) (Service, bool, error) {
 	raw, err := compose.RawImage(ref.File, ref.Service)
 	if err != nil {
 		return Service{}, false, fmt.Errorf("reading %s's image: %w", ref.Service, err)
@@ -72,9 +79,9 @@ func declared(ref compose.ServiceRef) (Service, bool, error) {
 		return Service{}, false, fmt.Errorf("parsing %s's image: %w", ref.Service, err)
 	}
 
-	labels, err := compose.Labels(ref.File, ref.Service)
+	labels, err := l.labels(container, ref)
 	if err != nil {
-		return Service{}, false, fmt.Errorf("reading %s's labels: %w", ref.Service, err)
+		return Service{}, false, err
 	}
 	auto, err := ParseAuto(labels["duva.auto"])
 	if err != nil {
@@ -100,4 +107,26 @@ func declared(ref compose.ServiceRef) (Service, bool, error) {
 		Auto:   auto,
 		Soak:   soak,
 	}, true, nil
+}
+
+// labels is a service's policy, from wherever this Lookup reads it.
+func (l Lookup) labels(container string, ref compose.ServiceRef) (map[string]string, error) {
+	if l.Labels == nil {
+		labels, err := compose.Labels(ref.File, ref.Service)
+		if err != nil {
+			return nil, fmt.Errorf("reading %s's labels: %w", ref.Service, err)
+		}
+		return labels, nil
+	}
+	labels, found, err := l.Labels(container)
+	if err != nil {
+		return nil, fmt.Errorf("reading %s's labels from its container: %w", ref.Service, err)
+	}
+	if !found {
+		// Not the file's labels instead: those describe a container that
+		// does not exist, and acting on them would be acting on a policy
+		// nothing is running under.
+		return nil, fmt.Errorf("%s has no container named %s, so there is no policy to read", ref.Service, container)
+	}
+	return labels, nil
 }
