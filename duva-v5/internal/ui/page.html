@@ -205,10 +205,46 @@
                  background: var(--card); color: var(--fg); }
   .panel input::placeholder { color: var(--faint); }
   .panel .hint { flex-basis: 100%; margin: .15rem 0 0; color: var(--faint); }
-  .panel .q { color: var(--fg); }
-  .panel .also { display: inline-flex; align-items: center; gap: .3rem; cursor: pointer; }
-  /* Not the text field's stretch: a checkbox is a box. */
-  .panel input[type=checkbox] { flex: none; min-width: 0; margin: 0; }
+  /* ---------- the discard dialog ---------- */
+  /* The page's own card, raised: same surface, line and radius, so it reads
+     as part of the page in either scheme rather than as the browser's. */
+  .dlg { width: min(28rem, calc(100% - 2rem)); padding: 0; border: 1px solid var(--line);
+         border-radius: 10px; background: var(--card); color: var(--fg);
+         box-shadow: 0 12px 40px rgba(0, 0, 0, .18); }
+  .dlg::backdrop { background: rgba(20, 21, 23, .38); }
+  .dlg form { margin: 0; padding: 1.05rem 1.15rem 1rem; display: flex;
+              flex-direction: column; gap: .7rem; }
+  .dlg h2 { margin: 0; font-size: 1rem; font-weight: 700; letter-spacing: -.005em; }
+  .dlg h2 .to { font-weight: 400; }
+  .dlg .sub { margin: -.45rem 0 0; font-size: .78rem; color: var(--faint); overflow-wrap: anywhere; }
+  .dlg .also { display: flex; align-items: center; gap: .45rem; font-size: .875rem;
+               cursor: pointer; }
+  .dlg .also input { margin: 0; accent-color: var(--major); }
+  .dlg .reason { font: inherit; font-size: .875rem; padding: .35rem .55rem;
+                 border: 1px solid var(--line); border-radius: 6px;
+                 background: var(--bg); color: var(--fg); }
+  .dlg .reason:focus { outline: 1px solid var(--muted); outline-offset: 0; }
+  .dlg .reason::placeholder { color: var(--faint); }
+  .dlg .hint { margin: 0; font-size: .78rem; color: var(--muted); }
+  .dlg .hint.warn { color: var(--major); }
+  .dlg .buttons { display: flex; justify-content: flex-end; gap: .4rem; margin-top: .15rem; }
+  .dlg .buttons .act { font-size: .84rem; padding: .3rem .8rem; }
+  /* The confirming button, filled: the one the dialog is for. Red when it
+     blocks, the accent when it only discards. */
+  .dlg .go { border: 1px solid transparent; border-radius: 5px; font-weight: 600;
+             font-size: .84rem; padding: .3rem .8rem;
+             background: var(--accent); color: var(--accent-fg); }
+  .dlg .go.danger { background: var(--major); color: #fff; }
+  .dlg .go:disabled { background: none; border-color: var(--line);
+                      color: var(--faint); font-weight: 400; cursor: not-allowed; }
+  @media (prefers-color-scheme: dark) {
+    .dlg { box-shadow: 0 12px 40px rgba(0, 0, 0, .5); }
+    .dlg::backdrop { background: rgba(0, 0, 0, .55); }
+    .dlg .go.danger { color: #1c1e21; }
+  }
+  /* After the dark scheme's colour for the red button, or that wins and a
+     disabled one has dark text on no background: invisible. */
+  .dlg .go.danger:disabled { color: var(--faint); }
 
   /* A row from a decider that has stopped answering: shown, because it was
      really queued, but faded because it cannot be confirmed. */
@@ -273,8 +309,6 @@
     .kind { grid-column: 2; justify-self: end; }
     .rows > li form { grid-column: 3; grid-row: 1 / span 2; justify-self: end; }
     .acts { grid-column: 1 / -1; grid-row: 3; justify-self: end; margin-top: .3rem; }
-    /* The question on a line of its own, so the controls under it share one. */
-    .panel .q { flex-basis: 100%; }
     .jump { grid-column: 1 / 3; grid-row: 2; }
     .apply { padding: .3rem .7rem; }
   }
@@ -396,20 +430,6 @@
         <p class="hint">Check now looks for new tags; Re-scan looks back over the whole window again.</p>
       </div>
 
-      <div class="panel" v-if="actions && discarding === id(r)">
-        <form @submit.prevent="discard(r)">
-          <span class="q">Discard {{ r.moved ? "this digest" : r.candidate }}?</span>
-          <label class="also"><input type="checkbox" v-model="alsoBlock"> Also block this release</label>
-          <input v-if="alsoBlock" v-model="reason" maxlength="200"
-                 placeholder="Why it is bad -- shown to whoever sees the block">
-          <button class="act" :class="alsoBlock ? 'act-danger' : ''" type="submit"
-                  :disabled="alsoBlock && !reason.trim()">{{ alsoBlock ? "Discard and block" : "Discard" }}</button>
-          <button class="act" type="button" @click="discarding = ''">Cancel</button>
-          <p class="hint">{{ alsoBlock
-            ? "Never applied, on any service running " + r.image + ", until it is unblocked."
-            : "Dropped for now; found again, it comes back." }}</p>
-        </form>
-      </div>
 
       <ul class="steps" v-if="steps[r.key] || finished[r.key]">
         <li v-for="line in (steps[r.key] || [])">{{ line }}</li>
@@ -460,20 +480,6 @@
                   @click="startDiscard(r)">Discard</button>
         </span>
 
-        <div class="panel" v-if="actions && discarding === id(r)">
-          <form @submit.prevent="discard(r)">
-            <span class="q">Discard {{ r.moved ? "this digest" : r.candidate }}?</span>
-            <label class="also"><input type="checkbox" v-model="alsoBlock"> Also block this release</label>
-            <input v-if="alsoBlock" v-model="reason" maxlength="200"
-                   placeholder="Why it is bad -- shown to whoever sees the block">
-            <button class="act" :class="alsoBlock ? 'act-danger' : ''" type="submit"
-                    :disabled="alsoBlock && !reason.trim()">{{ alsoBlock ? "Discard and block" : "Discard" }}</button>
-            <button class="act" type="button" @click="discarding = ''">Cancel</button>
-            <p class="hint">{{ alsoBlock
-              ? "Never applied, on any service running " + r.image + ", until it is unblocked."
-              : "Dropped for now; found again, it comes back." }}</p>
-          </form>
-        </div>
 
         <ul class="steps" v-if="steps[r.key] || finished[r.key]">
           <li v-for="line in (steps[r.key] || [])">{{ line }}</li>
@@ -483,6 +489,26 @@
       </li>
     </ul>
   </section>
+
+  <!-- Discard asks here, and offers to block. One dialog for the page: it
+       is about one row at a time, whichever section the row is in. -->
+  <dialog class="dlg" id="discard" @close="discardRow = null">
+    <form v-if="discardRow" @submit.prevent="discard()">
+      <h2>Discard {{ discardRow.service }} <span class="to mono">{{ discardRow.moved ? "this digest" : discardRow.candidate }}</span>?</h2>
+      <p class="sub mono">{{ discardRow.host }} &middot; {{ discardRow.image }}</p>
+      <label class="also"><input type="checkbox" v-model="alsoBlock"> Also block this release</label>
+      <input class="reason" v-if="alsoBlock" v-model="reason" maxlength="200"
+             placeholder="Why it is bad (shown with the block)">
+      <p class="hint" :class="alsoBlock ? 'warn' : ''">{{ alsoBlock
+        ? "Never applied, on any service running " + discardRow.image + ", until it is unblocked."
+        : "Dropped for now. If it is found again, it comes back." }}</p>
+      <div class="buttons">
+        <button class="act" type="button" @click="closeDiscard()">Cancel</button>
+        <button class="go" :class="alsoBlock ? 'danger' : ''" type="submit"
+                :disabled="alsoBlock && !reason.trim()">{{ alsoBlock ? "Discard and block" : "Discard" }}</button>
+      </div>
+    </form>
+  </dialog>
 
   <footer>
     <span>duva {{ version }}</span>
@@ -510,7 +536,7 @@ createApp({
       actions: initial.actions,
       version: initial.version,
       open: "",         // the row whose actions are open
-      discarding: "",   // the row confirming a discard, by id(r)
+      discardRow: null, // the row the discard dialog is about
       alsoBlock: false, // whether that discard blocks the release too
       reason: "",       // the block's reason, as typed
       steps: {},        // key -> lines so far
@@ -634,21 +660,23 @@ createApp({
         return b && b.reason ? r.host + " — " + b.reason : r.host + " cannot apply right now"
       },
 
-      // One row, in either section: a service can have an entry in each.
-      id(r) {
-        return r.key + "#" + r.entry
-      },
-
       // Discard asks first, and offers to block: the same decision -- not
       // this one -- with or without it coming back.
       startDiscard(r) {
         this.open = ""
-        this.discarding = this.id(r)
+        this.discardRow = r
         this.alsoBlock = false
         this.reason = ""
+        document.getElementById("discard").showModal()
       },
 
-      discard(r) {
+      closeDiscard() {
+        document.getElementById("discard").close()
+      },
+
+      async discard() {
+        const r = this.discardRow
+        this.closeDiscard()
         if (!this.alsoBlock) return this.act("discard", r)
         return this.act("block", r, new URLSearchParams({ reason: this.reason.trim() }))
       },
@@ -682,7 +710,6 @@ createApp({
 
       toggle(r) {
         this.open = this.open === r.key ? "" : r.key
-        this.discarding = ""
       },
 
       // Discard and block act on the entry; check and rescan on the service.
@@ -704,7 +731,6 @@ createApp({
           : { service: r.service, level: "ok", message: done[kind] }
         if (!message) {
           this.open = ""
-          this.discarding = ""
           this.reason = ""
         }
         await this.poll()
