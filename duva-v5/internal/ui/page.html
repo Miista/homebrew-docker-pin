@@ -273,7 +273,7 @@
          box-shadow: 0 24px 64px rgba(0, 0, 0, .55); }
   .dlg.wide { width: min(460px, calc(100% - 48px)); }
   /* A dialog takes focus when it opens; that is not a thing to outline. */
-  .dlg:focus-visible { outline: none; }
+  .dlg:focus, .dlg:focus-visible { outline: none; }
   .dlg::backdrop { background: var(--scrim); backdrop-filter: blur(3px); }
   .dlg form { display: flex; flex-direction: column; }
   .dlg .body { display: flex; flex-direction: column; gap: 14px; padding: 22px 22px 18px; }
