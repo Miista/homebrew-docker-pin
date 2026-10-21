@@ -142,15 +142,26 @@ registry refused for rate limiting is treated the same way.
 `duva.auto` alone applies a release on the run that finds it, before anyone
 could have heard it was broken. `duva.delay` holds it back until it is old
 enough, counted from when the release was published, not when it was found.
-Go durations work too (`72h`); `0` or no label is no delay; an unreadable value
-is refused. There is no host-wide default. An early-v5 `duva.soak` label is
+
+It delays only what `duva.auto` would apply unattended. A change bigger than
+`duva.auto` allows goes to the queue for a person straight away, delay or not,
+and a service with no `duva.auto` has nothing to delay.
+
+| `duva.delay` | means |
+|---|---|
+| `3d` | whole days |
+| `72h`, `90m`, `1h30m` | any Go duration |
+| `0`, or no label | no delay |
+
+Anything else -- `3 days`, `1w`, `-1d` -- is refused rather than read as no
+delay. There is no host-wide default. An early-v5 `duva.soak` label is
 refused by name: it is `duva.delay` now.
 
 A delayed release is listed on the page under **Scheduled**, with when it
 applies, and is not announced. It is released on the queue's reconcile, at
 most `DUVA_SETTING_RECONCILE_INTERVAL` late (ten minutes by default), or as
 soon as a container event prompts one. From then on it is an ordinary
-auto-apply. **Apply now** applies it at once.
+auto-apply. **Update now** applies it at once.
 
 Each release is delayed on its own clock. A project that releases faster than
 its delay does not keep restarting the wait: an older release that comes due
@@ -160,13 +171,14 @@ newest matters, so a newer one supersedes it.
 
 ### Seeing what is waiting, and acting on it
 
-On the page, each row's **⋯** has **Block**: that release is never applied, on
-any service running the image, until you unblock it from **Blocked** at the
-foot of the page, which puts it back in the queue. It also has **Force
-check**, which ignores where that service's last check left off and looks over
-the past week again -- for a release duva passed over. **Check for updates**,
-beside when each host last checked, looks for new releases on every host at
-once. These are commands too, run inside duva's container (`docker exec
+On the page, the menu beside each row's Update button has **Block**: that
+release is never applied, on any service running the image, until you unblock
+it from **Blocked** at the foot of the page, which puts it back in the queue.
+In the queue the menu also has **Force check**, which ignores where that
+service's last check left off and looks over the past week again -- for a
+release duva passed over. Scheduled rows have Block only. **Check for
+updates**, in the header beside when each host last checked, looks for new
+releases on every host at once. These are commands too, run inside duva's container (`docker exec
 <duva> duva ...`), going through this host's queue API with its own token as
 the page does; the history records who -- the signed-in person, or "cli".
 `duva queue` prints what is waiting, by service, with each entry's id.
