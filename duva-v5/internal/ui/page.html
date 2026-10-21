@@ -415,7 +415,7 @@
                 @click="apply(r)">{{ running(r.key) ? "Updating…" : "Update" }}</button>
         <button class="act" v-if="actions"
                 :disabled="r.stale || running(r.key)"
-                title="Never apply this release; unblock it under Blocked releases"
+                title="Never apply this release; unblock it under Blocked"
                 @click="startBlock(r)">Block</button>
         <button class="more" v-if="actions" title="Check now, re-scan"
                 :aria-expanded="open === r.key ? 'true' : 'false'"
@@ -474,7 +474,7 @@
                   @click="apply(r)">{{ running(r.key) ? "Updating…" : "Apply now" }}</button>
           <button class="act" v-if="actions"
                   :disabled="r.stale || running(r.key)"
-                  title="Never apply this release; unblock it under Blocked releases"
+                  title="Never apply this release; unblock it under Blocked"
                   @click="startBlock(r)">Block</button>
         </span>
 
@@ -495,7 +495,7 @@
       <h2>Block {{ blockRow.service }} <span class="to mono">{{ blockRow.moved ? "this digest" : blockRow.candidate }}</span>?</h2>
       <p class="sub mono">{{ blockRow.host }} &middot; {{ blockRow.image }}</p>
       <p class="say">Block this update from being applied, on any service running {{ blockRow.image }}.</p>
-      <p class="hint">You can unblock it under Blocked releases, at the bottom of the page.</p>
+      <p class="hint">You can unblock it under Blocked, at the bottom of the page.</p>
       <div class="buttons">
         <button class="act" type="button" @click="closeBlock()">Cancel</button>
         <button class="go" type="submit">Block</button>
@@ -525,7 +525,7 @@
   <footer>
     <span>duva {{ version }}</span>
     <a href="#" class="foot-link" v-if="actions && blocks.length"
-       @click.prevent="openBlocks()">Blocked releases</a>
+       @click.prevent="openBlocks()">Blocked</a>
   </footer>
 </main>
 
