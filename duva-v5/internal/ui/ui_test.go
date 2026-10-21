@@ -156,7 +156,8 @@ func TestTheCardDrawsItsOwnTopEdgeWithoutTheHead(t *testing.T) {
 	if !strings.Contains(phone, ".head { display: none; }") {
 		t.Fatal("the head is no longer hidden on phones; this test guards the consequence of that")
 	}
-	if !strings.Contains(ruleFor(phone, "main > .rows"), "border-top") {
+	// Both cards: the queue's, and the Soaking section's beneath it.
+	if !strings.Contains(ruleFor(phone, "main > .rows, .soak > .rows"), "border-top") {
 		t.Error("the card does not draw its own top edge, so the first row's inset border shows as one")
 	}
 	if !strings.Contains(ruleFor(phone, ".rows > li:first-child"), "border-top: 0") {
