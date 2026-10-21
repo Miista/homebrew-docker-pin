@@ -93,11 +93,11 @@ func TestBlockingAVersionChangeResolvesItsDigest(t *testing.T) {
 	}
 }
 
-func TestABlockWithoutAReasonIsRefused(t *testing.T) {
+func TestABlockWithoutAReasonIsAccepted(t *testing.T) {
 	a := newActionServer(t)
 	e, _ := a.q.PutEntry(releaseOf("app", "example.com/app", "1.0.1"), now)
-	if msg := a.post(t, fmt.Sprintf("/v1/block/%d", e.ID), nil); !strings.Contains(msg, "reason") {
-		t.Errorf("message = %q, want a refusal asking for a reason", msg)
+	if msg := a.post(t, fmt.Sprintf("/v1/block/%d", e.ID), nil); msg != "" {
+		t.Errorf("message = %q, want the block to go through", msg)
 	}
 }
 

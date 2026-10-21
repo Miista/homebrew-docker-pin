@@ -75,8 +75,13 @@ func (q *Pending) Block(entryID int64, digest, reason, actor string, now time.Ti
 	if digest == "" {
 		return fmt.Errorf("a release is blocked by its digest, and none was given")
 	}
+	// Optional: the page does not ask. Recorded as who blocked it, so a log
+	// line about a refused release never has an empty "why".
 	if reason == "" {
-		return fmt.Errorf("a block needs a reason: it is what the next person to see it is told")
+		if actor == "" {
+			actor = "someone"
+		}
+		reason = "blocked by " + actor
 	}
 	q.mu.Lock()
 	defer q.mu.Unlock()

@@ -20,7 +20,7 @@ import (
 func act(action string, args []string) error {
 	usage := map[string]string{
 		"discard": "duva discard <entry>",
-		"block":   "duva block <entry> <reason>",
+		"block":   "duva block <entry> [reason]",
 		"unblock": "duva unblock <image> <digest>",
 		"check":   "duva check <service>",
 		"rescan":  "duva rescan <service>",
@@ -32,7 +32,7 @@ func act(action string, args []string) error {
 		action == "check" && len(args) == 1,
 		action == "rescan" && len(args) == 1:
 		path = "/v1/" + action + "/" + url.PathEscape(args[0])
-	case action == "block" && len(args) >= 2:
+	case action == "block" && len(args) >= 1:
 		path = "/v1/block/" + url.PathEscape(args[0])
 		form.Set("reason", strings.Join(args[1:], " "))
 	case action == "unblock" && len(args) == 2:

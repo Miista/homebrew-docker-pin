@@ -220,11 +220,6 @@
   .dlg .also { display: flex; align-items: center; gap: .45rem; font-size: .875rem;
                cursor: pointer; }
   .dlg .also input { margin: 0; accent-color: var(--major); }
-  .dlg .reason { font: inherit; font-size: .875rem; padding: .35rem .55rem;
-                 border: 1px solid var(--line); border-radius: 6px;
-                 background: var(--bg); color: var(--fg); }
-  .dlg .reason:focus { outline: 1px solid var(--muted); outline-offset: 0; }
-  .dlg .reason::placeholder { color: var(--faint); }
   .dlg .hint { margin: 0; font-size: .78rem; color: var(--muted); }
   .dlg .hint.warn { color: var(--major); }
   .dlg .buttons { display: flex; justify-content: flex-end; gap: .4rem; margin-top: .15rem; }
@@ -497,15 +492,13 @@
       <h2>Discard {{ discardRow.service }} <span class="to mono">{{ discardRow.moved ? "this digest" : discardRow.candidate }}</span>?</h2>
       <p class="sub mono">{{ discardRow.host }} &middot; {{ discardRow.image }}</p>
       <label class="also"><input type="checkbox" v-model="alsoBlock"> Also block this release</label>
-      <input class="reason" v-if="alsoBlock" v-model="reason" maxlength="200"
-             placeholder="Why it is bad (shown with the block)">
       <p class="hint" :class="alsoBlock ? 'warn' : ''">{{ alsoBlock
         ? "Never applied, on any service running " + discardRow.image + ", until it is unblocked."
         : "Dropped for now. If it is found again, it comes back." }}</p>
       <div class="buttons">
         <button class="act" type="button" @click="closeDiscard()">Cancel</button>
         <button class="go" :class="alsoBlock ? 'danger' : ''" type="submit"
-                :disabled="alsoBlock && !reason.trim()">{{ alsoBlock ? "Discard and block" : "Discard" }}</button>
+                >{{ alsoBlock ? "Discard and block" : "Discard" }}</button>
       </div>
     </form>
   </dialog>
@@ -538,7 +531,6 @@ createApp({
       open: "",         // the row whose actions are open
       discardRow: null, // the row the discard dialog is about
       alsoBlock: false, // whether that discard blocks the release too
-      reason: "",       // the block's reason, as typed
       steps: {},        // key -> lines so far
       finished: {},     // key -> terminal status
       result: {},       // the last apply's answer, when it refused
@@ -666,7 +658,6 @@ createApp({
         this.open = ""
         this.discardRow = r
         this.alsoBlock = false
-        this.reason = ""
         document.getElementById("discard").showModal()
       },
 
@@ -678,7 +669,7 @@ createApp({
         const r = this.discardRow
         this.closeDiscard()
         if (!this.alsoBlock) return this.act("discard", r)
-        return this.act("block", r, new URLSearchParams({ reason: this.reason.trim() }))
+        return this.act("block", r)
       },
 
       // The soaking rows the tab and the search box allow.
@@ -731,7 +722,6 @@ createApp({
           : { service: r.service, level: "ok", message: done[kind] }
         if (!message) {
           this.open = ""
-          this.reason = ""
         }
         await this.poll()
       },

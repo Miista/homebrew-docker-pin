@@ -75,14 +75,23 @@ func TestBlockingCoversTheReleaseOnEveryService(t *testing.T) {
 	}
 }
 
-func TestABlockNeedsADigestAndAReason(t *testing.T) {
+func TestABlockNeedsADigest(t *testing.T) {
 	q := NewPending()
 	e, _ := q.PutEntry(releaseOf("app", "example.com/app", "1.0.1"), now)
 	if err := q.Block(e.ID, "", "bad", "soren", now); err == nil {
 		t.Error("blocked without a digest")
 	}
-	if err := q.Block(e.ID, "sha256:bad", "", "soren", now); err == nil {
-		t.Error("blocked without a reason")
+}
+
+// No reason is fine; the block says who made it instead.
+func TestABlockWithoutAReasonSaysWho(t *testing.T) {
+	q := NewPending()
+	e, _ := q.PutEntry(releaseOf("app", "example.com/app", "1.0.1"), now)
+	if err := q.Block(e.ID, "sha256:bad", "", "soren", now); err != nil {
+		t.Fatal(err)
+	}
+	if reason, blocked := q.IsBlocked("example.com/app", "sha256:bad"); !blocked || reason != "blocked by soren" {
+		t.Errorf("IsBlocked = %q %v", reason, blocked)
 	}
 }
 

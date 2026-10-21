@@ -167,7 +167,7 @@ the page does; the history records who -- the signed-in person, or "cli".
 | | |
 |---|---|
 | `duva discard <entry>` | drop it for now; found again, it is offered again |
-| `duva block <entry> <reason>` | never apply this release, on any service running the image, until unblocked |
+| `duva block <entry> [reason]` | never apply this release, on any service running the image, until unblocked |
 | `duva unblock <image> <digest>` | lift a block |
 | `duva check <service>` | look for new tags now |
 | `duva rescan <service>` | forget how far back it was checked, and look again over the whole window |
