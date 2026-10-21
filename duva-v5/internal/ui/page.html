@@ -298,6 +298,13 @@
   .choose label:has(input:checked) { background: var(--raised); color: var(--fg); }
   .choose input { margin: 0; width: 16px; height: 16px; accent-color: var(--accent); }
 
+  /* A check dialog taller than the screen scrolls only its options: the
+     title and the line saying what Check will do stay above them, and the
+     buttons below, so what is about to happen is always in sight. */
+  #check form { max-height: calc(100vh - 96px); }
+  #check .body { min-height: 0; overflow: hidden; }
+  #check .fold { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+
   /* The check dialog's folded options. */
   .fold { border-top: 1px solid var(--divider); padding-top: 4px; }
   .fold-head { display: flex; align-items: center; gap: 8px; width: 100%; height: 36px; padding: 0 2px;
@@ -443,10 +450,7 @@
        big as the sheet's other choices. */
     .rise .buttons.only-desk { display: none; }
     .rise .buttons { border-top: 0; padding: 12px 16px 28px; }
-    /* A sheet taller than the screen scrolls what it asks, never its
-       buttons: Check stays where a thumb finds it. */
     #check form { max-height: calc(80vh - 28px); }
-    #check .body { overflow-y: auto; min-height: 0; }
     .rise .buttons .act, .rise .buttons .go { flex: 1; height: 48px; border-radius: 12px; font-size: 15px; }
     .rise .blist { margin: 0 16px; padding: 0; border: 1px solid var(--card-line);
                    border-radius: 14px; overflow: auto; }
