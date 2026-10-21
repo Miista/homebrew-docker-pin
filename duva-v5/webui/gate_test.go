@@ -23,7 +23,7 @@ func (emptySource) Unreachable() []ui.Problem { return nil }
 // gate is that none of them happen without a session.
 type countingApprover struct{ calls int }
 
-func (a *countingApprover) Approve(string, string) error { a.calls++; return nil }
+func (a *countingApprover) Approve(string, int64, string) error { a.calls++; return nil }
 
 func gatedHandler(t *testing.T, env map[string]string) (http.Handler, *countingApprover) {
 	t.Helper()

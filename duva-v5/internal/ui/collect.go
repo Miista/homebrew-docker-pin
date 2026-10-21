@@ -47,8 +47,9 @@ type Upstream struct {
 type LocalQueue interface {
 	Snapshot() queue.Snapshot
 	// Approve starts an apply on someone's behalf; the answer is a message,
-	// empty on success.
+	// empty on success. ApproveEntry is the same for one entry by its row.
 	Approve(service, actor string) string
+	ApproveEntry(id int64, actor string) string
 	Stream(service string, w http.ResponseWriter, r *http.Request) error
 	// The other actions, each answering with a message, empty on success.
 	Discard(id int64, actor string) string
@@ -94,6 +95,8 @@ const defaultMaxAge = 5 * time.Second
 // snapshot is one queue's last answer, with whether it could be reached.
 type snapshot struct {
 	queue []queue.Entry
+	// soaking is what that queue holds waiting out a soak.
+	soaking []queue.Entry
 	// canApply is whether this queue has an update. Per queue, not per
 	// collector: one host can have an updater while another does not.
 	canApply bool
@@ -139,7 +142,7 @@ func (c *Collector) Collect() {
 			for _, svc := range snap.Applying {
 				applying[svc] = true
 			}
-			results[i] = snapshot{queue: snap.Pending, canApply: snap.CanApply,
+			results[i] = snapshot{queue: snap.Pending, soaking: snap.Soaking, canApply: snap.CanApply,
 				blocker: string(snap.Blocker), whyNot: snap.WhyNot,
 				applying: applying, err: err}
 		}(i, d)
@@ -157,6 +160,7 @@ func (c *Collector) Collect() {
 		if results[i].err != nil {
 			prev := c.cache[d.Host]
 			results[i].queue = prev.queue
+			results[i].soaking = prev.soaking
 			// Never applyable while unreachable, whatever the last answer
 			// said: the route to the updater is through the queue.
 			results[i].canApply = false
@@ -308,7 +312,7 @@ func (c *Collector) Unreachable() []Problem {
 // Routed by an explicit host rather than by searching every queue: two hosts
 // run services of the same name -- caddy, ofelia, cloudflared and restic are
 // on both -- and a search would approve on whichever answered first.
-func (c *Collector) Approve(key, actor string) error {
+func (c *Collector) Approve(key string, entry int64, actor string) error {
 	host, service, ok := SplitKey(key)
 	if !ok {
 		return fmt.Errorf("%q is not a host/service key", key)
@@ -318,13 +322,19 @@ func (c *Collector) Approve(key, actor string) error {
 			continue
 		}
 		if d.Local != nil {
-			if msg := d.Local.Approve(service, actor); msg != "" {
+			msg := ""
+			if entry > 0 {
+				msg = d.Local.ApproveEntry(entry, actor)
+			} else {
+				msg = d.Local.Approve(service, actor)
+			}
+			if msg != "" {
 				return fmt.Errorf("%s", msg)
 			}
 			return nil
 		}
 		req, err := http.NewRequest(http.MethodPost,
-			strings.TrimSuffix(d.URL, "/")+"/v1/apply/"+url.PathEscape(service), nil)
+			strings.TrimSuffix(d.URL, "/")+"/v1/apply/"+url.PathEscape(service)+entryQuery(entry), nil)
 		if err != nil {
 			return err
 		}
@@ -582,4 +592,33 @@ func (c *Collector) act(host, actor string, local func(LocalQueue) string, path 
 		return nil
 	}
 	return fmt.Errorf("no queue named %q", host)
+}
+
+// entryQuery names one entry on an apply, when the page said which.
+func entryQuery(entry int64) string {
+	if entry <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("?entry=%d", entry)
+}
+
+// Soaking returns what every queue holds waiting out a soak, labelled by
+// host, the soonest released first.
+func (c *Collector) Soaking() []Hosted {
+	c.fresh()
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	var out []Hosted
+	for _, d := range c.Upstreams {
+		s, ok := c.cache[d.Host]
+		if !ok {
+			continue
+		}
+		for _, e := range s.soaking {
+			out = append(out, Hosted{Entry: e, Host: d.Host, CanApply: s.canApply,
+				Applying: s.applying[e.Service] && s.err == nil, Stale: s.err != nil})
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].ReleaseAt < out[j].ReleaseAt })
+	return out
 }

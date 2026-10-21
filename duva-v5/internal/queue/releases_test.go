@@ -140,3 +140,22 @@ func TestAServiceThatComesBackKeepsItsRow(t *testing.T) {
 		t.Errorf("services = %d, removed_at = %v; want one row, enabled again", services, removed)
 	}
 }
+
+// What waits for a person and what soaks are two lists. A service can be in
+// both: a patch soaking, and a minor waiting for someone.
+func TestWaitingAndSoakingAreApart(t *testing.T) {
+	q := NewPending()
+	q.Put(soakingEntry("1.0.1", now.Add(2*time.Hour)), now)
+	q.Put(soakingEntry("1.0.2", now.Add(time.Hour)), now)
+	q.Put(Entry{Service: "app", Image: "example.com/app", From: "1.0.0", To: "1.1.0", Tag: "1.1.0", Kind: version.KindMinor}, now)
+	q.Put(Entry{Service: "db", Image: "postgres", From: "16", To: "17", Tag: "17", Kind: version.KindMajor}, now)
+
+	waiting := q.Waiting()
+	if len(waiting) != 2 || waiting[0].To != "1.1.0" || waiting[1].Service != "db" {
+		t.Errorf("waiting = %+v", waiting)
+	}
+	soaking := q.Soaking()
+	if len(soaking) != 2 || soaking[0].To != "1.0.2" || soaking[1].To != "1.0.1" {
+		t.Errorf("soaking = %+v, want both, the soonest released first", soaking)
+	}
+}

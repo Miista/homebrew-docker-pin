@@ -98,9 +98,12 @@ func (s *Server) guard(next http.HandlerFunc) http.HandlerFunc {
 
 // Snapshot is what a UI renders.
 type Snapshot struct {
-	Host    string  `json:"host"`
-	Version string  `json:"version"`
+	Host    string `json:"host"`
+	Version string `json:"version"`
+	// Pending is what waits for a person, newest per service.
 	Pending []Entry `json:"pending"`
+	// Soaking is what applies itself when its soak runs out, every entry.
+	Soaking []Entry `json:"soaking"`
 	// CanApply is whether an update approved now would actually be attempted.
 	//
 	// Not merely "an updater is configured". An updater that is there and would
@@ -158,7 +161,8 @@ func (s *Server) Snapshot() Snapshot {
 	return Snapshot{
 		Host:     s.Host,
 		Version:  s.Version,
-		Pending:  s.Queue.List(),
+		Pending:  s.Queue.Waiting(),
+		Soaking:  s.Queue.Soaking(),
 		CanApply: canApply,
 		Blocker:  blocker,
 		WhyNot:   whyNot,
@@ -198,6 +202,15 @@ func (s *Server) apply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if raw := r.URL.Query().Get("entry"); raw != "" {
+		id, ok := entryID(raw)
+		if !ok {
+			writeMessage(w, "no such entry")
+			return
+		}
+		writeMessage(w, s.ApproveEntry(id, actorOf(r)))
+		return
+	}
 	writeMessage(w, s.Approve(service, actorOf(r)))
 }
 
@@ -435,5 +448,23 @@ func (s *Server) ask(service, actor, what string, do func(string) error) string 
 			s.Queue.fail(fmt.Errorf("%s of %s: %w", what, service, err))
 		}
 	}()
+	return ""
+}
+
+// ApproveEntry starts applying one entry, by its row: what a person approves
+// when a service has more than one -- one soaking, one waiting -- and "the
+// service" would not say which.
+func (s *Server) ApproveEntry(id int64, actor string) string {
+	if s.Applier == nil {
+		return "no actor is configured, so nothing can be applied from here"
+	}
+	e, ok := s.Queue.ByID(id)
+	if !ok {
+		return ErrNotOpen.Error()
+	}
+	if err := s.Applier.Start(e); err != nil {
+		return err.Error()
+	}
+	s.Queue.Approved(e, actor, time.Now())
 	return ""
 }

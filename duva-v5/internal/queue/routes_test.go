@@ -3,6 +3,7 @@ package queue
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/Miista/homebrew-docker-pin/oci/version"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -143,5 +144,24 @@ func TestActionsRequireTheToken(t *testing.T) {
 		if resp.StatusCode != http.StatusUnauthorized {
 			t.Errorf("%s without the token = %d, want 401", path, resp.StatusCode)
 		}
+	}
+}
+
+// Approving by entry applies that entry, not the service's newest.
+func TestApprovingAnEntryAppliesThatOne(t *testing.T) {
+	app := &fakeApplier{}
+	q := NewPending()
+	soak, _ := q.PutEntry(soakingEntry("1.0.1", now.Add(time.Hour)), now)
+	q.Put(Entry{Service: "app", Image: "example.com/app", From: "1.0.0", To: "1.1.0", Tag: "1.1.0", Kind: version.KindMinor}, now)
+	srv := httptest.NewServer((&Server{Queue: q, Applier: app}).Handler())
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+fmt.Sprintf("/v1/apply/app?entry=%d", soak.ID), "text/plain", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if len(app.started) != 1 || app.started[0].To != "1.0.1" {
+		t.Errorf("started %+v, want the soaking 1.0.1 asked for", app.started)
 	}
 }

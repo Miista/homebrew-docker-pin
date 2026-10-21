@@ -57,11 +57,18 @@ type Source interface {
 	Unreachable() []Problem
 }
 
+// SoakSource is a Source that also reports what is soaking. Separate, as
+// Streamer is, so a Source that only knows a queue still serves the page.
+type SoakSource interface {
+	Soaking() []Hosted
+}
+
 // Approver acts on a click.
 type Approver interface {
 	// Approve tells the owning queue to apply one queued entry, keyed
-	// "host/service".
-	Approve(key, actor string) error
+	// "host/service" -- and, when the page says which, by its row: a service
+	// can have one entry soaking and another waiting for a person.
+	Approve(key string, entry int64, actor string) error
 }
 
 // Actions are what a person may do to a queue besides approving. Collector
@@ -164,6 +171,9 @@ type row struct {
 	Why       string `json:"why"`
 	FirstSeen string `json:"first_seen"`
 	Auto      string `json:"auto"`
+	// ReleaseAt is when a soaking entry applies itself, RFC 3339; empty for
+	// one waiting for a person.
+	ReleaseAt string `json:"release_at,omitempty"`
 }
 
 func (s *Server) index(w http.ResponseWriter, r *http.Request) {
@@ -213,7 +223,10 @@ func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 // after it are describing the same thing. Two shapes would be two chances to
 // disagree about what a queue is.
 type state struct {
-	Rows        []row     `json:"rows"`
+	Rows []row `json:"rows"`
+	// Soaking is what applies itself once its soak runs out: a thing of its
+	// own, shown apart from what waits for a person.
+	Soaking     []row     `json:"soaking"`
 	Unreachable []Problem `json:"unreachable"`
 	Blocked     []Blocked `json:"blocked"`
 	CanApply    bool      `json:"can_apply"`
@@ -228,6 +241,12 @@ func (s *Server) snapshot() state {
 	for _, e := range pending {
 		rows = append(rows, toRow(e))
 	}
+	soaking := []row{}
+	if ss, ok := s.Source.(SoakSource); ok {
+		for _, e := range ss.Soaking() {
+			soaking = append(soaking, toRow(e))
+		}
+	}
 	// Initialised rather than left nil: Go encodes a nil slice as JSON null,
 	// and a page reading .length off it throws before rendering anything.
 	unreachable := s.Source.Unreachable()
@@ -240,6 +259,7 @@ func (s *Server) snapshot() state {
 	}
 	return state{
 		Rows:        rows,
+		Soaking:     soaking,
 		Unreachable: unreachable,
 		Blocked:     blocked,
 		CanApply:    s.Approver != nil,
@@ -265,7 +285,7 @@ func (s *Server) apply(w http.ResponseWriter, r *http.Request) {
 	}
 
 	level, message := "ok", "update started"
-	if err := s.Approver.Approve(key, s.actor(r)); err != nil {
+	if err := s.Approver.Approve(key, entryParam(r), s.actor(r)); err != nil {
 		level, message = "error", err.Error()
 	}
 	_, service, _ := SplitKey(key)
@@ -371,6 +391,7 @@ func toRow(e Hosted) row {
 		Host:       e.Host,
 		Key:        Key(e.Host, e.Service),
 		Entry:      e.ID,
+		ReleaseAt:  e.ReleaseAt,
 		Image:      shortImage(e.Image),
 		CurrentTag: e.From,
 		Candidate:  display(e.Entry),
@@ -417,7 +438,7 @@ func (s *Server) applyJSON(w http.ResponseWriter, r *http.Request) {
 	}
 
 	message := ""
-	if err := s.Approver.Approve(key, s.actor(r)); err != nil {
+	if err := s.Approver.Approve(key, entryParam(r), s.actor(r)); err != nil {
 		message = err.Error()
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -483,4 +504,10 @@ func (s *Server) check(host, service string, r *http.Request) error {
 
 func (s *Server) rescan(host, service string, r *http.Request) error {
 	return s.Actions.Rescan(host, service, s.actor(r))
+}
+
+// entryParam is the entry an approval names, zero for none.
+func entryParam(r *http.Request) int64 {
+	id, _ := strconv.ParseInt(r.FormValue("entry"), 10, 64)
+	return id
 }

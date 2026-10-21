@@ -117,7 +117,7 @@
           padding: .4rem .9rem .3rem;
           background: var(--card); border: 1px solid var(--line);
           border-bottom: 0; border-radius: 10px 10px 0 0; }
-  main > .rows { padding: 0 .9rem;
+  main > .rows, .soak > .rows { padding: 0 .9rem;
                  background: var(--card); border: 1px solid var(--line);
                  border-top: 0; border-radius: 0 0 10px 10px; }
   .head span { font-size: .69rem; font-weight: 700; text-transform: uppercase;
@@ -224,6 +224,15 @@
   .steps .ok { color: var(--ok); font-weight: 600; }
   .steps .bad { color: var(--major); font-weight: 600; }
 
+  /* ---------- soaking: applies itself, later ---------- */
+  /* Its own section, because it is its own thing: nothing here waits for a
+     person. Quieter than the queue, for the same reason. */
+  .soak h1 { color: var(--muted); }
+  .soak .count, .soak .lead { font-weight: 400; color: var(--faint); }
+  .soak .lead { font-size: .8rem; margin: -.35rem 0 .55rem; }
+  .when { font-size: .78rem; color: var(--muted); white-space: nowrap; }
+  .when .in { display: block; color: var(--faint); font-size: .72rem; }
+
   /* ---------- empty state: the common case ---------- */
   .empty { padding: 3rem 1rem 2.75rem; text-align: center; }
   .tick { width: 2.1rem; height: 2.1rem; margin: 0 auto .9rem;
@@ -250,7 +259,7 @@
        the list. Both halves are needed: the card draws its own edge, and the
        first row stops drawing one. Either alone still looks wrong. */
     .head { display: none; }
-    main > .rows { padding: 0 .7rem;
+    main > .rows, .soak > .rows { padding: 0 .7rem;
                    border-top: 1px solid var(--line); border-radius: 10px; }
     .rows > li:first-child { border-top: 0; }
     .rows > li { grid-template-columns: minmax(0, 1fr) max-content max-content;
@@ -411,6 +420,58 @@
     <p v-else>Every container duva watches is where you left it. Nothing will change without your say.</p>
   </div>
 
+  <!-- What applies itself when its soak runs out. Not in the queue above:
+       nobody needs to do anything, so it is told apart rather than mixed in.
+       A section with v-if, not a <template>: petite-vue's v-if needs a
+       parent element to put the block into. -->
+  <section class="soak" v-if="soaking.length">
+    <h1>Soaking <span class="count">({{ soaking.length }})</span></h1>
+    <p class="lead">Allowed by policy; each applies itself when its soak runs out.</p>
+    <div class="head" aria-hidden="true">
+      <span>Service</span><span>Change</span><span>Releases</span><span></span>
+    </div>
+    <ul class="rows">
+      <li v-for="r in shownSoaking()" :key="r.key + '#' + r.entry" :class="r.stale ? 'stale' : ''">
+        <span class="svc">{{ r.service }}<span class="on mono" v-if="r.host">{{ r.host }}</span><span class="img mono">{{ r.image }}</span></span>
+
+        <span class="jump mono" v-if="r.moved"><span class="to">{{ r.tag }}</span></span>
+        <span class="jump mono" v-else><span class="from">{{ r.current_tag }}</span><span class="arrow">&rarr;</span><span class="to">{{ r.candidate }}</span></span>
+
+        <span class="when" :title="r.why">{{ when(r.release_at) }}<span class="in">{{ until(r.release_at) }}</span></span>
+
+        <span class="acts">
+          <button class="apply" v-if="canApply"
+                  :disabled="!r.can_apply || running(r.key) || busyHost(r.host)"
+                  :title="buttonReason(r) || 'Apply it now, without waiting out the soak'"
+                  @click="apply(r)">{{ running(r.key) ? "Updating…" : "Apply now" }}</button>
+          <button class="act" v-if="actions"
+                  :disabled="r.stale || running(r.key)"
+                  title="Drop it for now; found again, it comes back"
+                  @click="act('discard', r)">Discard</button>
+          <button class="act act-danger" v-if="actions"
+                  :disabled="r.stale || running(r.key)"
+                  title="Never apply this release, on any service running the image, until unblocked"
+                  @click="startBlock(r, true)">Block</button>
+        </span>
+
+        <div class="panel" v-if="actions && blocking === r.key + '#' + r.entry">
+          <form @submit.prevent="block(r)">
+            <input v-model="reason" maxlength="200"
+                   placeholder="Why this release is bad -- shown to whoever sees the block">
+            <button class="act act-danger" type="submit" :disabled="!reason.trim()">Block {{ r.moved ? "this digest" : r.candidate }}</button>
+            <button class="act" type="button" @click="blocking = ''; reason = ''">Cancel</button>
+          </form>
+        </div>
+
+        <ul class="steps" v-if="steps[r.key] || finished[r.key]">
+          <li v-for="line in (steps[r.key] || [])">{{ line }}</li>
+          <li :class="finished[r.key] && finished[r.key].startsWith('failed') ? 'bad' : 'ok'"
+              v-if="finished[r.key]">{{ finished[r.key] }}</li>
+        </ul>
+      </li>
+    </ul>
+  </section>
+
   <footer>
     <span>duva {{ version }}</span>
   </footer>
@@ -430,6 +491,7 @@ createApp({
   Queue() {
     return {
       rows: initial.rows || [],
+      soaking: initial.soaking || [],
       unreachable: initial.unreachable || [],
       blocked: initial.blocked || [],
       canApply: initial.can_apply,
@@ -479,6 +541,7 @@ createApp({
           if (r.status === 401) { location.reload(); return }
           const s = await r.json()
           this.rows = s.rows || []
+          this.soaking = s.soaking || []
           this.unreachable = s.unreachable || []
           this.blocked = s.blocked || []
           this.canApply = s.can_apply
@@ -559,10 +622,39 @@ createApp({
       },
 
       // Block asks for its reason in the row's panel, opened for it.
-      startBlock(r) {
-        this.open = r.key
-        this.blocking = r.key
+      startBlock(r, soak) {
+        // A soaking row shares its service's key with any queue row for the
+        // same service, so it is told apart by its entry.
+        this.open = soak ? "" : r.key
+        this.blocking = soak ? r.key + "#" + r.entry : r.key
         this.reason = ""
+      },
+
+      // The soaking rows the tab and the search box allow.
+      shownSoaking() {
+        const q = this.q.trim().toLowerCase()
+        return this.soaking.filter(r =>
+          (!this.host || r.host === this.host) &&
+          (!q || (r.service + " " + r.image + " " + r.current_tag + " " +
+                  r.candidate + " " + r.tag).toLowerCase().includes(q)))
+      },
+
+      // When a soak ends, in the reader's own clock.
+      when(at) {
+        if (!at) return ""
+        return new Date(at).toLocaleString(undefined,
+          { weekday: "short", hour: "2-digit", minute: "2-digit" })
+      },
+
+      // How long until then, coarsely: it is a wait of days, not seconds.
+      until(at) {
+        if (!at) return ""
+        const ms = new Date(at) - Date.now()
+        if (ms <= 0) return "due now"
+        const h = Math.floor(ms / 3600000), d = Math.floor(h / 24)
+        if (d > 0) return "in " + d + "d " + (h % 24) + "h"
+        if (h > 0) return "in " + h + "h"
+        return "in " + Math.max(1, Math.round(ms / 60000)) + "m"
       },
 
       toggle(r) {
@@ -608,7 +700,8 @@ createApp({
         const { [r.key]: _done, ...others } = this.finished
         this.finished = others
         this.steps = { ...this.steps, [r.key]: [] }
-        const applied = await fetch("/api/apply/" + r.key, { method: "POST" })
+        // By its entry: a service can have one soaking and one waiting.
+        const applied = await fetch("/api/apply/" + r.key + "?entry=" + r.entry, { method: "POST" })
         if (applied.status === 401) { location.reload(); return }
         const res = await applied.json()
         if (res.message) {

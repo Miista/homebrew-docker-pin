@@ -30,6 +30,11 @@ func (l *localQueue) Approve(service, actor string) string {
 	return ""
 }
 
+func (l *localQueue) ApproveEntry(id int64, actor string) string {
+	l.acted = append(l.acted, fmt.Sprintf("approve entry %d by %s", id, actor))
+	return ""
+}
+
 func (l *localQueue) Discard(id int64, actor string) string {
 	l.acted = append(l.acted, fmt.Sprintf("discard %d by %s", id, actor))
 	return ""
@@ -69,7 +74,7 @@ func TestALocalQueueIsAskedDirectly(t *testing.T) {
 		t.Errorf("a local queue was reported unreachable: %+v", u)
 	}
 
-	if err := c.Approve(Key("optiplex", "app"), "soren"); err != nil {
+	if err := c.Approve(Key("optiplex", "app"), 0, "soren"); err != nil {
 		t.Fatalf("Approve: %v", err)
 	}
 	if len(local.approved) != 1 || local.approved[0] != "app" {
@@ -89,7 +94,7 @@ func TestALocalQueueIsAskedDirectly(t *testing.T) {
 func TestALocalRefusalIsAnError(t *testing.T) {
 	local := &localQueue{refuse: "nothing is queued for app"}
 	c := NewCollector([]Upstream{{Host: "optiplex", Local: local}})
-	err := c.Approve(Key("optiplex", "app"), "soren")
+	err := c.Approve(Key("optiplex", "app"), 0, "soren")
 	if err == nil || !strings.Contains(err.Error(), "nothing is queued") {
 		t.Errorf("err = %v", err)
 	}

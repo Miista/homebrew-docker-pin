@@ -172,9 +172,9 @@ type loggedApprover struct {
 	log zerolog.Logger
 }
 
-func (a *loggedApprover) Approve(key, actor string) error {
+func (a *loggedApprover) Approve(key string, entry int64, actor string) error {
 	host, service, _ := ui.SplitKey(key)
-	if err := a.c.Approve(key, actor); err != nil {
+	if err := a.c.Approve(key, entry, actor); err != nil {
 		a.log.Error().Msgf("approving %s on %s failed: %v", service, host, err)
 		return err
 	}

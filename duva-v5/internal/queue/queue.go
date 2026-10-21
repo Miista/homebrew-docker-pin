@@ -474,6 +474,46 @@ func (q *Pending) List() []Entry {
 	return out
 }
 
+// Waiting returns, per service, the newest entry waiting for a person: what
+// the page's queue shows. Soaking entries are not in it; see Soaking.
+func (q *Pending) Waiting() []Entry {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	all, err := q.query(open + ` AND e.release_at IS NULL`)
+	if err != nil {
+		q.fail(err)
+		return []Entry{}
+	}
+	bySvc := map[string][]Entry{}
+	for _, e := range all {
+		bySvc[e.Service] = append(bySvc[e.Service], e)
+	}
+	out := make([]Entry, 0, len(bySvc))
+	for _, entries := range bySvc {
+		e, _ := newest(entries)
+		out = append(out, e)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Service < out[j].Service })
+	return out
+}
+
+// Soaking returns every entry waiting out a soak, the soonest released
+// first. All of them, not the newest per service: each is on its own clock.
+func (q *Pending) Soaking() []Entry {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	all, err := q.query(open + ` AND e.release_at IS NOT NULL`)
+	if err != nil {
+		q.fail(err)
+		return []Entry{}
+	}
+	sort.SliceStable(all, func(i, j int) bool { return all[i].ReleaseAt < all[j].ReleaseAt })
+	if all == nil {
+		all = []Entry{}
+	}
+	return all
+}
+
 // Len is how many services have something waiting.
 func (q *Pending) Len() int { return len(q.List()) }
 
