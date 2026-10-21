@@ -338,9 +338,10 @@
   /* ---------- phones ---------- */
   @media (max-width: 45rem) {
     main { padding: 0 12px calc(96px + env(safe-area-inset-bottom)); }
-    .top { position: sticky; top: 0; z-index: 30; height: 56px; margin: 0 -12px;
-           padding: 0 8px 0 16px; flex-wrap: nowrap; gap: 10px;
-           background: color-mix(in oklch, var(--bg) 70%, transparent); backdrop-filter: blur(10px); }
+    /* Transparent, so the glow shows through it as it does the rest of the
+       page; not sticky, or rows would scroll by behind the logo. */
+    .top { position: relative; z-index: 30; height: 56px; margin: 0 -12px;
+           padding: 0 8px 0 16px; flex-wrap: nowrap; gap: 10px; }
     .brand { gap: 10px; }
     .brand img { width: 22px; height: 22px; }
     .mark { font-size: 14px; }
