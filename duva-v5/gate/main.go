@@ -110,6 +110,9 @@ type Options struct {
 	// LastChecked is when the watcher last looked for new tags, for the
 	// page. Nil: not reported.
 	LastChecked func() time.Time
+	// Watched is every service the watcher checks, for the page's "Check…".
+	// Nil: not reported.
+	Watched func() []string
 	// Store is where the queue is kept. Nil opens /data/duva.db.
 	Store *store.Store
 	// Labels reads a service's policy from its container. Nil reads it from
@@ -236,6 +239,7 @@ func New(log zerolog.Logger, opts Options) (*Gate, error) {
 			Resolve: opts.Resolve,
 
 			LastChecked: opts.LastChecked,
+			Watched:     opts.Watched,
 		},
 		applying:   applying,
 		live:       live,

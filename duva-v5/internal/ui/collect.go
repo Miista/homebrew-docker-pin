@@ -103,6 +103,8 @@ type snapshot struct {
 	blocks []queue.Block
 	// lastCheck is when that host last looked for new tags, RFC 3339.
 	lastCheck string
+	// services is every service that host watches, for "Check…".
+	services []string
 	// canApply is whether this queue has an update. Per queue, not per
 	// collector: one host can have an updater while another does not.
 	canApply bool
@@ -149,7 +151,7 @@ func (c *Collector) Collect() {
 				applying[svc] = true
 			}
 			results[i] = snapshot{queue: snap.Pending, soaking: snap.Soaking, blocks: snap.Blocks,
-				lastCheck: snap.LastCheck, canApply: snap.CanApply,
+				lastCheck: snap.LastCheck, services: snap.Services, canApply: snap.CanApply,
 				blocker: string(snap.Blocker), whyNot: snap.WhyNot,
 				applying: applying, err: err}
 		}(i, d)
@@ -170,6 +172,7 @@ func (c *Collector) Collect() {
 			results[i].soaking = prev.soaking
 			results[i].blocks = prev.blocks
 			results[i].lastCheck = prev.lastCheck
+			results[i].services = prev.services
 			// Never applyable while unreachable, whatever the last answer
 			// said: the route to the updater is through the queue.
 			results[i].canApply = false
@@ -668,16 +671,25 @@ type HostCheck struct {
 	// At is RFC 3339; empty before that host's first check, or while it
 	// has never answered.
 	At string `json:"at"`
+	// Services is every service that host watches, by compose name, for
+	// "Check…" to offer: what is waiting or not.
+	Services []string `json:"services"`
 }
 
-// LastChecks is each host's last check, in the configured order.
+// LastChecks is each host's last check, and what it watches, in the
+// configured order.
 func (c *Collector) LastChecks() []HostCheck {
 	c.fresh()
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	out := make([]HostCheck, 0, len(c.Upstreams))
 	for _, d := range c.Upstreams {
-		out = append(out, HostCheck{Host: d.Host, At: c.cache[d.Host].lastCheck})
+		s := c.cache[d.Host]
+		services := s.services
+		if services == nil {
+			services = []string{}
+		}
+		out = append(out, HostCheck{Host: d.Host, At: s.lastCheck, Services: services})
 	}
 	return out
 }

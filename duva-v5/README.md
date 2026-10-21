@@ -176,9 +176,11 @@ release is never applied, on any service running the image, until you unblock
 it from **Blocked releases** in the menu at the top, which puts it back in the
 queue. On a phone, tapping a row opens a sheet with Update and Block.
 
-**Check…**, also in the menu at the top, looks for new releases on every host
-at once, and asks how far back: since the last check (chosen already), or the
-past day, week or month. Since the last check finds what is new. Further back
+**Check…**, also in the menu at the top, looks for new releases: opened and
+confirmed, every service on every host, since the last check. Its folded
+**Options** narrow it to the services picked -- any a host watches, waiting or
+not -- and choose how far back: since the last check, or the past day, week
+or month. Since the last check finds what is new. Further back
 also finds what an earlier check passed over -- a tag a since-changed
 `diun.include_tags` filtered out, a release dropped from the queue -- and
 offers it again; blocked releases stay blocked, and anything older than what

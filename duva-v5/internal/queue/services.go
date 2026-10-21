@@ -17,6 +17,27 @@ type Container struct {
 	Image string
 }
 
+// Running is the compose name of every service with a container on this host
+// now, as the last service sync saw it.
+func (q *Pending) Running() map[string]bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	out := map[string]bool{}
+	rows, err := q.st.DB().Query(`SELECT name FROM services WHERE removed_at IS NULL`)
+	if err != nil {
+		q.fail(err)
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		if rows.Scan(&name) == nil {
+			out[name] = true
+		}
+	}
+	return out
+}
+
 // SyncServices makes the services table a mirror of the containers on this
 // host: a container not seen before is added, one that is gone is disabled,
 // and one that comes back is enabled again -- the same row, so the same

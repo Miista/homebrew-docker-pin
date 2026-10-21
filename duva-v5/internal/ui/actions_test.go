@@ -192,12 +192,14 @@ func TestCheckAllAsksEveryHost(t *testing.T) {
 // The page is told when each host last looked, in the configured order.
 func TestTheStateSaysWhenEachHostChecked(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]any{"last_check": "2026-10-21T03:00:00Z"})
+		json.NewEncoder(w).Encode(map[string]any{"last_check": "2026-10-21T03:00:00Z",
+			"services": []string{"app", "db"}})
 	}))
 	defer srv.Close()
 	c := NewCollector([]Upstream{{Host: "pi", URL: srv.URL}})
 	checks := c.LastChecks()
-	if len(checks) != 1 || checks[0] != (HostCheck{Host: "pi", At: "2026-10-21T03:00:00Z"}) {
-		t.Errorf("checks = %+v", checks)
+	if len(checks) != 1 || checks[0].Host != "pi" || checks[0].At != "2026-10-21T03:00:00Z" ||
+		strings.Join(checks[0].Services, ",") != "app,db" {
+		t.Errorf("checks = %+v, want pi's time and both its services", checks)
 	}
 }

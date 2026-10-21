@@ -167,6 +167,25 @@ func Check(log zerolog.Logger, service string, back time.Duration, opts Options)
 	return run(log, service, back, opts)
 }
 
+// Watched is every service the watcher has checked, by compose name, sorted:
+// what a person may pick to check again. A service retired from the compose
+// file keeps its cutoff, so a caller that knows which still run narrows this.
+func Watched(st *store.Store) []string {
+	rows, err := st.DB().Query(`SELECT service FROM watch_cutoffs ORDER BY service`)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var name string
+		if rows.Scan(&name) == nil {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
 // LastChecked is when this host last looked for new tags: the latest cutoff
 // recorded, which each service's check stamps as it starts. Zero when nothing
 // has been checked yet.

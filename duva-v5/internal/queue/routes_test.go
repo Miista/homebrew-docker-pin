@@ -16,9 +16,9 @@ import (
 // actionServer is a queue API with the watcher's actions and a resolver
 // faked, recording what they were asked.
 type actionServer struct {
-	srv     *httptest.Server
-	q       *Pending
-	mu      sync.Mutex
+	srv *httptest.Server
+	q   *Pending
+	mu  sync.Mutex
 	// checked is each check asked of the watcher, as "service back", with
 	// "*" for every service.
 	checked []string
@@ -168,6 +168,23 @@ func TestAnUnreadableLookBackIsRefused(t *testing.T) {
 	defer a.mu.Unlock()
 	if len(a.checked) != 0 {
 		t.Errorf("checked %v after only refusals", a.checked)
+	}
+}
+
+// The snapshot offers what "Check…" may pick: every service the watcher
+// checks that still runs here, whatever is waiting -- and not one retired
+// from the compose file, whose cutoff the watcher still remembers.
+func TestTheSnapshotOffersTheWatchedServicesThatStillRun(t *testing.T) {
+	q := NewPending()
+	if _, _, err := q.SyncServices([]Container{
+		{Name: "app", Service: "app", Image: "example.com/app:1"},
+		{Name: "db", Service: "db", Image: "example.com/db:1"},
+	}, now); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{Queue: q, Watched: func() []string { return []string{"app", "db", "retired"} }}
+	if got := strings.Join(s.Snapshot().Services, ","); got != "app,db" {
+		t.Errorf("services = %q, want app,db", got)
 	}
 }
 

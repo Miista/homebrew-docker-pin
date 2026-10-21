@@ -60,6 +60,10 @@ type Server struct {
 	// LastChecked is when this host last looked for new tags. Nil: not
 	// reported.
 	LastChecked func() time.Time
+	// Watched is every service the watcher checks, by compose name: what a
+	// person may pick in "Check…". Narrowed to those still running here, as
+	// a retired one keeps its cutoff. Nil: not reported.
+	Watched func() []string
 
 	cooldownMu sync.Mutex
 	lastAsked  map[string]time.Time
@@ -121,6 +125,10 @@ type Snapshot struct {
 	// LastCheck is when this host last looked for new tags, RFC 3339; empty
 	// before its first check.
 	LastCheck string `json:"last_check,omitempty"`
+	// Services is every service this host watches and still runs, by compose
+	// name, sorted: whatever is waiting or not, since a release an earlier
+	// check passed over is on a service that shows nothing.
+	Services []string `json:"services,omitempty"`
 	// CanApply is whether an update approved now would actually be attempted.
 	//
 	// Not merely "an updater is configured". An updater that is there and would
@@ -181,6 +189,15 @@ func (s *Server) Snapshot() Snapshot {
 			lastCheck = at.UTC().Format(time.RFC3339)
 		}
 	}
+	var services []string
+	if s.Watched != nil {
+		running := s.Queue.Running()
+		for _, name := range s.Watched() {
+			if running[name] {
+				services = append(services, name)
+			}
+		}
+	}
 	return Snapshot{
 		Host:      s.Host,
 		Version:   s.Version,
@@ -188,6 +205,7 @@ func (s *Server) Snapshot() Snapshot {
 		Soaking:   s.Queue.Soaking(),
 		Blocks:    s.Queue.Blocks(),
 		LastCheck: lastCheck,
+		Services:  services,
 		CanApply:  canApply,
 		Blocker:   blocker,
 		WhyNot:    whyNot,

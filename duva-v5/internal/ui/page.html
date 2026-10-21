@@ -272,6 +272,11 @@
          border-radius: 18px; background: var(--field); color: var(--fg);
          box-shadow: 0 24px 64px rgba(0, 0, 0, .55); }
   .dlg.wide { width: min(460px, calc(100% - 48px)); }
+  /* The page holds still behind an open dialog: no scrolling it under the
+     backdrop, and a scroll that reaches the end of a sheet's own list does
+     not carry on into the page. */
+  html:has(dialog[open]) { overflow: hidden; }
+  .dlg, .dlg .body, .pick-list { overscroll-behavior: contain; }
   /* A dialog takes focus when it opens; that is not a thing to outline. */
   .dlg:focus, .dlg:focus-visible { outline: none; }
   .dlg::backdrop { background: var(--scrim); backdrop-filter: blur(3px); }
@@ -292,6 +297,37 @@
   .choose label:hover { background: var(--menu-hover); }
   .choose label:has(input:checked) { background: var(--raised); color: var(--fg); }
   .choose input { margin: 0; width: 16px; height: 16px; accent-color: var(--accent); }
+
+  /* The check dialog's folded options. */
+  .fold { border-top: 1px solid var(--divider); padding-top: 4px; }
+  .fold-head { display: flex; align-items: center; gap: 8px; width: 100%; height: 36px; padding: 0 2px;
+               border: 0; background: none; color: var(--muted); font-size: 13px; text-align: left; }
+  .fold-head:hover { color: var(--fg); }
+  .fold-head svg { transition: transform .15s; }
+  .fold-head[aria-expanded="true"] svg { transform: rotate(90deg); }
+  .fold-body { display: flex; flex-direction: column; gap: 16px; padding: 6px 0 2px; }
+  .field { display: flex; flex-direction: column; gap: 6px; }
+  .pick { display: flex; align-items: center; justify-content: space-between; gap: 10px;
+          height: 40px; padding: 0 12px; border: 1px solid var(--edge); border-radius: 9px;
+          background: var(--card); color: var(--fg); font-size: 14px; text-align: left; }
+  .pick span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pick svg { flex-shrink: 0; color: var(--muted); transition: transform .15s; }
+  .pick[aria-expanded="true"] svg { transform: rotate(180deg); }
+  /* In the flow of the dialog rather than floating over it: it is a long
+     list, and a sheet on a phone has no room beside it. */
+  .picker { border: 1px solid var(--edge); border-radius: 10px; background: var(--card); overflow: hidden; }
+  .pick-q { width: 100%; height: 38px; padding: 0 12px; border: 0; border-bottom: 1px solid var(--divider);
+            background: transparent; color: var(--fg); font: inherit; font-size: 14px; outline: 0; }
+  .pick-q::placeholder { color: var(--fainter); }
+  .pick-list { max-height: 240px; overflow-y: auto; padding: 4px; }
+  .pick-list label { display: flex; align-items: center; gap: 10px; min-height: 36px; padding: 0 10px;
+                     border-radius: 7px; cursor: pointer; font-size: 14px; color: var(--soft); }
+  .pick-list label:hover { background: var(--menu-hover); }
+  .pick-list input { margin: 0; width: 16px; height: 16px; accent-color: var(--accent); flex-shrink: 0; }
+  .pick-all { color: var(--fg) !important; }
+  .pick-host { padding: 10px 10px 4px; font-size: 11px; font-weight: 700; letter-spacing: .14em;
+               text-transform: uppercase; color: var(--bar-fg); }
+  .none-match { padding: 8px 10px; }
   .dlg .buttons { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 22px;
                   border-top: 1px solid var(--divider); }
   .dlg .buttons .act { height: 32px; min-width: 84px; }
@@ -359,6 +395,8 @@
     .brand img { width: 22px; height: 22px; }
     .mark { font-size: 14px; }
     .find, .since, .hosts { display: none !important; }
+    /* 16px, or iOS zooms the page in on focus. */
+    .pick-q { font-size: 16px; }
     .burger { width: 44px; height: 44px; border-radius: 10px; }
     .burger.on { background: var(--card); }
     .top .menu { top: 48px; right: 0; width: 264px; padding: 6px; border-radius: 14px; }
@@ -404,7 +442,11 @@
        Close at the bottom; one that asks something keeps its buttons, as
        big as the sheet's other choices. */
     .rise .buttons.only-desk { display: none; }
-    .rise .buttons { border-top: 0; padding: 0 16px 28px; }
+    .rise .buttons { border-top: 0; padding: 12px 16px 28px; }
+    /* A sheet taller than the screen scrolls what it asks, never its
+       buttons: Check stays where a thumb finds it. */
+    #check form { max-height: calc(80vh - 28px); }
+    #check .body { overflow-y: auto; min-height: 0; }
     .rise .buttons .act, .rise .buttons .go { flex: 1; height: 48px; border-radius: 12px; font-size: 15px; }
     .rise .blist { margin: 0 16px; padding: 0; border: 1px solid var(--card-line);
                    border-radius: 14px; overflow: auto; }
@@ -681,24 +723,66 @@
     </div>
   </dialog>
 
-  <!-- Check…: how far back to look. Since the last check finds what is new;
-       further back also finds what an earlier check passed over, which is
-       what a forced check of one service used to be. Presets rather than a
-       field: they cover the real cases, and a field invites "365d". -->
+  <!-- Check…: the ordinary check is opening this and pressing Check, so the
+       choices are folded away and the line above them says what Check will
+       do. Which services: every one, or those picked -- any the host
+       watches, waiting or not, since a passed-over release is on a service
+       that shows nothing. How far back: since the last check finds what is
+       new; further back also finds what an earlier check passed over.
+       Presets rather than a field: they cover the real cases, and a field
+       invites "365d". -->
   <dialog class="dlg rise" id="check">
     <div class="grab" @pointerdown="dragDown($event)" @pointermove="dragMove($event)"
          @pointerup="dragUp($event)" @pointercancel="dragUp($event)"></div>
-    <form @submit.prevent="checkAll()">
+    <form @submit.prevent="runCheck()">
       <div class="body">
-        <h2>Check for updates</h2>
-        <fieldset class="choose">
-          <legend class="hint">Look for releases published</legend>
-          <label v-for="o in lookBacks" :key="o.value">
-            <input type="radio" name="since" :value="o.value" v-model="since">
-            <span>{{ o.label }}</span>
-          </label>
-        </fieldset>
-        <p class="hint">Further back also finds releases an earlier check passed over. Blocked releases stay blocked.</p>
+        <div class="title">
+          <h2>Check for updates</h2>
+          <p class="say">{{ checkSummary() }}</p>
+        </div>
+        <div class="fold">
+          <button type="button" class="fold-head" :aria-expanded="checkOpts ? 'true' : 'false'"
+                  @click="checkOpts = !checkOpts">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M4.5 3L7.5 6L4.5 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Options
+          </button>
+          <div class="fold-body" v-if="checkOpts">
+            <div class="field">
+              <span class="hint">Services</span>
+              <button type="button" class="pick" :aria-expanded="pickOpen ? 'true' : 'false'"
+                      @click="pickOpen = !pickOpen">
+                <span>{{ pickedLabel() }}</span>
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+              <div class="picker" v-if="pickOpen">
+                <input class="pick-q" type="search" v-model="pickQ" placeholder="Filter services">
+                <div class="pick-list">
+                  <label class="pick-all">
+                    <input type="checkbox" :checked="!picked.length" @change="picked = []">
+                    <span>All services</span>
+                  </label>
+                  <div v-for="h in pickHosts()" :key="h.host">
+                    <div class="pick-host">{{ h.host }}</div>
+                    <label v-for="name in h.services" :key="h.host + '/' + name">
+                      <input type="checkbox" :checked="picked.includes(h.host + '/' + name)"
+                             @change="togglePick(h.host + '/' + name)">
+                      <span>{{ name }}</span>
+                    </label>
+                  </div>
+                  <p class="hint none-match" v-if="!pickHosts().length">No service matches.</p>
+                </div>
+              </div>
+            </div>
+            <fieldset class="choose field">
+              <legend class="hint">Look for releases published</legend>
+              <label v-for="o in lookBacks" :key="o.value">
+                <input type="radio" name="since" :value="o.value" v-model="since">
+                <span>{{ o.label }}</span>
+              </label>
+            </fieldset>
+            <p class="hint">Further back also finds releases an earlier check passed over. Blocked releases stay blocked.</p>
+          </div>
+        </div>
       </div>
       <div class="buttons">
         <button class="act" type="button" @click="slideClose(document.getElementById('check'))">Cancel</button>
@@ -787,6 +871,10 @@ createApp({
       sheetId: "",      // the phone's open row: its key, then #entry
       blockRow: null,   // the row the block dialog is about
       since: "",        // how far back the check dialog will look; "" is since the last check
+      checkOpts: false, // the check dialog's options are unfolded
+      pickOpen: false,  // its services list is open
+      pickQ: "",        // what was typed in that list's filter
+      picked: [],       // "host/service" picked; none is every service
       lookBacks: [
         { value: "", label: "Since the last check" },
         { value: "1d", label: "In the past day" },
@@ -1044,12 +1132,81 @@ createApp({
         return this.ago(oldest)
       },
 
-      // "Check…" asks how far back before it checks; since the last check is
-      // chosen already, so the ordinary check is the dialog's own button.
+      // "Check…" opens with every choice at its default and folded away, so
+      // the ordinary check is opening it and pressing Check.
       openCheck() {
         this.top = false
         this.since = ""
+        this.picked = []
+        this.pickQ = ""
+        this.pickOpen = false
+        this.checkOpts = false
         document.getElementById("check").showModal()
+      },
+
+      // What Check will do, in a sentence: said whether the options are
+      // open or not, so a folded dialog still says what it is about to do.
+      checkSummary() {
+        const back = { "1d": "over the past day", "7d": "over the past week", "30d": "over the past month" }[this.since]
+        return (this.picked.length ? this.pickedNames() : "Every service") + ", " +
+          (back || "since the last check") + "."
+      },
+
+      // The picked services by name, shortest form first: the host only when
+      // two hosts run a service of that name.
+      pickedNames() {
+        const names = this.picked.map(k => {
+          const [host, name] = k.split("/")
+          const twice = this.checks.filter(c => (c.services || []).includes(name)).length > 1
+          return twice ? name + " on " + host : name
+        })
+        if (names.length <= 2) return names.join(" and ")
+        return names.slice(0, 2).join(", ") + " and " + (names.length - 2) + " more"
+      },
+
+      pickedLabel() {
+        return this.picked.length ? this.pickedNames() : "All services"
+      },
+
+      // Every host's services, narrowed by the filter, hosts with none left
+      // out.
+      pickHosts() {
+        const q = this.pickQ.trim().toLowerCase()
+        return this.checks
+          .map(c => ({ host: c.host, services: (c.services || []).filter(n => !q || n.toLowerCase().includes(q)) }))
+          .filter(h => h.services.length)
+      },
+
+      togglePick(key) {
+        this.picked = this.picked.includes(key)
+          ? this.picked.filter(k => k !== key)
+          : [...this.picked, key]
+      },
+
+      // Check: every service through check-all, or each one picked on the
+      // host that runs it. Each picked one is its own request, so each has
+      // its own cooldown, and a refusal names which.
+      async runCheck() {
+        if (!this.picked.length) return this.checkAll()
+        const since = this.since, picked = this.picked, label = this.pickedNames()
+        this.slideClose(document.getElementById("check"))
+        this.checking = true
+        const refused = []
+        for (const key of picked) {
+          const [host, name] = key.split("/")
+          const res = await fetch("/api/check/" + encodeURIComponent(host) + "/" + encodeURIComponent(name), {
+            method: "POST", body: since ? new URLSearchParams({ since }) : undefined })
+          if (res.status === 401) { location.reload(); return }
+          const { message } = await res.json()
+          if (message) refused.push(name + ": " + message)
+        }
+        const back = { "1d": "the past day", "7d": "the past week", "30d": "the past month" }[since]
+        this.result = refused.length
+          ? { service: "Check", level: "error", message: refused.join("; ") }
+          : { service: "Check", level: "ok", message: "looking for new releases of " + label +
+              (back ? ", over " + back : "") + "; anything found will appear here" }
+        setTimeout(() => this.poll(), 3000)
+        setTimeout(() => { this.checking = false; this.poll() }, 15000)
       },
 
       // Every host looks for new releases now, at least as far back as was
