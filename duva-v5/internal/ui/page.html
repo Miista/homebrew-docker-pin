@@ -409,7 +409,7 @@
 
   /* ---------- phones ---------- */
   @media (max-width: 45rem) {
-    main { padding: 0 12px calc(96px + env(safe-area-inset-bottom)); }
+    main { padding: 0 12px calc(72px + env(safe-area-inset-bottom)); }
     /* Always there, and transparent at the top of the page so the glow shows
        through it as through the rest. Once the page scrolls under it, a
        frosted pane of the same dark, so rows do not run legibly behind the
@@ -486,14 +486,17 @@
     .rise .blist li:last-child { border-bottom: 0; }
     .rise .blist .act { height: 40px; border-radius: 10px; color: var(--fg); }
     .rise .note { padding: 14px 20px 28px; }
-    /* Above the tab bar: 54px of tabs and the home indicator's room. */
-    .toast { bottom: calc(66px + max(18px, env(safe-area-inset-bottom))); }
+    /* Above the tab bar: its 50px of tabs and the home indicator's room. */
+    .toast { bottom: calc(62px + env(safe-area-inset-bottom)); }
+    /* Only the room the device asks for below the tabs, and no minimum: a
+       browser whose own toolbar floats over the page asks for none, and a
+       fixed margin then sat under the labels and made them look high. */
     .tabbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; display: flex;
-              padding: 0 8px max(18px, env(safe-area-inset-bottom));
+              padding: 0 8px env(safe-area-inset-bottom);
               border-top: 1px solid var(--divider); background: rgba(8, 10, 20, .8);
               backdrop-filter: blur(10px); }
     .tabbar button { flex: 1; display: flex; align-items: center; justify-content: center; gap: 8px;
-                     height: 54px; margin-top: -1px; border: 0; border-top: 2px solid transparent;
+                     height: 50px; margin-top: -1px; border: 0; border-top: 2px solid transparent;
                      background: transparent; color: var(--muted); font-size: 15px; font-weight: 600; }
     .tabbar button.sel { color: var(--bright); border-top-color: var(--accent); }
     .tabbar .n { font-family: var(--mono); font-size: 12px; font-weight: 500; color: var(--faint); }
