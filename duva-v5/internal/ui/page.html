@@ -324,7 +324,12 @@
   .sheet .choices button { height: 48px; border-radius: 12px; font-size: 15px; }
   .sheet .choices .apply { width: 100%; }
   .sheet .choices .act { border-color: var(--raised-line); color: var(--fg); }
-  .sheet .choices .danger { color: var(--danger); font-weight: 600; }
+  /* Filled red, as the confirmation's Block is: on a phone it is the one
+     choice here that reaches beyond this service. */
+  .sheet .choices .danger { background: var(--danger-fill); border-color: transparent;
+                            color: #fff; font-weight: 600; }
+  .sheet .choices .danger:hover:not(:disabled) { background: var(--danger-hi); color: #fff; }
+  .sheet .choices .danger:disabled { background: none; border-color: var(--edge); color: var(--faint); }
 
   /* ---------- tabs: the phone's only ---------- */
   .tabbar { display: none; }
