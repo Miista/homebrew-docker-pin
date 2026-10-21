@@ -283,15 +283,29 @@ type PendingRow struct {
 	ReleaseAt string
 }
 
-// Duva runs a duva command inside the scenario's duva container, as an
-// operator would with docker exec, and fails the test if it fails.
-func (s *Scenario) Duva(args ...string) string {
+// v5Token is the API token every v5 fixture sets (DUVA_SETTING_API_TOKEN).
+const v5Token = "integration-token"
+
+// API posts an action to the scenario's duva over its queue API, as the page
+// on a peer would, and fails the test if duva refuses it. From inside the
+// container: the API is not published, and busybox wget is in the image.
+func (s *Scenario) API(path string, form url.Values) {
 	s.t.Helper()
-	out, err := s.compose(append([]string{"exec", "-T", "duva", "/duva"}, args...)...)
+	out, err := s.compose("exec", "-T", "duva", "wget", "-qO-",
+		"--header", "Authorization: Bearer "+v5Token,
+		"--header", "X-Duva-Actor: integration",
+		"--post-data", form.Encode(),
+		"http://127.0.0.1:8080"+path)
 	if err != nil {
-		s.t.Fatalf("duva %s: %v\n%s", strings.Join(args, " "), err, out)
+		s.t.Fatalf("POST %s: %v\n%s", path, err, out)
 	}
-	return out
+	var answer struct{ Message string }
+	if err := json.Unmarshal([]byte(out), &answer); err != nil {
+		s.t.Fatalf("POST %s: not an answer: %v\n%s", path, err, out)
+	}
+	if answer.Message != "" {
+		s.t.Fatalf("POST %s: refused: %s", path, answer.Message)
+	}
 }
 
 // EntryID is the row of what is waiting for a service.

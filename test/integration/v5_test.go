@@ -4,6 +4,7 @@ package integration
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -201,7 +202,7 @@ func TestV5ABlockedReleaseIsNeverApplied(t *testing.T) {
 	if id == 0 {
 		t.Fatalf("the patch was not queued to soak:\n%s", s.Logs("duva"))
 	}
-	s.Duva("block", fmt.Sprint(id), "missing", "migrations")
+	s.API(fmt.Sprintf("/v1/block/%d", id), url.Values{"reason": {"missing migrations"}})
 
 	t.Run("blocking settles what was waiting", func(t *testing.T) {
 		if row := s.Pending("app"); row.Candidate != "" {
@@ -210,8 +211,9 @@ func TestV5ABlockedReleaseIsNeverApplied(t *testing.T) {
 	})
 
 	// Found again, it soaks again: a version change's digest is not known
-	// until it is pulled, so the block is the updater's to catch.
-	s.Duva("rescan", "app")
+	// until it is pulled, so the block is the updater's to catch. Found
+	// again by looking further back than the last check, as Check… does.
+	s.API("/v1/check/app", url.Values{"since": {"7d"}})
 	s.waitFor("the updater to refuse the blocked release", 3*time.Minute,
 		func() bool { return strings.Contains(s.Logs("duva"), "app: 1.0.0 -> 1.0.1 is blocked") },
 		func() string { return s.Logs("duva") })
