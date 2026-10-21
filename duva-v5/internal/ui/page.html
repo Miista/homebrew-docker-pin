@@ -358,8 +358,8 @@
       <span class="jump mono" v-if="r.moved"><span class="to">{{ r.tag }}</span></span>
       <span class="jump mono" v-else><span class="from">{{ r.current_tag }}</span><span class="arrow">&rarr;</span><span class="to">{{ r.candidate }}</span></span>
 
-      <span class="kind" :class="'kind-' + r.kind"
-            :title="r.kind === 'unknown' ? 'duva could not compare these tags — not a semantic version' : ''">{{ r.kind }}</span>
+      <!-- Why it is waiting, in the tooltip of what it explains. -->
+      <span class="kind" :class="'kind-' + r.kind" :title="r.why">{{ r.kind }}</span>
 
       <span class="acts">
         <button class="apply" v-if="canApply"
@@ -374,13 +374,12 @@
                 :disabled="r.stale || running(r.key)"
                 title="Never apply this release, on any service running the image, until unblocked"
                 @click="startBlock(r)">Block</button>
-        <button class="more" v-if="actions" title="Check now, re-scan, and why it is waiting"
+        <button class="more" v-if="actions" title="Check now, re-scan"
                 :aria-expanded="open === r.key ? 'true' : 'false'"
                 @click="toggle(r)">&hellip;</button>
       </span>
 
       <div class="panel" v-if="actions && open === r.key">
-        <span class="why">{{ r.why }}</span>
         <button class="act" :disabled="r.stale" @click="act('check', r)">Check now</button>
         <button class="act" :disabled="r.stale" @click="act('rescan', r)">Re-scan</button>
         <form v-if="blocking === r.key" @submit.prevent="block(r)">
