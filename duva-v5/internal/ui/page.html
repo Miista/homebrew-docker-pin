@@ -491,17 +491,18 @@
                   :disabled="!r.can_apply || running(r.key) || busyHost(r.host)"
                   :title="buttonReason(r) || 'Apply it now, without waiting for the delay'"
                   @click="apply(r)">{{ running(r.key) ? "Updating…" : "Apply now" }}</button>
-          <button class="more" v-if="actions" title="Force check, block"
+          <button class="more" v-if="actions" title="Block"
                   :aria-expanded="open === r.key + '#' + r.entry ? 'true' : 'false'"
                   @click="toggle(r.key + '#' + r.entry)">&hellip;</button>
         </span>
 
-        <!-- Told apart by its entry: a service can be in both tables. -->
+        <!-- Told apart by its entry: a service can be in both tables. No
+             Force check here: a scheduled release has not been passed over,
+             and finding it again changes nothing. -->
         <div class="panel" v-if="actions && open === r.key + '#' + r.entry">
-          <button class="act" :disabled="r.stale" @click="act('rescan', r)">Force check</button>
           <button class="act act-danger" :disabled="r.stale || running(r.key)"
                   @click="startBlock(r)">Block</button>
-          <p class="hint">Force check ignores where the last check left off and looks over the past week again. Block never applies this release, until it is unblocked.</p>
+          <p class="hint">Block never applies this release, until it is unblocked.</p>
         </div>
 
 
