@@ -6,10 +6,13 @@
 <link rel="icon" type="image/png" href="/favicon.png">
 <title>duva</title>
 <style>
+  /* Served by duva itself (see ui.go), never a font host. */
+  @font-face { font-family: Geist; src: url("/geist.woff2") format("woff2");
+               font-weight: 100 900; font-display: swap; }
+  @font-face { font-family: "Geist Mono"; src: url("/geist-mono.woff2") format("woff2");
+               font-weight: 100 900; font-display: swap; }
   /* The dark scheme is the design's own; the light one is the same page with
-     the values turned over. Geist is used where it is installed and nothing
-     is fetched for it: a signed-in page that calls out to a font host on every
-     load tells that host who is looking at it, and when. */
+     the values turned over. */
   :root {
     color-scheme: light dark;
     --bg: #f6f6f7; --card: #ffffff; --raised: #ffffff; --hover: #f1f1f3;

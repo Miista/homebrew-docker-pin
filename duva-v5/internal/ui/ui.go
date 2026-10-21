@@ -32,6 +32,17 @@ var petiteVue []byte
 //go:embed assets/favicon.png
 var faviconPNG []byte
 
+// Geist, served from here rather than a font host: a signed-in page that
+// fetches from elsewhere on every load tells that host who is looking, and
+// when. Variable fonts, one file per family for every weight. SIL OFL 1.1,
+// assets/Geist-OFL.txt; from the geist npm package, 1.8.1.
+//
+//go:embed assets/Geist-Variable.woff2
+var geistSans []byte
+
+//go:embed assets/GeistMono-Variable.woff2
+var geistMono []byte
+
 // The Go template's delimiters are moved out of petite-vue's way.
 //
 // Both use {{ }} by default, and the page is markup petite-vue reads at
@@ -120,6 +131,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/logo.png", servePNG(logoPNG))
 	mux.HandleFunc("/favicon.png", servePNG(faviconPNG))
 	mux.HandleFunc("/petite-vue.js", serveJS(petiteVue))
+	mux.HandleFunc("/geist.woff2", serveFont(geistSans))
+	mux.HandleFunc("/geist-mono.woff2", serveFont(geistMono))
 	mux.HandleFunc("/api/state", s.stateJSON)
 	mux.HandleFunc("/api/stream/", s.stream)
 	if s.Approver != nil {
@@ -145,6 +158,16 @@ func servePNG(b []byte) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "image/png")
 		w.Header().Set("Cache-Control", "public, max-age=86400")
+		w.Write(b)
+	}
+}
+
+// serveFont returns a handler for one embedded font. A week's cache: the
+// bytes are fixed for the life of the binary.
+func serveFont(b []byte) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "font/woff2")
+		w.Header().Set("Cache-Control", "public, max-age=604800")
 		w.Write(b)
 	}
 }
