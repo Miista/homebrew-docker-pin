@@ -80,14 +80,14 @@
   /* ---------- header ---------- */
   .top { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
   .brand { display: flex; align-items: center; gap: 12px; }
-  .mark { font-size: 15px; font-weight: 700; letter-spacing: .18em; text-transform: uppercase; }
-  .find { flex: 1 1 280px; max-width: 420px; display: flex; align-items: center; gap: 8px;
-          height: 30px; padding: 0 10px; background: var(--field);
+  .mark { font-size: 18px; font-weight: 700; letter-spacing: .18em; text-transform: uppercase; }
+  .find { flex: 1 1 280px; max-width: 460px; display: flex; align-items: center; gap: 10px;
+          height: 40px; padding: 0 12px; background: var(--field);
           border: 1px solid var(--divider); border-radius: 8px; }
   .find:focus-within { border-color: var(--edge); }
-  .find .glass { color: var(--fainter); font-size: 14px; }
+  .find .glass { color: var(--fainter); font-size: 16px; }
   .find input { flex: 1; min-width: 0; background: transparent; border: 0; outline: 0;
-                color: var(--fg); font: inherit; font-size: 13px; }
+                color: var(--fg); font: inherit; font-size: 14px; }
   .find input::placeholder { color: var(--fainter); }
   .find input::-webkit-search-cancel-button { display: none; }
   .find kbd { font-family: var(--mono); font-size: 11px; color: var(--muted); padding: 1px 6px;
@@ -96,35 +96,33 @@
   .pop { position: relative; }
 
   /* "Last checked", the stalest host's age; each host's on hover. */
-  .since { display: flex; align-items: center; gap: 6px; height: 30px; padding: 0 8px;
+  .since { display: flex; align-items: center; gap: 6px; height: 40px; padding: 0 10px;
            border: 0; border-radius: 8px; background: transparent; color: var(--faint);
-           font-size: 12px; white-space: nowrap; }
+           font-size: 13px; white-space: nowrap; }
   .since:hover, .since.on { color: var(--soft); }
-  .since.on { background: var(--raised); }
+  .since.on { background: var(--btn-hover); }
   .since b { font-weight: 400; color: var(--soft); }
   .since svg, .more svg { transition: transform .15s; }
   .since.on svg { transform: rotate(180deg); }
-  .hosts { position: absolute; top: 30px; right: 0; z-index: 20; padding-top: 6px; }
+  .hosts { position: absolute; top: 40px; right: 0; z-index: 20; padding-top: 6px; }
   .hosts > div { display: flex; flex-direction: column; gap: 2px; padding: 6px; min-width: 200px;
                  background: var(--raised); border: 1px solid var(--raised-line);
                  border-radius: 10px; box-shadow: 0 12px 32px rgba(0, 0, 0, .5); }
   .hostline { display: flex; align-items: center; justify-content: space-between; gap: 16px;
-              height: 30px; padding: 0 8px; font-size: 12px; color: var(--muted); }
-  .hostline > span { display: flex; align-items: center; gap: 8px; }
-  .hostline > span::before { content: ""; width: 6px; height: 6px; border-radius: 50%;
-                             background: var(--accent); }
+              height: 32px; padding: 0 10px; font-size: 13px; color: var(--muted); }
   .hostline .mono { color: var(--soft); }
+  /* Named as the host cards name them. */
+  .hosts .hostline .mono { font-family: inherit; font-size: 12px; font-weight: 700;
+                           letter-spacing: .14em; text-transform: uppercase; color: var(--fg); }
 
   /* ---------- buttons ---------- */
   .act { height: 30px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--edge);
          background: transparent; color: var(--soft); font-size: 13px; white-space: nowrap; }
   .act:hover:not(:disabled) { background: var(--btn-hover); color: #fff; }
   .act:disabled { color: var(--faint); cursor: not-allowed; }
-  .check { display: flex; align-items: center; justify-content: center; gap: 7px;
-           width: 164px; padding: 0; }
   .spin { animation: spin .9s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
-  .burger { width: 30px; height: 30px; padding: 0; display: grid; place-items: center;
+  .burger { width: 40px; height: 40px; padding: 0; display: grid; place-items: center;
             border: 0; border-radius: 8px; background: transparent; color: var(--soft); }
   .burger:hover, .burger.on { background: var(--btn-hover); color: #fff; }
 
@@ -143,7 +141,10 @@
           display: flex; flex-direction: column; gap: 2px; padding: 4px;
           background: var(--raised); border: 1px solid var(--raised-line); border-radius: 10px;
           box-shadow: 0 12px 32px rgba(0, 0, 0, .5); }
-  .menu.wide { min-width: 200px; }
+  .top .menu { top: 46px; }
+  .menu.wide { min-width: 220px; }
+  .menu .checkitem { height: 36px; justify-content: flex-start; gap: 9px; }
+  .menu .checkitem svg { flex-shrink: 0; }
   .menu button, .menu a { height: 32px; padding: 0 10px; display: flex; align-items: center;
                           justify-content: space-between; gap: 10px; border: 0; border-radius: 7px;
                           background: transparent; color: var(--fg); font-size: 13px;
@@ -343,17 +344,15 @@
     .brand { gap: 10px; }
     .brand img { width: 22px; height: 22px; }
     .mark { font-size: 14px; }
-    .find, .since, .hosts, .check { display: none !important; }
+    .find, .since, .hosts { display: none !important; }
     .burger { width: 44px; height: 44px; border-radius: 10px; }
     .burger.on { background: var(--card); }
     .top .menu { top: 48px; right: 0; width: 264px; padding: 6px; border-radius: 14px; }
     .top .menu button, .top .menu a { height: 44px; padding: 0 12px; font-size: 15px; border-radius: 9px; }
     .top .menu .n { font-size: 12px; }
-    .menu .checks { display: flex; flex-direction: column; }
-    .menu .checks > button { justify-content: flex-start; }
-    .menu .checks svg { color: var(--muted); flex-shrink: 0; }
-    .menu .checks .hostline { height: auto; padding: 4px 12px 4px 36px; }
-    .menu .checks .hostline > span::before { display: none; }
+    .menu .checks { display: flex; flex-direction: column; padding-bottom: 6px; }
+    .menu .checkitem svg { color: var(--muted); }
+    .menu .checks .hostline { height: auto; padding: 4px 12px 0 36px; font-size: 12px; }
     /* One tab at a time: the bar at the bottom picks it. */
     .pane.off { display: none; }
     .intro, .soak .intro { margin: 8px 0 0; padding: 0 4px 4px; gap: 4px; }
@@ -439,7 +438,7 @@
 <main v-scope="Queue()" @vue:mounted="start()">
   <header class="top">
     <span class="brand">
-      <img src="/logo.png" alt="" width="26" height="26">
+      <img src="/logo.png" alt="" width="32" height="32">
       <span class="mark">duva</span>
     </span>
 
@@ -468,29 +467,25 @@
         </div>
       </div>
 
-      <button class="act check" v-if="actions" :disabled="checking"
-              title="Look for new releases on every host now" @click="checkAll()">
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true" :class="checking ? 'spin' : ''"><path d="M13.5 8a5.5 5.5 0 0 1-9.4 3.9M2.5 8a5.5 5.5 0 0 1 9.4-3.9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M12.2 1.6v2.6H9.6M3.8 14.4v-2.6h2.6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        {{ checking ? "Checking…" : "Check for updates" }}
-      </button>
-
       <div class="pop" data-pop>
         <button class="burger" :class="top ? 'on' : ''" aria-label="Menu" aria-haspopup="menu"
                 :aria-expanded="top ? 'true' : 'false'" @click="top = !top">
           <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true"><path d="M3 5h12M3 9h12M3 13h12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
         </button>
         <div class="menu wide" role="menu" v-if="top">
-          <!-- The phone's header has no room for these, so they live here. -->
+          <button role="menuitem" class="checkitem" v-if="actions" :disabled="checking"
+                  title="Look for new releases on every host now" @click="checkAll()">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true" :class="checking ? 'spin' : ''"><path d="M13.5 8a5.5 5.5 0 0 1-9.4 3.9M2.5 8a5.5 5.5 0 0 1 9.4-3.9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M12.2 1.6v2.6H9.6M3.8 14.4v-2.6h2.6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            {{ checking ? "Checking…" : "Check for updates" }}
+          </button>
+          <!-- Each host's last check: the phone's header has no "Last
+               checked" to hover, so it is said here. -->
           <div class="checks">
-            <button role="menuitem" v-if="actions" :disabled="checking" @click="checkAll()">
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true" :class="checking ? 'spin' : ''"><path d="M13.5 8a5.5 5.5 0 0 1-9.4 3.9M2.5 8a5.5 5.5 0 0 1 9.4-3.9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M12.2 1.6v2.6H9.6M3.8 14.4v-2.6h2.6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-              {{ checking ? "Checking…" : "Check for updates" }}
-            </button>
             <div class="hostline" v-for="c in checks" :key="c.host">
               <span class="mono">{{ c.host }}</span><span>{{ ago(c.at) }}</span>
             </div>
-            <hr>
           </div>
+          <hr v-if="actions">
           <button role="menuitem" v-if="actions" @click="openBlocks()">Blocked releases <span class="n">{{ blocks.length }}</span></button>
           <a role="menuitem" class="quiet only-with-gate" href="/auth/logout">Sign out</a>
         </div>
