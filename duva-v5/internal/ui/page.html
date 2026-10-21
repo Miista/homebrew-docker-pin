@@ -32,7 +32,11 @@
     -webkit-text-size-adjust: 100%;
   }
   main { max-width: 66rem; margin: 0 auto;
-         --cols: 11rem minmax(0, 1fr) 5rem 8rem 5.5rem; }
+         /* The last column is fixed, not max-content: the head is a grid of
+            its own with nothing in that cell, so a sized-to-content column
+            came out a different width there and slid the head's labels off
+            the columns they name. */
+         --cols: 11rem minmax(0, 1fr) 5rem 15rem; }
   code, .mono { font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 
   /* ---------- header ---------- */
@@ -108,7 +112,7 @@
   .rows > li { display: grid; align-items: center; grid-template-columns: var(--cols);
              gap: 0 .55rem; min-height: 42px; padding: .2rem 0;
              border-top: 1px solid var(--line-soft); }
-  .rows > li form, .head span:last-child { grid-column: 5; justify-self: end; }
+  .rows > li form, .head span:last-child { grid-column: 4; justify-self: end; }
   .head { display: grid; grid-template-columns: var(--cols); gap: 0 .55rem;
           padding: .4rem .9rem .3rem;
           background: var(--card); border: 1px solid var(--line);
@@ -168,7 +172,7 @@
 
   /* The row's controls: Update, and the button that opens the rest. One cell,
      so the head's last column lines up with both. */
-  .acts { grid-column: 5; justify-self: end; display: inline-flex; gap: .3rem;
+  .acts { grid-column: 4; justify-self: end; display: inline-flex; gap: .3rem;
           align-items: center; }
   .more { font-size: .8rem; line-height: 1.25; padding: .15rem .45rem;
           border: 1px solid var(--line); border-radius: 5px; background: none;
@@ -255,7 +259,7 @@
     .img { opacity: 1; }
     .kind { grid-column: 2; justify-self: end; }
     .rows > li form { grid-column: 3; grid-row: 1 / span 2; justify-self: end; }
-    .acts { grid-column: 3; grid-row: 1 / span 2; }
+    .acts { grid-column: 1 / -1; grid-row: 3; justify-self: end; margin-top: .3rem; }
     .jump { grid-column: 1 / 3; grid-row: 2; }
     .apply { padding: .3rem .7rem; }
   }
@@ -362,7 +366,15 @@
                 :disabled="!r.can_apply || running(r.key) || busyHost(r.host)"
                 :title="buttonReason(r)"
                 @click="apply(r)">{{ running(r.key) ? "Updating…" : "Update" }}</button>
-        <button class="more" v-if="actions" title="More actions"
+        <button class="act" v-if="actions"
+                :disabled="r.stale || running(r.key)"
+                title="Drop it for now; found again, it comes back"
+                @click="act('discard', r)">Discard</button>
+        <button class="act act-danger" v-if="actions"
+                :disabled="r.stale || running(r.key)"
+                title="Never apply this release, on any service running the image, until unblocked"
+                @click="startBlock(r)">Block</button>
+        <button class="more" v-if="actions" title="Check now, re-scan, and why it is waiting"
                 :aria-expanded="open === r.key ? 'true' : 'false'"
                 @click="toggle(r)">&hellip;</button>
       </span>
@@ -371,16 +383,14 @@
         <span class="why">{{ r.why }}</span>
         <button class="act" :disabled="r.stale" @click="act('check', r)">Check now</button>
         <button class="act" :disabled="r.stale" @click="act('rescan', r)">Re-scan</button>
-        <button class="act" :disabled="r.stale || running(r.key)" @click="act('discard', r)">Discard</button>
-        <button class="act act-danger" :disabled="r.stale || running(r.key)"
-                @click="blocking = r.key">Block&hellip;</button>
         <form v-if="blocking === r.key" @submit.prevent="block(r)">
           <input v-model="reason" maxlength="200"
                  placeholder="Why this release is bad -- shown to whoever sees the block">
           <button class="act act-danger" type="submit" :disabled="!reason.trim()">Block {{ r.moved ? "this digest" : r.candidate }}</button>
           <button class="act" type="button" @click="blocking = ''; reason = ''">Cancel</button>
         </form>
-        <p class="hint">Discard drops it for now; found again, it comes back. Block never applies this release, on any service running the image, until it is unblocked. Re-scan looks back over the whole window again.</p>
+        <p class="hint" v-if="blocking === r.key">Blocking never applies this release, on any service running the image, until it is unblocked. Discard is the one for "not now".</p>
+        <p class="hint" v-else>Check now looks for new tags; Re-scan looks back over the whole window again.</p>
       </div>
 
       <ul class="steps" v-if="steps[r.key] || finished[r.key]">
@@ -547,6 +557,13 @@ createApp({
         // to keep in agreement with an actor it knows nothing about.
         const b = this.blocked.find(b => b.host === r.host)
         return b && b.reason ? r.host + " — " + b.reason : r.host + " cannot apply right now"
+      },
+
+      // Block asks for its reason in the row's panel, opened for it.
+      startBlock(r) {
+        this.open = r.key
+        this.blocking = r.key
+        this.reason = ""
       },
 
       toggle(r) {
