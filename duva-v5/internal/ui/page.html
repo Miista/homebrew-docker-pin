@@ -780,6 +780,12 @@ createApp({
           document.documentElement.classList.toggle("hidden-tab", document.hidden)
           if (!document.hidden) this.poll()
         })
+        // A dialog closes on a click outside it, as Cancel or Done would. A
+        // click on the backdrop lands on the <dialog> itself; one on what it
+        // holds lands on that, and the dialog has no padding of its own.
+        for (const d of document.querySelectorAll("dialog")) {
+          d.addEventListener("click", e => { if (e.target === d) d.close() })
+        }
         // A menu closes on a press anywhere outside it.
         document.addEventListener("pointerdown", e => {
           if (e.target.closest("[data-pop]")) return
