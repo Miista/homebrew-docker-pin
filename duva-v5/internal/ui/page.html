@@ -233,7 +233,7 @@
   .dlg .buttons { display: flex; justify-content: flex-end; gap: .4rem; margin-top: .15rem; }
   .dlg .buttons .act { font-size: .84rem; padding: .3rem .8rem; }
   /* The confirming button, filled: the one the dialog is for. The accent,
-     not red: ignoring is undone from the list in the footer. */
+     not red: a block is undone from the list in the footer. */
   .dlg .go { border: 1px solid transparent; border-radius: 5px; font-weight: 600;
              font-size: .84rem; padding: .3rem .8rem;
              background: var(--accent); color: var(--accent-fg); }
@@ -415,8 +415,8 @@
                 @click="apply(r)">{{ running(r.key) ? "Updating…" : "Update" }}</button>
         <button class="act" v-if="actions"
                 :disabled="r.stale || running(r.key)"
-                title="Never apply this release; undo it under Ignored"
-                @click="startIgnore(r)">Ignore</button>
+                title="Never apply this release; unblock it under Blocked releases"
+                @click="startBlock(r)">Block</button>
         <button class="more" v-if="actions" title="Check now, re-scan"
                 :aria-expanded="open === r.key ? 'true' : 'false'"
                 @click="toggle(r)">&hellip;</button>
@@ -474,8 +474,8 @@
                   @click="apply(r)">{{ running(r.key) ? "Updating…" : "Apply now" }}</button>
           <button class="act" v-if="actions"
                   :disabled="r.stale || running(r.key)"
-                  title="Never apply this release; undo it under Ignored"
-                  @click="startIgnore(r)">Ignore</button>
+                  title="Never apply this release; unblock it under Blocked releases"
+                  @click="startBlock(r)">Block</button>
         </span>
 
 
@@ -488,17 +488,17 @@
     </ul>
   </section>
 
-  <!-- Ignore asks first, and says what it does. One dialog for the page,
+  <!-- Block asks first, and says what it does. One dialog for the page,
        about whichever row was clicked, in either section. -->
-  <dialog class="dlg" id="ignore" @close="ignoreRow = null">
-    <form v-if="ignoreRow" @submit.prevent="ignore()">
-      <h2>Ignore {{ ignoreRow.service }} <span class="to mono">{{ ignoreRow.moved ? "this digest" : ignoreRow.candidate }}</span>?</h2>
-      <p class="sub mono">{{ ignoreRow.host }} &middot; {{ ignoreRow.image }}</p>
-      <p class="say">Ignoring this update will block it from being applied, on any service running {{ ignoreRow.image }}.</p>
-      <p class="hint">You can undo this under Ignored, at the bottom of the page.</p>
+  <dialog class="dlg" id="block" @close="blockRow = null">
+    <form v-if="blockRow" @submit.prevent="block()">
+      <h2>Block {{ blockRow.service }} <span class="to mono">{{ blockRow.moved ? "this digest" : blockRow.candidate }}</span>?</h2>
+      <p class="sub mono">{{ blockRow.host }} &middot; {{ blockRow.image }}</p>
+      <p class="say">Block this update from being applied, on any service running {{ blockRow.image }}.</p>
+      <p class="hint">You can unblock it under Blocked releases, at the bottom of the page.</p>
       <div class="buttons">
-        <button class="act" type="button" @click="closeIgnore()">Cancel</button>
-        <button class="go" type="submit">Ignore</button>
+        <button class="act" type="button" @click="closeBlock()">Cancel</button>
+        <button class="go" type="submit">Block</button>
       </div>
     </form>
   </dialog>
@@ -507,17 +507,17 @@
        way, but there for the day one should come back. -->
   <dialog class="dlg" id="blocks">
     <form method="dialog">
-      <h2>Ignored releases</h2>
+      <h2>Blocked releases</h2>
       <ul class="blist">
         <li v-for="b in blocks" :key="b.host + b.image + b.digest">
           <span class="what">
             <span class="name">{{ b.image }} <span class="mono rel">{{ b.release || b.digest.slice(7, 19) }}</span></span>
             <span class="by mono">{{ b.host }} &middot; {{ b.by }} &middot; {{ dateOf(b.at) }}</span>
           </span>
-          <button class="act" type="button" @click="unblock(b)">Stop ignoring</button>
+          <button class="act" type="button" @click="unblock(b)">Unblock</button>
         </li>
       </ul>
-      <p class="hint">Stopping ignoring puts the release back in the queue, waiting for you.</p>
+      <p class="hint">Unblocking puts the release back in the queue, waiting for you.</p>
       <div class="buttons"><button class="act">Close</button></div>
     </form>
   </dialog>
@@ -525,7 +525,7 @@
   <footer>
     <span>duva {{ version }}</span>
     <a href="#" class="foot-link" v-if="actions && blocks.length"
-       @click.prevent="openBlocks()">Ignored ({{ blocks.length }})</a>
+       @click.prevent="openBlocks()">Blocked releases</a>
   </footer>
 </main>
 
@@ -551,7 +551,7 @@ createApp({
       actions: initial.actions,
       version: initial.version,
       open: "",         // the row whose actions are open
-      ignoreRow: null,  // the row the ignore dialog is about
+      blockRow: null,   // the row the block dialog is about
       steps: {},        // key -> lines so far
       finished: {},     // key -> terminal status
       result: {},       // the last apply's answer, when it refused
@@ -674,21 +674,21 @@ createApp({
         return b && b.reason ? r.host + " — " + b.reason : r.host + " cannot apply right now"
       },
 
-      // Ignore asks first: it blocks the release, on every service running
-      // the image, and the dialog says so.
-      startIgnore(r) {
+      // Block asks first: it stops the release on every service running the
+      // image, and the dialog says so.
+      startBlock(r) {
         this.open = ""
-        this.ignoreRow = r
-        document.getElementById("ignore").showModal()
+        this.blockRow = r
+        document.getElementById("block").showModal()
       },
 
-      closeIgnore() {
-        document.getElementById("ignore").close()
+      closeBlock() {
+        document.getElementById("block").close()
       },
 
-      async ignore() {
-        const r = this.ignoreRow
-        this.closeIgnore()
+      async block() {
+        const r = this.blockRow
+        this.closeBlock()
         return this.act("block", r)
       },
 
@@ -704,7 +704,7 @@ createApp({
         this.result = message
           ? { service: b.image, level: "error", message }
           : { service: b.image, level: "ok",
-              message: (b.release || "the release") + " no longer ignored, and back in the queue" }
+              message: (b.release || "the release") + " unblocked, and back in the queue" }
         await this.poll()
         if (!this.blocks.length) document.getElementById("blocks").close()
       },
@@ -745,7 +745,7 @@ createApp({
         this.open = this.open === r.key ? "" : r.key
       },
 
-      // Ignoring acts on the entry; check and rescan on the service.
+      // Blocking acts on the entry; check and rescan on the service.
       // Either way the answer is a sentence, empty on success.
       async act(kind, r, body) {
         const subject = kind === "block" ? r.entry : r.service
@@ -756,7 +756,7 @@ createApp({
         const done = {
           check: "checking now; anything new will appear here",
           rescan: "looking back over the whole window again; anything found will appear here",
-          block: "ignored; it won't be offered again on any service running " + r.image,
+          block: "blocked; it won't be applied on any service running " + r.image,
         }
         this.result = message
           ? { service: r.service, level: "error", message }
