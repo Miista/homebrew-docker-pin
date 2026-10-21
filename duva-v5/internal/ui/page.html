@@ -784,7 +784,7 @@ createApp({
         // click on the backdrop lands on the <dialog> itself; one on what it
         // holds lands on that, and the dialog has no padding of its own.
         for (const d of document.querySelectorAll("dialog")) {
-          d.addEventListener("click", e => { if (e.target === d) d.close() })
+          d.addEventListener("click", e => { if (e.target === d) this.slideClose(d) })
         }
         // A menu closes on a press anywhere outside it.
         document.addEventListener("pointerdown", e => {
@@ -942,12 +942,23 @@ createApp({
         const d = e.currentTarget.closest("dialog")
         const far = e.clientY - this.dragFrom > 90
         this.dragFrom = null
+        if (far) { this.slideClose(d); return }
         d.style.transition = "transform .2s ease"
-        d.style.transform = far ? "translateY(100%)" : ""
+        d.style.transform = ""
+        setTimeout(() => { d.style.transition = "" }, 200)
+      },
+
+      // Closes a dialog the way it opened: a phone's sheet slides back down,
+      // from wherever a drag left it. Anything else -- a desktop dialog, or
+      // the block confirmation, which is centred on a phone too -- just closes.
+      slideClose(d) {
+        if (!phone.matches || !d.classList.contains("rise")) { d.close(); return }
+        d.style.transition = "transform .2s ease"
+        d.style.transform = "translateY(100%)"
         setTimeout(() => {
-          if (far) d.close()
+          d.close()
           d.style.transition = ""; d.style.transform = ""
-        }, far ? 200 : 0)
+        }, 200)
       },
 
       // Block asks first: it stops the release on every service running the
