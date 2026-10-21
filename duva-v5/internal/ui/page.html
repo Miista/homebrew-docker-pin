@@ -179,6 +179,22 @@
   .banner-wait { color: var(--wait); border-color: color-mix(in oklch, var(--wait) 45%, transparent); }
   .banner .who { font-weight: 650; }
 
+  /* ---------- the toast: what an action just did ---------- */
+  /* Same reason as .banner: a refusal can carry a digest with nowhere to
+     break. touch-action none, so a sideways swipe moves the toast and not
+     the page. */
+  .toast { position: fixed; left: 50%; bottom: 24px; z-index: 60; translate: -50% 0;
+           width: min(480px, calc(100% - 24px)); padding: 14px 16px; font-size: 14px;
+           color: var(--fg); background: var(--raised); border: 1px solid var(--raised-line);
+           border-radius: 14px; box-shadow: 0 12px 32px rgba(0, 0, 0, .5);
+           overflow-wrap: anywhere; touch-action: none; cursor: grab; user-select: none;
+           animation: toast-in .2s ease; }
+  .toast .who { font-weight: 650; }
+  .toast-error { border-color: color-mix(in oklch, var(--danger) 55%, transparent);
+                 background: color-mix(in oklch, var(--danger) 14%, var(--raised)); }
+  .toast-error .who { color: var(--danger); }
+  @keyframes toast-in { from { opacity: 0; transform: translateY(12px); } }
+
   /* ---------- sections ---------- */
   .pane { display: flex; flex-direction: column; }
   .intro { margin: 36px 0 0; display: flex; flex-direction: column; gap: 6px; }
@@ -464,6 +480,8 @@
     .rise .blist li:last-child { border-bottom: 0; }
     .rise .blist .act { height: 40px; border-radius: 10px; color: var(--fg); }
     .rise .note { padding: 14px 20px 28px; }
+    /* Above the tab bar: 54px of tabs and the home indicator's room. */
+    .toast { bottom: calc(66px + max(18px, env(safe-area-inset-bottom))); }
     .tabbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; display: flex;
               padding: 0 8px max(18px, env(safe-area-inset-bottom));
               border-top: 1px solid var(--divider); background: rgba(8, 10, 20, .8);
@@ -587,9 +605,6 @@
     <br>What it last reported is shown below, faded, and cannot be approved until it answers again.
   </div>
 
-  <div class="banner" :class="result.level === 'error' ? 'banner-error' : ''" v-if="result.message">
-    <span class="who">{{ result.service }}</span> — {{ result.message }}
-  </div>
 
   <section class="pane" :class="tab === 'queue' ? '' : 'off'">
     <div class="intro">
@@ -846,6 +861,20 @@
     </form>
   </dialog>
 
+  <!-- What an action just did, or why it was refused: a toast over the
+       page rather than a banner in it, since it is about a moment and not
+       about the page. Swiped off either side to dismiss. A success leaves
+       on its own; a refusal stays until it is dismissed, as it is the one
+       that must be read. The standing banners above -- a host not
+       answering, no actor -- are the page's state, and stay where they are. -->
+  <div class="toast" v-if="result.message" v-effect="toastTimer(result)"
+       :class="result.level === 'error' ? 'toast-error' : ''"
+       :role="result.level === 'error' ? 'alert' : 'status'"
+       @pointerdown="toastDown($event)" @pointermove="toastMove($event)"
+       @pointerup="toastUp($event)" @pointercancel="toastUp($event)">
+    <span class="who">{{ result.service }}</span> — {{ result.message }}
+  </div>
+
   <nav class="tabbar">
     <button :class="tab === 'queue' ? 'sel' : ''" @click="tab = 'queue'">Queue <span class="n">{{ rows.length }}</span></button>
     <button :class="tab === 'scheduled' ? 'sel' : ''" @click="tab = 'scheduled'">Scheduled <span class="n">{{ soaking.length }}</span></button>
@@ -1069,6 +1098,43 @@ createApp({
       closeSheet() {
         const d = document.getElementById("sheet")
         if (d.open) d.close()
+      },
+
+      // A success's toast leaves on its own after a few seconds; a refusal's
+      // stays until it is swiped away. Run again for every new result, so a
+      // second one replaces the first and its timer.
+      toastTimer(r) {
+        clearTimeout(this.toastAway)
+        if (!r.message || r.level === "error") return
+        this.toastAway = setTimeout(() => { this.result = {} }, 5000)
+      },
+
+      // A toast follows the finger sideways, and leaves off whichever side
+      // past 80px; short of that it springs back.
+      toastDown(e) {
+        e.currentTarget.setPointerCapture(e.pointerId)
+        this.toastFrom = e.clientX
+        e.currentTarget.style.transition = "none"
+      },
+      toastMove(e) {
+        if (this.toastFrom == null) return
+        const dx = e.clientX - this.toastFrom
+        e.currentTarget.style.transform = "translateX(" + dx + "px)"
+        e.currentTarget.style.opacity = String(Math.max(0, 1 - Math.abs(dx) / 240))
+      },
+      toastUp(e) {
+        if (this.toastFrom == null) return
+        const el = e.currentTarget, dx = e.clientX - this.toastFrom
+        this.toastFrom = null
+        el.style.transition = "transform .18s ease, opacity .18s ease"
+        if (Math.abs(dx) < 80) {
+          el.style.transform = ""; el.style.opacity = ""
+          return
+        }
+        clearTimeout(this.toastAway)
+        el.style.transform = "translateX(" + (dx < 0 ? "-" : "") + "120vw)"
+        el.style.opacity = "0"
+        setTimeout(() => { this.result = {} }, 180)
       },
 
       // A sheet follows the finger down, and lets go past 90px.
