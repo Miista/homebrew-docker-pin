@@ -110,7 +110,7 @@ service:
 ```yaml
 labels:
   duva.auto: patch        # none (default), digest, patch, minor, major
-  duva.soak: 3d           # how old a release must be before duva.auto applies it
+  duva.delay: 3d          # how old a release must be before duva.auto applies it
   diun.include_tags: '^1\.\d+\.\d+$'
   diun.exclude_tags: '-rc'
 ```
@@ -137,24 +137,26 @@ registry refused for rate limiting is treated the same way.
 - **A click on the page** is tried once. The reason is shown, the entry stays
   queued, and the page greys Update while the repository is dirty.
 
-### Soaking a release
+### Delaying a release
 
 `duva.auto` alone applies a release on the run that finds it, before anyone
-could have heard it was broken. `duva.soak` holds it back until it is old
+could have heard it was broken. `duva.delay` holds it back until it is old
 enough, counted from when the release was published, not when it was found.
-Go durations work too (`72h`); `0` or no label is no soak; an unreadable value
-is refused. There is no host-wide default.
+Go durations work too (`72h`); `0` or no label is no delay; an unreadable value
+is refused. There is no host-wide default. An early-v5 `duva.soak` label is
+refused by name: it is `duva.delay` now.
 
-A soaking release sits in the queue as "soaking until …" and is not announced.
-It is released on the queue's reconcile, at most `DUVA_SETTING_RECONCILE_INTERVAL`
-late (ten minutes by default), or as soon as a container event prompts one.
-From then on it is an ordinary auto-apply. Clicking Update applies it at once.
+A delayed release is listed on the page under **Scheduled**, with when it
+applies, and is not announced. It is released on the queue's reconcile, at
+most `DUVA_SETTING_RECONCILE_INTERVAL` late (ten minutes by default), or as
+soon as a container event prompts one. From then on it is an ordinary
+auto-apply. **Apply now** applies it at once.
 
-Each release soaks on its own clock. A project that releases faster than its
-soak does not keep restarting the wait: an older release that comes due while
-a newer one is still soaking is applied, and the newer one is then offered
-from there. A release waiting for a person is different -- only the newest
-matters, so a newer one supersedes it. The page shows the newest per service.
+Each release is delayed on its own clock. A project that releases faster than
+its delay does not keep restarting the wait: an older release that comes due
+while a newer one is still delayed is applied, and the newer one is then
+offered from there. A release waiting for a person is different -- only the
+newest matters, so a newer one supersedes it.
 
 ### Seeing what is waiting, and acting on it
 
@@ -220,7 +222,7 @@ back.
 | `git.push` | `DUVA_SETTING_GIT_PUSH` | push each commit; default false |
 | `schedule` | `DUVA_SETTING_SCHEDULE` | when to look for new tags, 5-field cron; default `0 3 * * *`. Also once at startup |
 | `since` | `DUVA_SETTING_SINCE` | override how far back the next check looks (RFC 3339, or a duration such as `168h`) |
-| `reconcile_interval` | `DUVA_SETTING_RECONCILE_INTERVAL` | how often the queue rechecks what is waiting, and releases soaks; default `10m` |
+| `reconcile_interval` | `DUVA_SETTING_RECONCILE_INTERVAL` | how often the queue rechecks what is waiting, and releases delayed ones; default `10m` |
 | `update_timeout` | `DUVA_SETTING_UPDATE_TIMEOUT` | how long an apply may run before it is called failed; default `30m` |
 | `ntfy.endpoint`, `ntfy.topic` | `DUVA_SETTING_NTFY_ENDPOINT`, `_TOPIC` | where to announce what waits for a person, and failed auto-applies |
 | `ntfy.click` | `DUVA_SETTING_NTFY_CLICK` | the link a notification opens, usually the page |

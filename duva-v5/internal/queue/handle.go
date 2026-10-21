@@ -137,7 +137,7 @@ func (h *Handler) Handle(n Notice) Result {
 		}
 		if !at.IsZero() {
 			e.ReleaseAt = at.UTC().Format(time.RFC3339)
-			e.Why = fmt.Sprintf("%s; soaking until %s", v.Why, at.Local().Format("2006-01-02 15:04 MST"))
+			e.Why = fmt.Sprintf("%s; delayed until %s", v.Why, at.Local().Format("2006-01-02 15:04 MST"))
 		}
 		e.Published = published(n)
 		stored, added := h.Queue.PutEntry(e, h.now())
@@ -160,9 +160,9 @@ func (h *Handler) Handle(n Notice) Result {
 		// since Put leaves an unchanged entry alone.
 		if !at.IsZero() {
 			if added {
-				h.logf("%s: %s -> %s is allowed (%s), soaking until %s", svc.Name, v.From, v.To, v.Why, e.ReleaseAt)
+				h.logf("%s: %s -> %s is allowed (%s), delayed until %s", svc.Name, v.From, v.To, v.Why, e.ReleaseAt)
 			}
-			return Result{Outcome: Queue, Service: svc.Name, Message: "soaking until " + e.ReleaseAt, Status: http.StatusOK}
+			return Result{Outcome: Queue, Service: svc.Name, Message: "delayed until " + e.ReleaseAt, Status: http.StatusOK}
 		}
 		// What is started is the entry as stored, with its row, so the
 		// applier can settle that entry and no other. A release older than

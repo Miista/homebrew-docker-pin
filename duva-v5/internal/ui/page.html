@@ -453,10 +453,10 @@
        A section with v-if, not a <template>: petite-vue's v-if needs a
        parent element to put the block into. -->
   <section class="soak" v-if="soaking.length">
-    <h1>Soaking <span class="count">({{ soaking.length }})</span></h1>
-    <p class="lead">Allowed by policy; each applies itself when its soak runs out.</p>
+    <h1>Scheduled <span class="count">({{ soaking.length }})</span></h1>
+    <p class="lead">Allowed by policy and delayed (duva.delay); each applies itself at the time shown.</p>
     <div class="head" aria-hidden="true">
-      <span>Service</span><span>Change</span><span>Releases</span><span></span>
+      <span>Service</span><span>Change</span><span>Applies</span><span></span>
     </div>
     <ul class="rows">
       <li v-for="r in shownSoaking()" :key="r.key + '#' + r.entry" :class="r.stale ? 'stale' : ''">
@@ -470,7 +470,7 @@
         <span class="acts">
           <button class="apply" v-if="canApply"
                   :disabled="!r.can_apply || running(r.key) || busyHost(r.host)"
-                  :title="buttonReason(r) || 'Apply it now, without waiting out the soak'"
+                  :title="buttonReason(r) || 'Apply it now, without waiting for the delay'"
                   @click="apply(r)">{{ running(r.key) ? "Updating…" : "Apply now" }}</button>
           <button class="act" v-if="actions"
                   :disabled="r.stale || running(r.key)"

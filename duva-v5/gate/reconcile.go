@@ -149,7 +149,7 @@ func (r *reconciler) release() {
 			if ok, why := r.applicable(due.Service); !ok {
 				// Left soaking, so it is released the first tick after the
 				// service is back -- the same as a notice for it would be.
-				r.log.Debug().Msgf("%s: soak is over, but not released: %s", due.Service, why)
+				r.log.Debug().Msgf("%s: delay is over, but not released: %s", due.Service, why)
 				continue
 			}
 		}
@@ -160,10 +160,10 @@ func (r *reconciler) release() {
 		if err := r.applier.StartUnattended(e); err != nil {
 			// Released either way: it now waits where any auto-apply that
 			// could not start waits, for a person or the next notice.
-			r.log.Warn().Msgf("%s: soak is over, but could not start applying: %v", e.Service, err)
+			r.log.Warn().Msgf("%s: delay is over, but could not start applying: %v", e.Service, err)
 			continue
 		}
-		r.log.Info().Msgf("%s: soak is over, applying %s -> %s", e.Service, e.From, e.To)
+		r.log.Info().Msgf("%s: delay is over, applying %s -> %s", e.Service, e.From, e.To)
 	}
 }
 

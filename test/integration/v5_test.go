@@ -106,7 +106,7 @@ func TestV5ASoakHoldsBackWhatPolicyAllows(t *testing.T) {
 			if row.ReleaseAt == "" {
 				t.Errorf("%s is not soaking: %+v\n%s", service, row, s.Logs("duva"))
 			}
-			if !strings.Contains(row.Why, "soaking until") {
+			if !strings.Contains(row.Why, "delayed until") {
 				t.Errorf("%s's row does not say it is soaking: %q", service, row.Why)
 			}
 		}
@@ -119,7 +119,7 @@ func TestV5ASoakHoldsBackWhatPolicyAllows(t *testing.T) {
 		s.waitFor("soak-released to run 1.0.1", 3*time.Minute,
 			func() bool { return strings.Contains(s.RunningImage("soak-released"), "1.0.1") },
 			func() string { return s.Logs("duva") })
-		if !strings.Contains(s.Logs("duva"), "released: soak is over, applying 1.0.0 -> 1.0.1") {
+		if !strings.Contains(s.Logs("duva"), "released: delay is over, applying 1.0.0 -> 1.0.1") {
 			t.Errorf("applied, but not by the soak ending:\n%s", s.Logs("duva"))
 		}
 		s.waitFor("released to leave the queue", 30*time.Second,

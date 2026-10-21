@@ -129,7 +129,8 @@ and `duva-v5/README.md`.
 - **State is one SQLite database**, `/data/duva.db` (`internal/store`,
   `modernc.org/sqlite`, numbered embedded migrations; never edit a released
   one). The queue is a row per release with a status and a history
-  (`queue_events`): a soaking release keeps its own clock, a release for a
+  (`queue_events`): a delayed release (`duva.delay`; "soak" in the code) keeps
+  its own clock, a release for a
   person supersedes older ones for a person, and applying supersedes
   everything older. The watcher's cutoffs and held findings are its own
   tables, which nothing references. `services` mirrors the host's

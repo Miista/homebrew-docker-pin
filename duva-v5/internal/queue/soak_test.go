@@ -87,7 +87,7 @@ services:
     container_name: labelled
     labels:
       duva.auto: patch
-      duva.soak: 3d
+      duva.delay: 3d
   unlabelled:
     image: example.com/app:1.0.0@sha256:old
     container_name: unlabelled
@@ -98,7 +98,7 @@ services:
     container_name: opted-out
     labels:
       duva.auto: patch
-      duva.soak: "0"
+      duva.delay: "0"
 `
 
 func TestLookupReadsTheSoak(t *testing.T) {
@@ -125,10 +125,10 @@ services:
     image: example.com/app:1.0.0@sha256:old
     container_name: my-app
     labels:
-      duva.soak: a week
+      duva.delay: a week
 `)
 	if _, _, err := l.Service("my-app"); err == nil {
-		t.Fatal("want an error for an unreadable duva.soak")
+		t.Fatal("want an error for an unreadable duva.delay")
 	}
 }
 
@@ -141,7 +141,7 @@ services:
     container_name: my-app
     labels:
       duva.auto: patch
-      duva.soak: 3d
+      duva.delay: 3d
 `
 
 // Allowed by policy, but too young: it waits in the queue rather than being
@@ -168,7 +168,7 @@ func TestHandleSoaksAReleaseThatIsTooYoung(t *testing.T) {
 	if want := published.Add(72 * time.Hour).UTC().Format(time.RFC3339); e.ReleaseAt != want {
 		t.Errorf("release_at = %q, want %q", e.ReleaseAt, want)
 	}
-	if !strings.Contains(e.Why, "soaking until") {
+	if !strings.Contains(e.Why, "delayed until") {
 		t.Errorf("why = %q, want it to say it is soaking", e.Why)
 	}
 	if announced != 0 {

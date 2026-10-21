@@ -230,7 +230,7 @@ func (q *Pending) put(e Entry, now time.Time) (Entry, bool) {
 		}
 		kind := "found"
 		if e.ReleaseAt != "" {
-			kind = "soaking"
+			kind = "delayed"
 		}
 		if err := event(tx, e.ID, serviceID, now, kind, e.Why); err != nil {
 			return err
@@ -574,7 +574,7 @@ func (q *Pending) Release(e Entry, now time.Time) (Entry, bool) {
 		if _, err := tx.Exec(`UPDATE queue_entries SET release_at = NULL WHERE id = ?`, cur.ID); err != nil {
 			return err
 		}
-		return event(tx, cur.ID, serviceID, now, "released", "soak is over")
+		return event(tx, cur.ID, serviceID, now, "released", "delay is over")
 	})
 	if err != nil {
 		q.fail(err)

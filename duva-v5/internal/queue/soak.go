@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// ParseSoak reads a duva.soak label value: how old a release
+// ParseSoak reads a duva.delay label value: how old a release
 // must be before policy applies it unattended. Empty means the label is
 // absent, which is no soak.
 //
@@ -19,7 +19,7 @@ import (
 // Go's durations, plus whole days ("3d"), because a soak is measured in days
 // and "72h" is a conversion nobody should have to make in a label. Anything
 // else is an error rather than a fallback, for the same reason as duva.auto:
-// `duva.soak: 3 days` silently meaning "no soak" is the permissive direction.
+// `duva.delay: 3 days` silently meaning "no delay" is the permissive direction.
 func ParseSoak(value string) (time.Duration, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
@@ -28,13 +28,13 @@ func ParseSoak(value string) (time.Duration, error) {
 	if days, ok := strings.CutSuffix(value, "d"); ok {
 		n, err := strconv.Atoi(days)
 		if err != nil || n < 0 {
-			return 0, fmt.Errorf("duva.soak: %q is not a number of days", value)
+			return 0, fmt.Errorf("duva.delay: %q is not a number of days", value)
 		}
 		return time.Duration(n) * 24 * time.Hour, nil
 	}
 	d, err := time.ParseDuration(value)
 	if err != nil || d < 0 {
-		return 0, fmt.Errorf("duva.soak: %q is not a duration (want e.g. 3d, 72h or 0)", value)
+		return 0, fmt.Errorf("duva.delay: %q is not a duration (want e.g. 3d, 72h or 0)", value)
 	}
 	return d, nil
 }
