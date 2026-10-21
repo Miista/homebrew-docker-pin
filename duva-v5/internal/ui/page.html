@@ -37,7 +37,7 @@
     font: 14px/1.5 Geist, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
     -webkit-font-smoothing: antialiased; -webkit-text-size-adjust: 100%;
   }
-  main { max-width: 1120px; margin: 0 auto; padding: 28px 32px 40px; min-height: 100vh;
+  main { max-width: 1120px; margin: 0 auto; padding: 16px 32px 40px; min-height: 100vh;
          display: flex; flex-direction: column;
          --cols: minmax(160px, 1fr) minmax(264px, 1fr) 150px 146px; }
   code, .mono { font-family: var(--mono); }
@@ -78,7 +78,18 @@
   }
 
   /* ---------- header ---------- */
-  .top { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+  /* Always there, and transparent at the top of the page so the glow shows
+     through it as through the rest. Once the page scrolls under it, a
+     frosted pane of the same dark, so rows do not run legibly behind it --
+     the glow still shows through that. The pane is the window's width, not
+     the header's: the header is only as wide as the page's column. */
+  .top { position: sticky; top: 0; z-index: 30; display: flex; align-items: center;
+         gap: 16px; flex-wrap: wrap; padding: 12px 0; }
+  .top::before { content: ""; position: absolute; inset: 0 calc(50% - 50vw); z-index: -1;
+                 transition: background .2s ease, box-shadow .2s ease; }
+  .scrolled .top::before { background: color-mix(in oklch, var(--bg) 55%, transparent);
+                           -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+                           box-shadow: 0 1px 0 var(--divider); }
   .brand { display: flex; align-items: center; gap: 12px; }
   .mark { font-size: 18px; font-weight: 700; letter-spacing: .18em; text-transform: uppercase; }
   .find { flex: 1 1 280px; max-width: 460px; display: flex; align-items: center; gap: 10px;
@@ -410,16 +421,7 @@
   /* ---------- phones ---------- */
   @media (max-width: 45rem) {
     main { padding: 0 12px calc(72px + env(safe-area-inset-bottom)); }
-    /* Always there, and transparent at the top of the page so the glow shows
-       through it as through the rest. Once the page scrolls under it, a
-       frosted pane of the same dark, so rows do not run legibly behind the
-       logo -- the glow still shows through that. */
-    .top { position: sticky; top: 0; z-index: 30; height: 56px; margin: 0 -12px;
-           padding: 0 8px 0 16px; flex-wrap: nowrap; gap: 10px;
-           transition: background .2s ease, box-shadow .2s ease; }
-    .scrolled .top { background: color-mix(in oklch, var(--bg) 55%, transparent);
-                     -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
-                     box-shadow: 0 1px 0 var(--divider); }
+    .top { height: 56px; margin: 0 -12px; padding: 0 8px 0 16px; flex-wrap: nowrap; gap: 10px; }
     .brand { gap: 10px; }
     .brand img { width: 22px; height: 22px; }
     .mark { font-size: 14px; }
