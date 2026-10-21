@@ -3,6 +3,7 @@ package queue
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/Miista/homebrew-docker-pin/oci/version"
 )
@@ -170,5 +171,61 @@ func TestBlocksListWhatWasBlocked(t *testing.T) {
 	q.Unblock("postgres", "sha256:bad", "soren", now)
 	if got := q.Blocks(); len(got) != 0 {
 		t.Errorf("an unblocked release is still listed: %+v", got)
+	}
+}
+
+// Unblocking undoes the block: what it took out of the queue is put back.
+func TestUnblockingPutsTheEntryBack(t *testing.T) {
+	q := NewPending()
+	e, _ := q.PutEntry(releaseOf("db", "postgres", "17.2"), now)
+	q.Block(e.ID, "sha256:bad", "", "soren", now)
+	if _, ok := q.Get("db"); ok {
+		t.Fatal("blocked, it is still waiting")
+	}
+
+	if err := q.Unblock("postgres", "sha256:bad", "soren", now); err != nil {
+		t.Fatal(err)
+	}
+	back, ok := q.Get("db")
+	if !ok || back.ID != e.ID {
+		t.Fatalf("unblocked, the entry did not come back: %+v %v", back, ok)
+	}
+	if got := lastActor(t, q, "unblocked"); got != "soren" {
+		t.Errorf("unblocked by %q", got)
+	}
+}
+
+// A soaking release comes back waiting for a person, not with its soak --
+// which has likely run out and would apply it on the next tick.
+func TestAnUnblockedSoakWaitsForAPerson(t *testing.T) {
+	q := NewPending()
+	e, _ := q.PutEntry(soakingEntry("1.0.1", now.Add(-time.Hour)), now)
+	q.Block(e.ID, "sha256:bad", "", "soren", now)
+	q.Unblock("example.com/app", "sha256:bad", "soren", now)
+
+	back, ok := q.ByID(e.ID)
+	if !ok || back.ReleaseAt != "" {
+		t.Errorf("back = %+v %v, want waiting with no soak", back, ok)
+	}
+	if due := q.Due(now.Add(time.Hour)); len(due) != 0 {
+		t.Errorf("an unblocked release is due to apply itself: %+v", due)
+	}
+	if w := q.Waiting(); len(w) != 1 || w[0].ID != e.ID {
+		t.Errorf("waiting = %+v, want it in the queue", w)
+	}
+}
+
+// Every entry the block took out comes back, not only the one it was made
+// from: a digest move on another service running the same image.
+func TestUnblockingPutsBackEveryEntryItBlocked(t *testing.T) {
+	q := NewPending()
+	web, _ := q.PutEntry(releaseOf("web", "postgres", "17.2"), now)
+	q.Put(Entry{Service: "db", Container: "db", Image: "postgres", From: "sha256:old", To: "sha256:bad", Tag: "17", Digest: "sha256:bad"}, now)
+	q.Block(web.ID, "sha256:bad", "", "soren", now)
+	q.Unblock("postgres", "sha256:bad", "soren", now)
+	for _, svc := range []string{"web", "db"} {
+		if _, ok := q.Get(svc); !ok {
+			t.Errorf("%s did not come back", svc)
+		}
 	}
 }

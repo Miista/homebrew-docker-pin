@@ -528,7 +528,7 @@
           <button class="act" type="button" @click="unblock(b)">Unblock</button>
         </li>
       </ul>
-      <p class="hint">Unblocked, a release is offered again the next time it is found.</p>
+      <p class="hint">Unblocking puts the release back in the queue, waiting for you.</p>
       <div class="buttons"><button class="act">Close</button></div>
     </form>
   </dialog>
@@ -718,7 +718,7 @@ createApp({
         this.result = message
           ? { service: b.image, level: "error", message }
           : { service: b.image, level: "ok",
-              message: (b.release || "the release") + " unblocked; offered again the next time it is found" }
+              message: (b.release || "the release") + " unblocked, and back in the queue" }
         await this.poll()
         if (!this.blocks.length) document.getElementById("blocks").close()
       },

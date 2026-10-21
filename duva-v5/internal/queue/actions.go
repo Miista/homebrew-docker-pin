@@ -102,8 +102,8 @@ func (q *Pending) Block(entryID int64, digest, reason, actor string, now time.Ti
 		if e.Kind == "" {
 			release = e.Tag // a digest move: the tag it moved on
 		}
-		_, err := tx.Exec(`INSERT INTO blocked_releases (image_id, digest, release, reason, blocked_by, blocked_at)
-			VALUES (?, ?, ?, ?, ?, ?)`, imageID, digest, release, reason, actor, now.UTC().Format(time.RFC3339))
+		_, err := tx.Exec(`INSERT INTO blocked_releases (image_id, digest, release, entry_id, reason, blocked_by, blocked_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?)`, imageID, digest, release, entryID, reason, actor, now.UTC().Format(time.RFC3339))
 		if err != nil {
 			var exists int
 			if tx.QueryRow(`SELECT COUNT(*) FROM blocked_releases
@@ -141,24 +141,66 @@ func (q *Pending) Block(entryID int64, digest, reason, actor string, now time.Ti
 	})
 }
 
-// Unblock lifts a standing block. The block stays in the history; the
-// release is offered again the next time it is found.
+// Unblock lifts a standing block, and puts what it took out of the queue back
+// in: the entry it was made from, and any other entry it blocked by digest.
+//
+// Back waiting for a person, a soaking one included. Its soak has most likely
+// run out while it was blocked, and restored it would apply itself on the
+// next tick -- seconds after someone only meant to lift a ban. Unblocked, it
+// is theirs to approve.
+//
+// The block stays in the history. An entry the service has since moved past
+// is put back too, and the next reconcile drops it as satisfied.
 func (q *Pending) Unblock(image, digest, actor string, now time.Time) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	res, err := q.st.DB().Exec(`UPDATE blocked_releases SET unblocked_at = ?
-		WHERE unblocked_at IS NULL AND digest = ?
-		AND image_id = (SELECT id FROM images WHERE repo = ?)`,
-		now.UTC().Format(time.RFC3339), digest, image)
-	if err != nil {
-		return err
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return fmt.Errorf("%s@%s is not blocked", image, digest)
-	}
-	_, err = q.st.DB().Exec(`INSERT INTO queue_events (at, kind, actor, detail) VALUES (?, 'unblocked', ?, ?)`,
-		now.UTC().Format(time.RFC3339), actor, image+"@"+digest)
-	return err
+	return q.st.Tx(func(tx *sql.Tx) error {
+		var blockID, imageID int64
+		var entryID sql.NullInt64
+		err := tx.QueryRow(`SELECT b.id, b.image_id, b.entry_id FROM blocked_releases b
+			JOIN images i ON i.id = b.image_id
+			WHERE i.repo = ? AND b.digest = ? AND b.unblocked_at IS NULL`, image, digest).Scan(&blockID, &imageID, &entryID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("%s@%s is not blocked", image, digest)
+		}
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`UPDATE blocked_releases SET unblocked_at = ? WHERE id = ?`,
+			now.UTC().Format(time.RFC3339), blockID); err != nil {
+			return err
+		}
+		rows, err := tx.Query(`SELECT e.id, e.service_id FROM queue_entries e
+			JOIN services s ON s.id = e.service_id
+			WHERE e.status = 'blocked' AND s.image_id = ? AND (e.id = ? OR e.digest = ?)`,
+			imageID, entryID.Int64, digest)
+		if err != nil {
+			return err
+		}
+		type hit struct{ entry, service int64 }
+		var back []hit
+		for rows.Next() {
+			var h hit
+			if err := rows.Scan(&h.entry, &h.service); err != nil {
+				rows.Close()
+				return err
+			}
+			back = append(back, h)
+		}
+		rows.Close()
+		for _, h := range back {
+			if _, err := tx.Exec(`UPDATE queue_entries SET status = 'waiting', release_at = NULL WHERE id = ?`, h.entry); err != nil {
+				return err
+			}
+			if err := actorEvent(tx, h.entry, h.service, now, "unblocked", actor, image+"@"+digest); err != nil {
+				return err
+			}
+		}
+		if len(back) == 0 {
+			return actorEvent(tx, 0, 0, now, "unblocked", actor, image+"@"+digest)
+		}
+		return nil
+	})
 }
 
 // IsBlocked reports whether a release is blocked, and why.
