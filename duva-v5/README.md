@@ -158,11 +158,11 @@ matters, so a newer one supersedes it. The page shows the newest per service.
 
 ### Seeing what is waiting, and acting on it
 
-`duva queue` prints what is waiting, by service, with each entry's id. Until
-the page has buttons for them, the other actions are commands too, run inside
-duva's container (`docker exec <duva> duva ...`). They go through this host's
-queue API with its own token, as the page does, and the history records them
-as the CLI's.
+On the page, each row's **⋯** opens its actions: Check now, Re-scan, Discard
+and Block. They are commands too, run inside duva's container (`docker exec
+<duva> duva ...`), going through this host's queue API with its own token as
+the page does; the history records who -- the signed-in person, or "cli".
+`duva queue` prints what is waiting, by service, with each entry's id.
 
 | | |
 |---|---|
