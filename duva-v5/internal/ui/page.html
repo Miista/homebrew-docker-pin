@@ -11,32 +11,18 @@
                font-weight: 100 900; font-display: swap; }
   @font-face { font-family: "Geist Mono"; src: url("/geist-mono.woff2") format("woff2");
                font-weight: 100 900; font-display: swap; }
-  /* The dark scheme is the design's own; the light one is the same page with
-     the values turned over. */
+  /* Dark only, as designed: one scheme, whatever the device prefers. */
   :root {
-    color-scheme: light dark;
-    --bg: #f6f6f7; --card: #ffffff; --raised: #ffffff; --hover: #f1f1f3;
-    --fg: #18181b; --soft: #3f4046; --muted: #5f6168; --faint: #8b8d94;
-    --line: #e2e2e6; --line-soft: #ececef; --edge: #d6d6db;
-    --accent: oklch(0.52 0.1 170); --accent-hi: oklch(0.47 0.1 170); --accent-fg: #ffffff;
-    --danger: oklch(0.55 0.17 25); --danger-fill: oklch(0.6 0.18 25);
-    --major: oklch(0.55 0.17 25); --minor: oklch(0.56 0.13 75); --patch: oklch(0.52 0.11 165);
-    --digest: oklch(0.52 0.12 250); --unknown: oklch(0.55 0.01 260);
-    --wait: oklch(0.56 0.13 75); --ok: oklch(0.52 0.11 165);
-    --shadow: rgba(0, 0, 0, .12); --scrim: rgba(20, 21, 23, .38);
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #101113; --card: #151619; --raised: #1b1c20; --hover: #202125;
-      --fg: #e9e9ec; --soft: #c9cad0; --muted: #8b8d94; --faint: #6c6e75;
-      --line: #232428; --line-soft: #1e1f23; --edge: #2a2b30;
-      --accent: oklch(0.78 0.11 170); --accent-hi: oklch(0.84 0.11 170); --accent-fg: #0d1512;
-      --danger: oklch(0.72 0.14 25); --danger-fill: oklch(0.64 0.17 25);
-      --major: oklch(0.72 0.15 25); --minor: oklch(0.8 0.13 75); --patch: oklch(0.78 0.11 165);
-      --digest: oklch(0.76 0.1 250); --unknown: oklch(0.62 0.01 260);
-      --wait: oklch(0.8 0.13 75); --ok: oklch(0.78 0.11 165);
-      --shadow: rgba(0, 0, 0, .45); --scrim: rgba(6, 7, 8, .7);
-    }
+    color-scheme: dark;
+    --bg: #101113; --card: #151619; --raised: #1b1c20; --hover: #202125;
+    --fg: #e9e9ec; --soft: #c9cad0; --muted: #8b8d94; --faint: #6c6e75;
+    --line: #232428; --line-soft: #1e1f23; --edge: #2a2b30;
+    --accent: oklch(0.78 0.11 170); --accent-hi: oklch(0.84 0.11 170); --accent-fg: #0d1512;
+    --danger: oklch(0.72 0.14 25); --danger-fill: oklch(0.64 0.17 25);
+    --major: oklch(0.72 0.15 25); --minor: oklch(0.8 0.13 75); --patch: oklch(0.78 0.11 165);
+    --digest: oklch(0.76 0.1 250); --unknown: oklch(0.62 0.01 260);
+    --wait: oklch(0.8 0.13 75); --ok: oklch(0.78 0.11 165);
+    --shadow: rgba(0, 0, 0, .45); --scrim: rgba(6, 7, 8, .7);
   }
   * { box-sizing: border-box; }
   body {
