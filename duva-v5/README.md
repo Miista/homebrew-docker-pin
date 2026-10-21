@@ -185,17 +185,9 @@ offers it again; blocked releases stay blocked, and anything older than what
 runs is not an update. Each service looks back to whichever is earlier, its
 own last check or the chosen time, so a longer look never sees less.
 
-These are commands too, run inside duva's container (`docker exec <duva> duva
-...`), going through this host's API with its own `api_token` as the page
-does; the history records who -- the signed-in person, or "cli".
-`duva queue` prints what is waiting, by service, with each entry's id.
-
-| | |
-|---|---|
-| `duva discard <entry>` | drop it for now; found again, it is offered again |
-| `duva block <entry> [reason]` | never apply this release, on any service running the image, until unblocked |
-| `duva unblock <image> <digest>` | lift a block |
-| `duva check [<service>] [--since 7d]` | look for new tags now: one service or every one, and at least that far back (`7d`, `72h`; at most `90d`). Without `--since`, since the last check |
+The history records who did each -- the signed-in person, or what asked over
+the API. `docker exec <duva> duva queue` prints what is waiting, by service,
+with each entry's id.
 
 **A block is by digest, never by tag**, so a release re-pushed under the same
 tag with a fix is not blocked with the broken one. A version change's digest
