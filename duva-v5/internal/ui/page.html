@@ -441,6 +441,12 @@
     .rise[open] { animation: rise .22s ease; }
     .rise::backdrop { background: rgba(0, 0, 0, .55); backdrop-filter: none; }
     .rise .body { padding: 0 16px 28px; }
+    /* Every sheet at the row sheet's size: its service name is 18px, and a
+       sheet's text is read at arm's length. */
+    .rise h2 { font-size: 18px; }
+    .rise .say { font-size: 15px; }
+    .rise .hint { font-size: 14px; }
+    .rise .sub { font-size: 12px; }
     .grab { display: flex; justify-content: center; align-items: center; height: 28px;
             touch-action: none; cursor: grab; }
     .grab::after { content: ""; width: 36px; height: 4px; border-radius: 2px; background: #3a4570; }
@@ -797,7 +803,9 @@
 
   <!-- Block asks first, and says what it does. One dialog for the page,
        about whichever row was clicked, in either section. -->
-  <dialog class="dlg" id="block" @close="blockRow = null">
+  <dialog class="dlg rise" id="block" @close="blockRow = null">
+    <div class="grab" @pointerdown="dragDown($event)" @pointermove="dragMove($event)"
+         @pointerup="dragUp($event)" @pointercancel="dragUp($event)"></div>
     <form v-if="blockRow" @submit.prevent="block()">
       <div class="body">
         <div class="title">
@@ -1108,7 +1116,7 @@ createApp({
       },
 
       closeBlock() {
-        document.getElementById("block").close()
+        this.slideClose(document.getElementById("block"))
       },
 
       async block() {
