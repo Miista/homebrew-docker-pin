@@ -15,8 +15,10 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/queue"
+	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/watch"
 	"github.com/Miista/homebrew-docker-pin/oci/version"
 )
 
@@ -87,11 +89,11 @@ type Approver interface {
 type Actions interface {
 	Discard(host string, id int64, actor string) error
 	Block(host string, id int64, reason, actor string) error
-	Check(host, service, actor string) error
-	Rescan(host, service, actor string) error
+	// Check asks host to look at one service now, and CheckAll every host at
+	// every service; each at least back far back (zero: since the last check).
+	Check(host, service, actor string, back time.Duration) error
 	Unblock(host, image, digest, actor string) error
-	// CheckAll asks every host to look for new tags now.
-	CheckAll(actor string) error
+	CheckAll(actor string, back time.Duration) error
 }
 
 // BlockSource is a Source that also reports what is blocked.
@@ -112,7 +114,7 @@ type Server struct {
 	// endpoint that triggers updates should not exist on a UI meant only to
 	// report.
 	Approver Approver
-	// Actions enables discard, block, check and rescan. Nil leaves them off
+	// Actions enables discard, block, unblock and check. Nil leaves them off
 	// the page and their endpoints unregistered, as for Approver: they carry
 	// the same authority over a host.
 	Actions Actions
@@ -143,7 +145,6 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("/api/discard/", s.action("/api/discard/", s.discard))
 		mux.HandleFunc("/api/block/", s.action("/api/block/", s.block))
 		mux.HandleFunc("/api/check/", s.action("/api/check/", s.check))
-		mux.HandleFunc("/api/rescan/", s.action("/api/rescan/", s.rescan))
 		mux.HandleFunc("/api/unblock/", s.unblock)
 		mux.HandleFunc("/api/check-all", s.checkAll)
 	}
@@ -272,7 +273,7 @@ type state struct {
 	Unreachable []Problem   `json:"unreachable"`
 	Blocked     []Blocked   `json:"blocked"`
 	CanApply    bool        `json:"can_apply"`
-	// Actions is whether the page offers discard, block, check and rescan.
+	// Actions is whether the page offers discard, block, unblock and check.
 	Actions bool   `json:"actions"`
 	Version string `json:"version"`
 }
@@ -551,11 +552,11 @@ func (s *Server) block(host, subject string, r *http.Request) error {
 }
 
 func (s *Server) check(host, service string, r *http.Request) error {
-	return s.Actions.Check(host, service, s.actor(r))
-}
-
-func (s *Server) rescan(host, service string, r *http.Request) error {
-	return s.Actions.Rescan(host, service, s.actor(r))
+	back, err := watch.ParseLookBack(r.FormValue("since"))
+	if err != nil {
+		return fmt.Errorf("since: %w", err)
+	}
+	return s.Actions.Check(host, service, s.actor(r), back)
 }
 
 // entryParam is the entry an approval names, zero for none.
@@ -579,14 +580,17 @@ func (s *Server) unblock(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"message": message})
 }
 
-// checkAll asks every host to look for new tags now: POST /api/check-all.
+// checkAll asks every host to look for new tags now: POST /api/check-all,
+// with since -- how far back, "7d" -- or nothing for since the last check.
 func (s *Server) checkAll(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	message := ""
-	if err := s.Actions.CheckAll(s.actor(r)); err != nil {
+	if back, err := watch.ParseLookBack(r.FormValue("since")); err != nil {
+		message = "since: " + err.Error()
+	} else if err := s.Actions.CheckAll(s.actor(r), back); err != nil {
 		message = err.Error()
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")

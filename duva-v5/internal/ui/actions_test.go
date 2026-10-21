@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestActionsReachALocalQueueWithWho(t *testing.T) {
@@ -15,10 +16,10 @@ func TestActionsReachALocalQueueWithWho(t *testing.T) {
 
 	c.Discard("optiplex", 7, "soren")
 	c.Block("optiplex", 8, "missing migrations", "soren")
-	c.Check("optiplex", "app", "soren")
-	c.Rescan("optiplex", "db", "soren")
+	c.Check("optiplex", "app", "soren", 0)
+	c.Check("optiplex", "db", "soren", 7*24*time.Hour)
 
-	want := []string{"discard 7 by soren", "block 8 (missing migrations) by soren", "check app by soren", "rescan db by soren"}
+	want := []string{"discard 7 by soren", "block 8 (missing migrations) by soren", "check app 0s by soren", "check db 168h0m0s by soren"}
 	if strings.Join(local.acted, "|") != strings.Join(want, "|") {
 		t.Errorf("acted = %v\nwant    %v", local.acted, want)
 	}
@@ -27,11 +28,12 @@ func TestActionsReachALocalQueueWithWho(t *testing.T) {
 // Another host's queue is reached over its API: the token it trusts, and
 // whom the action is for.
 func TestActionsReachARemoteQueueOverItsAPI(t *testing.T) {
-	type call struct{ path, token, actor, reason string }
+	type call struct{ path, token, actor, reason, since string }
 	var got []call
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.ParseForm()
-		got = append(got, call{r.URL.Path, r.Header.Get("Authorization"), r.Header.Get("X-Duva-Actor"), r.FormValue("reason")})
+		got = append(got, call{r.URL.Path, r.Header.Get("Authorization"), r.Header.Get("X-Duva-Actor"),
+			r.FormValue("reason"), r.FormValue("since")})
 		json.NewEncoder(w).Encode(map[string]string{"message": ""})
 	}))
 	defer srv.Close()
@@ -40,17 +42,25 @@ func TestActionsReachARemoteQueueOverItsAPI(t *testing.T) {
 	if err := c.Block("pi", 3, "bad build", "soren"); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Rescan("pi", "app", "soren"); err != nil {
+	if err := c.Check("pi", "app", "soren", 7*24*time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 2 {
+	if err := c.CheckAll("soren", 0); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 {
 		t.Fatalf("calls = %+v", got)
 	}
-	if got[0] != (call{"/v1/block/3", "Bearer t0k", "soren", "bad build"}) {
+	if got[0] != (call{"/v1/block/3", "Bearer t0k", "soren", "bad build", ""}) {
 		t.Errorf("block = %+v", got[0])
 	}
-	if got[1].path != "/v1/rescan/app" {
-		t.Errorf("rescan path = %s", got[1].path)
+	// The look-back travels as the API reads it; none, for since the last
+	// check, is no parameter rather than a sentence.
+	if got[1].path != "/v1/check/app" || got[1].since != "7d" {
+		t.Errorf("check = %+v, want /v1/check/app since 7d", got[1])
+	}
+	if got[2].path != "/v1/check-all" || got[2].since != "" {
+		t.Errorf("check-all = %+v, want no since", got[2])
 	}
 }
 
@@ -61,7 +71,7 @@ func TestARemoteRefusalIsAnError(t *testing.T) {
 	}))
 	defer srv.Close()
 	c := NewCollector([]Upstream{{Host: "pi", URL: srv.URL}})
-	if err := c.Check("pi", "app", ""); err == nil || !strings.Contains(err.Error(), "a moment ago") {
+	if err := c.Check("pi", "app", "", 0); err == nil || !strings.Contains(err.Error(), "a moment ago") {
 		t.Errorf("err = %v", err)
 	}
 }
@@ -76,20 +86,16 @@ func (r *recordedActions) Block(host string, id int64, reason, actor string) err
 	r.calls = append(r.calls, "block "+host+" "+reason+" "+actor)
 	return nil
 }
-func (r *recordedActions) Check(host, service, actor string) error {
-	r.calls = append(r.calls, "check "+host+" "+service+" "+actor)
+func (r *recordedActions) Check(host, service, actor string, back time.Duration) error {
+	r.calls = append(r.calls, "check "+host+" "+service+" "+back.String()+" "+actor)
 	return nil
 }
-func (r *recordedActions) CheckAll(actor string) error {
-	r.calls = append(r.calls, "check all "+actor)
+func (r *recordedActions) CheckAll(actor string, back time.Duration) error {
+	r.calls = append(r.calls, "check all "+back.String()+" "+actor)
 	return nil
 }
 func (r *recordedActions) Unblock(host, image, digest, actor string) error {
 	r.calls = append(r.calls, "unblock "+host+" "+image+"@"+digest+" "+actor)
-	return nil
-}
-func (r *recordedActions) Rescan(host, service, actor string) error {
-	r.calls = append(r.calls, "rescan "+host+" "+service+" "+actor)
 	return nil
 }
 
@@ -108,11 +114,20 @@ func TestThePagesActionRoutes(t *testing.T) {
 	post("/api/discard/optiplex/7", nil)
 	post("/api/block/optiplex/8", url.Values{"reason": {" missing migrations "}})
 	post("/api/check/pi/app", nil)
-	post("/api/rescan/pi/app", nil)
+	post("/api/check/pi/db", url.Values{"since": {"7d"}})
+	post("/api/check-all", url.Values{"since": {"30d"}})
 
-	want := "discard optiplex soren|block optiplex missing migrations soren|check pi app soren|rescan pi app soren"
+	want := "discard optiplex soren|block optiplex missing migrations soren|check pi app 0s soren|check pi db 168h0m0s soren|check all 720h0m0s soren"
 	if got := strings.Join(acts.calls, "|"); got != want {
 		t.Errorf("calls = %s\nwant    %s", got, want)
+	}
+	// A look-back the page did not offer is refused here, before any host
+	// is asked anything.
+	if w := post("/api/check-all", url.Values{"since": {"a year"}}); !strings.Contains(w.Body.String(), "since") {
+		t.Errorf("since=a year = %s, want a refusal", w.Body.String())
+	}
+	if w := post("/api/rescan/pi/app", nil); w.Code == http.StatusOK && strings.Contains(w.Body.String(), "message") {
+		t.Errorf("/api/rescan still answers: %s", w.Body.String())
 	}
 	if w := post("/api/discard/optiplex/notanumber", nil); !strings.Contains(w.Body.String(), "no such entry") {
 		t.Errorf("a non-numeric entry = %s", w.Body.String())
@@ -162,8 +177,8 @@ func TestCheckAllAsksEveryHost(t *testing.T) {
 	defer srv.Close()
 	c := NewCollector([]Upstream{{Host: "optiplex", Local: optiplex}, {Host: "pi", URL: srv.URL}})
 
-	err := c.CheckAll("soren")
-	if len(optiplex.acted) != 1 || optiplex.acted[0] != "check all by soren" {
+	err := c.CheckAll("soren", 0)
+	if len(optiplex.acted) != 1 || optiplex.acted[0] != "check all 0s by soren" {
 		t.Errorf("optiplex acted = %v", optiplex.acted)
 	}
 	if asked != "/v1/check-all" {

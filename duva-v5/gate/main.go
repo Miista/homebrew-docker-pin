@@ -101,11 +101,12 @@ type Options struct {
 	// Containers lists this host's containers, for the service sync. Nil
 	// skips it.
 	Containers func() ([]q.Container, error)
-	// Check and Rescan ask the watcher to look at one service now, for the
-	// queue API's actions. Resolve is what a tag points at now, for blocking
-	// a version change. Nil leaves each action unavailable.
-	Check, Rescan func(service string) error
-	Resolve       func(image, tag string) (string, error)
+	// Check asks the watcher to look now, at one service or every one for
+	// "", and at least back far back, for the queue API's "Check…". Resolve
+	// is what a tag points at now, for blocking a version change. Nil leaves
+	// each action unavailable.
+	Check   func(service string, back time.Duration) error
+	Resolve func(image, tag string) (string, error)
 	// LastChecked is when the watcher last looked for new tags, for the
 	// page. Nil: not reported.
 	LastChecked func() time.Time
@@ -232,7 +233,6 @@ func New(log zerolog.Logger, opts Options) (*Gate, error) {
 			Version: Version,
 			Token:   cfg.Token,
 			Check:   opts.Check,
-			Rescan:  opts.Rescan,
 			Resolve: opts.Resolve,
 
 			LastChecked: opts.LastChecked,

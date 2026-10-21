@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/queue"
+	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/watch"
 )
 
 // Collecting several queues into one queue.
@@ -54,10 +55,9 @@ type LocalQueue interface {
 	// The other actions, each answering with a message, empty on success.
 	Discard(id int64, actor string) string
 	Block(id int64, reason, actor string) string
-	CheckNow(service, actor string) string
+	CheckNow(service, actor string, back time.Duration) string
 	Unblock(image, digest, actor string) string
-	CheckAll(actor string) string
-	RescanNow(service, actor string) string
+	CheckAll(actor string, back time.Duration) string
 }
 
 // Collector fans out over queues and implements what the page renders from.
@@ -542,18 +542,21 @@ func (c *Collector) Block(host string, id int64, reason, actor string) error {
 		fmt.Sprintf("/v1/block/%d", id), url.Values{"reason": {reason}})
 }
 
-// Check asks host's watcher to look at a service now.
-func (c *Collector) Check(host, service, actor string) error {
+// Check asks host's watcher to look at a service now, at least back far back
+// (zero: since its last check).
+func (c *Collector) Check(host, service, actor string, back time.Duration) error {
 	return c.act(host, actor,
-		func(l LocalQueue) string { return l.CheckNow(service, actor) },
-		"/v1/check/"+url.PathEscape(service), nil)
+		func(l LocalQueue) string { return l.CheckNow(service, actor, back) },
+		"/v1/check/"+url.PathEscape(service), sinceForm(back))
 }
 
-// Rescan asks host's watcher to forget a service's cutoff and look again.
-func (c *Collector) Rescan(host, service, actor string) error {
-	return c.act(host, actor,
-		func(l LocalQueue) string { return l.RescanNow(service, actor) },
-		"/v1/rescan/"+url.PathEscape(service), nil)
+// sinceForm is a look-back as the queue API takes it: nothing for "since the
+// last check".
+func sinceForm(back time.Duration) url.Values {
+	if back <= 0 {
+		return nil
+	}
+	return url.Values{"since": {watch.FormatLookBack(back)}}
 }
 
 // act routes one action to the queue that owns it: a call for the queue in
@@ -679,14 +682,15 @@ func (c *Collector) LastChecks() []HostCheck {
 	return out
 }
 
-// CheckAll asks every host to look for new tags now. Every host is asked,
-// whatever another answers; the answer is each refusal, by host.
-func (c *Collector) CheckAll(actor string) error {
+// CheckAll asks every host to look for new tags now, at least back far back
+// (zero: since each service's last check). Every host is asked, whatever
+// another answers; the answer is each refusal, by host.
+func (c *Collector) CheckAll(actor string, back time.Duration) error {
 	var refused []string
 	for _, d := range c.Upstreams {
 		if err := c.act(d.Host, actor,
-			func(l LocalQueue) string { return l.CheckAll(actor) },
-			"/v1/check-all", nil); err != nil {
+			func(l LocalQueue) string { return l.CheckAll(actor, back) },
+			"/v1/check-all", sinceForm(back)); err != nil {
 			refused = append(refused, d.Host+": "+err.Error())
 		}
 	}

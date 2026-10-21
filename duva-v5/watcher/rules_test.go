@@ -66,7 +66,7 @@ func nowhere(watch.Finding) bool { return false }
 func checkPublishing(t *testing.T, services []watch.Service, reg watch.Registry, report func(watch.Finding) bool) (before, after map[string]time.Time, found, failed int) {
 	t.Helper()
 
-	mem, err := loadMemory(zerolog.Nop())
+	mem, err := loadMemory(zerolog.Nop(), 0)
 	if err != nil {
 		t.Fatalf("loadMemory: %v", err)
 	}
@@ -78,7 +78,7 @@ func checkPublishing(t *testing.T, services []watch.Service, reg watch.Registry,
 		t.Fatalf("save: %v", err)
 	}
 
-	reloaded, err := loadMemory(zerolog.Nop())
+	reloaded, err := loadMemory(zerolog.Nop(), 0)
 	if err != nil {
 		t.Fatalf("loadMemory after: %v", err)
 	}
@@ -98,7 +98,7 @@ func lines(mem *memory, services []watch.Service) map[string]time.Time {
 // held is what is waiting to be handed on, by service.
 func held(t *testing.T) map[string]int {
 	t.Helper()
-	mem, err := loadMemory(zerolog.Nop())
+	mem, err := loadMemory(zerolog.Nop(), 0)
 	if err != nil {
 		t.Fatalf("loadMemory: %v", err)
 	}
@@ -332,7 +332,7 @@ func TestServeRefusesAnUnparseableSchedule(t *testing.T) {
 // something rather than "a first run wrote one".
 func seedCutoff(t *testing.T, at time.Time, services ...string) {
 	t.Helper()
-	mem, err := loadMemory(zerolog.Nop())
+	mem, err := loadMemory(zerolog.Nop(), 0)
 	if err != nil {
 		t.Fatal(err)
 	}

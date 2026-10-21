@@ -39,6 +39,11 @@ type memory struct {
 	// recorded in that case: an override asks a question, it does not change
 	// what the watcher believes.
 	override bool
+	// back, when set, is how far back a person asked this check to look:
+	// each service looks back to whichever is earlier, its own cutoff or
+	// this. Unlike an override it is recorded as any check is, because it
+	// covered at least everything an ordinary check would have.
+	back time.Time
 	// why describes where the cutoffs came from, for the log.
 	why string
 }
@@ -63,12 +68,19 @@ func (m *memory) FirstCheck(service string) bool {
 
 // Cutoff is how far back to look for one service.
 func (m *memory) Cutoff(service string) time.Time {
+	c := m.fallback
 	if !m.override {
 		if s, ok := m.services[service]; ok && !s.Cutoff.IsZero() {
-			return s.Cutoff
+			c = s.Cutoff
 		}
 	}
-	return m.fallback
+	// Never later than its own cutoff: asking for a week must not look less
+	// far back than an ordinary check would, for a service that has not been
+	// checked in longer.
+	if !m.back.IsZero() && m.back.Before(c) {
+		return m.back
+	}
+	return c
 }
 
 // Checked records that a service was looked at completely, up to `at`.
@@ -128,8 +140,19 @@ func sortedKeys[V any](m map[string]V) []string {
 }
 
 // loadMemory reads what the watcher knows, and says where it came from so
-// the log can too.
-func loadMemory(log zerolog.Logger) (*memory, error) {
+// the log can too. back is how far back a person asked this check to look;
+// zero is each service's own cutoff.
+func loadMemory(log zerolog.Logger, back time.Duration) (*memory, error) {
+	m, err := readMemory(log)
+	if err != nil || back == 0 {
+		return m, err
+	}
+	m.back = time.Now().Add(-back)
+	m.why += ", and at least " + watch.FormatLookBack(back) + " back, as asked"
+	return m, nil
+}
+
+func readMemory(log zerolog.Logger) (*memory, error) {
 	if memStore == nil {
 		return nil, fmt.Errorf("no store to keep what was checked in")
 	}

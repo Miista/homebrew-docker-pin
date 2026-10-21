@@ -174,11 +174,16 @@ newest matters, so a newer one supersedes it.
 On the page, the menu beside each row's Update button has **Block**: that
 release is never applied, on any service running the image, until you unblock
 it from **Blocked releases** in the menu at the top, which puts it back in the
-queue. In the queue the row's menu also has **Force check**, which ignores
-where that service's last check left off and looks over the past week again
--- for a release duva passed over. Scheduled rows have Block only. **Check for
-updates**, also in the menu at the top, looks for new releases on every host
-at once. On a phone, tapping a row opens a sheet with the same actions.
+queue. On a phone, tapping a row opens a sheet with Update and Block.
+
+**Check…**, also in the menu at the top, looks for new releases on every host
+at once, and asks how far back: since the last check (chosen already), or the
+past day, week or month. Since the last check finds what is new. Further back
+also finds what an earlier check passed over -- a tag a since-changed
+`diun.include_tags` filtered out, a release dropped from the queue -- and
+offers it again; blocked releases stay blocked, and anything older than what
+runs is not an update. Each service looks back to whichever is earlier, its
+own last check or the chosen time, so a longer look never sees less.
 
 These are commands too, run inside duva's container (`docker exec <duva> duva
 ...`), going through this host's API with its own `api_token` as the page
@@ -190,8 +195,7 @@ does; the history records who -- the signed-in person, or "cli".
 | `duva discard <entry>` | drop it for now; found again, it is offered again |
 | `duva block <entry> [reason]` | never apply this release, on any service running the image, until unblocked |
 | `duva unblock <image> <digest>` | lift a block |
-| `duva check <service>` | look for new tags now |
-| `duva rescan <service>` | forget how far back it was checked, and look again over the whole window |
+| `duva check [<service>] [--since 7d]` | look for new tags now: one service or every one, and at least that far back (`7d`, `72h`; at most `90d`). Without `--since`, since the last check |
 
 **A block is by digest, never by tag**, so a release re-pushed under the same
 tag with a fix is not blocked with the broken one. A version change's digest
@@ -199,8 +203,9 @@ is not known until it is pulled, so blocking one looks up what its tag points
 at now, and the updater checks the blocklist again after every pull: a
 release blocked after it was queued, or approved, is still refused, with
 nothing written. A refused release is settled as blocked, and nobody is
-notified of what they decided. Check and rescan are refused within a minute of
-the last, per service, so repeated clicks cannot spend a registry's rate limit.
+notified of what they decided. A check is refused within a minute of the
+last, per service and for every service, however far back it looks, so
+repeated clicks cannot spend a registry's rate limit.
 
 ### Updating by hand
 

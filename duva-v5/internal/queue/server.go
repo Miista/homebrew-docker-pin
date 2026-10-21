@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/watch"
 )
 
 // Applier is whatever carries out a decision.
@@ -47,9 +49,10 @@ type Server struct {
 	// Token guards the endpoints a UI uses. Empty leaves them open.
 	Token string
 
-	// Check and Rescan ask the watcher to look at one service now; Rescan
-	// forgets its cutoff first. Nil: the action is not offered.
-	Check, Rescan func(service string) error
+	// Check asks the watcher to look now: at one service, or every one for
+	// "", and at least back far back (zero: since each one's last check).
+	// Nil: the action is not offered.
+	Check func(service string, back time.Duration) error
 	// Resolve is what a tag points at now, for blocking a version change
 	// whose digest the queue has not learned. Nil: only entries that carry
 	// a digest can be blocked.
@@ -79,9 +82,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/block/", s.guard(s.post("/v1/block/", s.blockBy)))
 	mux.HandleFunc("/v1/unblock", s.guard(s.post("/v1/unblock", s.unblockBy)))
 	mux.HandleFunc("/v1/check/", s.guard(s.post("/v1/check/", s.checkBy)))
-	mux.HandleFunc("/v1/rescan/", s.guard(s.post("/v1/rescan/", s.rescanBy)))
 	mux.HandleFunc("/v1/check-all", s.guard(s.post("/v1/check-all", func(_ string, r *http.Request) string {
-		return s.CheckAll(actorOf(r))
+		back, err := watch.ParseLookBack(r.FormValue("since"))
+		if err != nil {
+			return "since: " + err.Error()
+		}
+		return s.CheckAll(actorOf(r), back)
 	})))
 	return mux
 }
@@ -376,11 +382,11 @@ func (s *Server) unblockBy(_ string, r *http.Request) string {
 }
 
 func (s *Server) checkBy(service string, r *http.Request) string {
-	return s.CheckNow(service, actorOf(r))
-}
-
-func (s *Server) rescanBy(service string, r *http.Request) string {
-	return s.RescanNow(service, actorOf(r))
+	back, err := watch.ParseLookBack(r.FormValue("since"))
+	if err != nil {
+		return "since: " + err.Error()
+	}
+	return s.CheckNow(service, actorOf(r), back)
 }
 
 // Discard drops an entry for now. The answer is a message, empty on success.
@@ -439,50 +445,45 @@ func (s *Server) cooled(service string) bool {
 	return true
 }
 
-// CheckNow asks the watcher to look at a service now.
-func (s *Server) CheckNow(service, actor string) string {
-	return s.ask(service, actor, "check", s.Check)
-}
-
-// CheckAll asks the watcher to look at every service now: the page's
-// "Check now". Once a minute at most, like a check of one.
-func (s *Server) CheckAll(actor string) string {
-	if s.Check == nil {
-		return "nothing here can check"
-	}
-	if !s.cooled("*") {
-		return "a check was asked for a moment ago; try again in a minute"
-	}
-	s.Queue.Asked("", "check-all", actor, time.Now())
-	go func() {
-		if err := s.Check(""); err != nil {
-			s.Queue.fail(fmt.Errorf("checking every service: %w", err))
-		}
-	}()
-	return ""
-}
-
-// RescanNow asks the watcher to forget a service's cutoff and look again.
-func (s *Server) RescanNow(service, actor string) string {
-	return s.ask(service, actor, "rescan", s.Rescan)
-}
-
-func (s *Server) ask(service, actor, what string, do func(string) error) string {
-	if do == nil {
-		return "nothing here can " + what
-	}
+// CheckNow asks the watcher to look at one service now, at least back far
+// back. Once a minute at most per service.
+func (s *Server) CheckNow(service, actor string, back time.Duration) string {
 	if service == "" {
 		return "no service"
 	}
-	if !s.cooled(service) {
+	return s.ask(service, actor, back)
+}
+
+// CheckAll asks the watcher to look at every service now: the page's
+// "Check…". Once a minute at most, whatever the look-back, so a deep check
+// cannot be fired again and again.
+func (s *Server) CheckAll(actor string, back time.Duration) string {
+	return s.ask("", actor, back)
+}
+
+// ask starts a check in the background: it is minutes of registry calls, and
+// the answer is what it finds, which arrives in the queue.
+func (s *Server) ask(service, actor string, back time.Duration) string {
+	if s.Check == nil {
+		return "nothing here can check"
+	}
+	key, what, of := service, "check", service
+	if service == "" {
+		key, what, of = "*", "check-all", "every service"
+	}
+	if !s.cooled(key) {
+		if service == "" {
+			return "a check was asked for a moment ago; try again in a minute"
+		}
 		return fmt.Sprintf("%s was asked for a moment ago; try again in a minute", service)
 	}
+	if back > 0 {
+		what += ", " + watch.FormatLookBack(back) + " back"
+	}
 	s.Queue.Asked(service, what, actor, time.Now())
-	// In the background: a check is minutes of registry calls, and the
-	// answer is what it finds, which arrives in the queue.
 	go func() {
-		if err := do(service); err != nil {
-			s.Queue.fail(fmt.Errorf("%s of %s: %w", what, service, err))
+		if err := s.Check(service, back); err != nil {
+			s.Queue.fail(fmt.Errorf("checking %s: %w", of, err))
 		}
 	}()
 	return ""

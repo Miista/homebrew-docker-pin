@@ -119,7 +119,7 @@ func Serve(ctx context.Context, log zerolog.Logger, opts Options) error {
 	// schedule would otherwise leave a freshly deployed watcher silent for
 	// up to a day, and it is what makes restarting the container a way to
 	// ask for a check now.
-	if err := run(log, "", opts); err != nil {
+	if err := run(log, "", 0, opts); err != nil {
 		log.Error().Msgf("%v", err)
 	}
 
@@ -141,7 +141,7 @@ func Serve(ctx context.Context, log zerolog.Logger, opts Options) error {
 			log.Info().Msg("shutting down")
 			return nil
 		case <-timer.C:
-			if err := run(log, "", opts); err != nil {
+			if err := run(log, "", 0, opts); err != nil {
 				// A failed check is not a reason to stop checking: the next
 				// one may find the registry back.
 				log.Error().Msgf("%v", err)
@@ -155,11 +155,16 @@ func Serve(ctx context.Context, log zerolog.Logger, opts Options) error {
 // each overwrite what the other learned.
 var runMu sync.Mutex
 
-// Check checks one service now, by its compose name or container name: what
-// the page's "check now" asks for. Its cutoff is kept, so only what is new
-// since the last check is found. An empty service checks every one.
-func Check(log zerolog.Logger, service string, opts Options) error {
-	return run(log, service, opts)
+// Check checks now, what a person's "Check…" asks for: one service by its
+// compose or container name, or every one for an empty service.
+//
+// back is how far back to look. Zero is since each service's last check, and
+// finds only what is new. More looks back at least that far, which is how a
+// release an earlier check passed over is found again -- what forgetting a
+// cutoff used to be, as a question rather than as deleting state. What is
+// found again is offered again, except what is blocked.
+func Check(log zerolog.Logger, service string, back time.Duration, opts Options) error {
+	return run(log, service, back, opts)
 }
 
 // LastChecked is when this host last looked for new tags: the latest cutoff
@@ -177,30 +182,7 @@ func LastChecked(st *store.Store) time.Time {
 	return at
 }
 
-// Rescan forgets one service's cutoff and checks it, so it looks back the
-// whole default window again: what deleting the state file and restarting
-// the watcher used to be, for one service instead of every one. What is
-// found again is offered again, except what is blocked.
-func Rescan(log zerolog.Logger, service string, opts Options) error {
-	runMu.Lock()
-	st := opts.Store
-	if st == nil {
-		st = memStore
-	}
-	var err error
-	if st == nil {
-		err = fmt.Errorf("no store to forget the cutoff in")
-	} else {
-		_, err = st.DB().Exec(`DELETE FROM watch_cutoffs WHERE service = ?`, service)
-	}
-	runMu.Unlock()
-	if err != nil {
-		return err
-	}
-	return run(log, service, opts)
-}
-
-func run(log zerolog.Logger, only string, opts Options) error {
+func run(log zerolog.Logger, only string, back time.Duration, opts Options) error {
 	runMu.Lock()
 	defer runMu.Unlock()
 
@@ -215,7 +197,7 @@ func run(log zerolog.Logger, only string, opts Options) error {
 	if opts.Store != nil {
 		memStore = opts.Store
 	}
-	mem, err := loadMemory(log)
+	mem, err := loadMemory(log, back)
 	if err != nil {
 		return err
 	}

@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/queue"
 )
@@ -45,18 +46,13 @@ func (l *localQueue) Block(id int64, reason, actor string) string {
 	return ""
 }
 
-func (l *localQueue) CheckNow(service, actor string) string {
-	l.acted = append(l.acted, "check "+service+" by "+actor)
+func (l *localQueue) CheckNow(service, actor string, back time.Duration) string {
+	l.acted = append(l.acted, "check "+service+" "+back.String()+" by "+actor)
 	return ""
 }
 
-func (l *localQueue) RescanNow(service, actor string) string {
-	l.acted = append(l.acted, "rescan "+service+" by "+actor)
-	return ""
-}
-
-func (l *localQueue) CheckAll(actor string) string {
-	l.acted = append(l.acted, "check all by "+actor)
+func (l *localQueue) CheckAll(actor string, back time.Duration) string {
+	l.acted = append(l.acted, "check all "+back.String()+" by "+actor)
 	return l.refuse
 }
 

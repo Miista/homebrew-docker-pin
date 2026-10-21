@@ -88,10 +88,11 @@ func serve() error {
 		// Policy from the running container: what governs a service is what
 		// it was started with, until it is recreated.
 		Labels: dockerapi.Labels,
-		// A person's "check now" and "rescan", and the lookup a block of a
-		// version change needs: the watcher's, and its registry client's.
-		Check:   func(service string) error { return watcher.Check(watchLog, service, watching) },
-		Rescan:  func(service string) error { return watcher.Rescan(watchLog, service, watching) },
+		// A person's "Check…", and the lookup a block of a version change
+		// needs: the watcher's, and its registry client's.
+		Check: func(service string, back time.Duration) error {
+			return watcher.Check(watchLog, service, back, watching)
+		},
 		Resolve: registry.RemoteDigest,
 		// For the page's "last checked".
 		LastChecked: func() time.Time { return watcher.LastChecked(st) },

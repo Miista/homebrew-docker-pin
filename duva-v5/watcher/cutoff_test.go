@@ -28,7 +28,7 @@ func useTempState(t *testing.T) {
 
 func loadOrFail(t *testing.T) *memory {
 	t.Helper()
-	mem, err := loadMemory(zerolog.Nop())
+	mem, err := loadMemory(zerolog.Nop(), 0)
 	if err != nil {
 		t.Fatalf("loadMemory: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestAMalformedSinceIsAnError(t *testing.T) {
 	useTempState(t)
 	t.Setenv("DUVA_SETTING_SINCE", "yesterday-ish")
 
-	if _, err := loadMemory(zerolog.Nop()); err == nil {
+	if _, err := loadMemory(zerolog.Nop(), 0); err == nil {
 		t.Error("a malformed DUVA_SETTING_SINCE was accepted")
 	}
 }
@@ -262,26 +262,38 @@ func TestAnOverrideIsNeverAFirstCheck(t *testing.T) {
 	}
 }
 
-// A rescan forgets one service's cutoff, and only that one's.
-func TestRescanForgetsOneCutoff(t *testing.T) {
+// A check asked to look back further looks back to whichever is earlier: its
+// own cutoff, or how far it was asked. Never later -- asking for a week must
+// not look less far back than an ordinary check, for a service not checked
+// in longer -- and it changes no recorded cutoff by itself.
+func TestALookBackIsTheEarlierOfTheTwo(t *testing.T) {
 	useTempState(t)
-	at := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	recent := time.Now().Add(-2 * time.Hour)
+	long := time.Now().Add(-30 * 24 * time.Hour)
 	mem := loadOrFail(t)
-	mem.Checked("app", at)
-	mem.Checked("db", at)
+	mem.Checked("recent", recent)
+	mem.Checked("stale", long)
 	if err := mem.save(); err != nil {
 		t.Fatal(err)
 	}
 
-	// The check itself fails here -- there is no compose project -- but the
-	// cutoff is forgotten first, which is the part under test.
-	Rescan(zerolog.Nop(), "app", Options{Root: "/nonexistent/docker-compose.yml", Report: func(watch.Finding) bool { return true }})
-
-	after := loadOrFail(t)
-	if after.Cutoff("app").Equal(at) {
-		t.Error("app's cutoff survived a rescan")
+	back, err := loadMemory(zerolog.Nop(), 7*24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !after.Cutoff("db").Equal(at) {
-		t.Error("a rescan of app forgot db's cutoff")
+	week := time.Now().Add(-7 * 24 * time.Hour)
+	if got := back.Cutoff("recent"); got.After(week.Add(time.Minute)) {
+		t.Errorf("recent looks back to %v, want about a week ago", got)
+	}
+	if got := back.Cutoff("stale"); !got.Equal(long.UTC()) {
+		t.Errorf("stale looks back to %v, want its own, older cutoff %v", got, long)
+	}
+	if back.FirstCheck("recent") {
+		t.Error("a look-back made a checked service a first check")
+	}
+
+	plain := loadOrFail(t)
+	if !plain.Cutoff("recent").Equal(recent.UTC()) {
+		t.Error("loading with a look-back changed the recorded cutoff")
 	}
 }

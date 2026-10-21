@@ -20,7 +20,7 @@ import (
 
 var version = "dev"
 
-const usage = "Usage: duva <serve|queue|discard|block|unblock|check|rescan|health|version>"
+const usage = "Usage: duva <serve|queue|discard|block|unblock|check|health|version>"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -47,7 +47,11 @@ func main() {
 			fmt.Fprintln(os.Stderr, "Error:", err)
 			os.Exit(1)
 		}
-	case "discard", "block", "unblock", "check", "rescan":
+	case "rescan":
+		// Gone, as a separate command: it was a check that looked back a week.
+		fmt.Fprintln(os.Stderr, "Error: rescan is now duva check <service> --since 7d")
+		os.Exit(1)
+	case "discard", "block", "unblock", "check":
 		if err := act(os.Args[1], os.Args[2:]); err != nil {
 			fmt.Fprintln(os.Stderr, "Error:", err)
 			os.Exit(1)

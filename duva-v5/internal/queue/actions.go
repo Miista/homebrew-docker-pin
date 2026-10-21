@@ -239,8 +239,8 @@ func (q *Pending) MarkBlocked(e Entry, reason string, now time.Time) {
 	}))
 }
 
-// Asked records that a person asked for a service to be checked or
-// rescanned. What it found arrives in the queue as any finding does.
+// Asked records that a person asked for a check: of one service, or of every
+// one for "". What it found arrives in the queue as any finding does.
 func (q *Pending) Asked(service, what, actor string, now time.Time) {
 	q.fail(q.st.Tx(func(tx *sql.Tx) error {
 		var serviceID int64

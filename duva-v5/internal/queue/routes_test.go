@@ -19,8 +19,9 @@ type actionServer struct {
 	srv     *httptest.Server
 	q       *Pending
 	mu      sync.Mutex
+	// checked is each check asked of the watcher, as "service back", with
+	// "*" for every service.
 	checked []string
-	rescans []string
 }
 
 func newActionServer(t *testing.T) *actionServer {
@@ -28,8 +29,15 @@ func newActionServer(t *testing.T) *actionServer {
 	a := &actionServer{q: NewPending()}
 	s := &Server{
 		Queue: a.q, Applier: &fakeApplier{}, Token: "s3cret",
-		Check:   func(svc string) error { a.mu.Lock(); a.checked = append(a.checked, svc); a.mu.Unlock(); return nil },
-		Rescan:  func(svc string) error { a.mu.Lock(); a.rescans = append(a.rescans, svc); a.mu.Unlock(); return nil },
+		Check: func(svc string, back time.Duration) error {
+			if svc == "" {
+				svc = "*"
+			}
+			a.mu.Lock()
+			a.checked = append(a.checked, svc+" "+back.String())
+			a.mu.Unlock()
+			return nil
+		},
 		Resolve: func(image, tag string) (string, error) { return "sha256:resolved-" + tag, nil },
 	}
 	a.srv = httptest.NewServer(s.Handler())
@@ -101,24 +109,33 @@ func TestABlockWithoutAReasonIsAccepted(t *testing.T) {
 	}
 }
 
-// Check and rescan reach the watcher, once per service per cooldown: a
-// person clicking twice must not spend a registry's rate limit.
-func TestCheckAndRescanReachTheWatcherOnce(t *testing.T) {
+// A check reaches the watcher with how far back it was asked to look, once
+// per service per cooldown: a person clicking twice must not spend a
+// registry's rate limit -- and nor may a deep check, so the look-back does
+// not get around it.
+func TestACheckReachesTheWatcherOnceWithItsLookBack(t *testing.T) {
 	a := newActionServer(t)
 	if msg := a.post(t, "/v1/check/app", nil); msg != "" {
 		t.Fatalf("check: %s", msg)
 	}
-	if msg := a.post(t, "/v1/check/app", nil); !strings.Contains(msg, "a moment ago") {
+	if msg := a.post(t, "/v1/check/app", url.Values{"since": {"7d"}}); !strings.Contains(msg, "a moment ago") {
 		t.Errorf("a second check at once = %q, want the cooldown", msg)
 	}
-	if msg := a.post(t, "/v1/rescan/db", nil); msg != "" {
-		t.Fatalf("rescan: %s", msg)
+	if msg := a.post(t, "/v1/check/db", url.Values{"since": {"7d"}}); msg != "" {
+		t.Fatalf("check db: %s", msg)
+	}
+	if msg := a.post(t, "/v1/check-all", url.Values{"since": {"30d"}}); msg != "" {
+		t.Fatalf("check-all: %s", msg)
+	}
+	if msg := a.post(t, "/v1/check-all", nil); !strings.Contains(msg, "a moment ago") {
+		t.Errorf("a second check-all at once = %q, want the cooldown", msg)
 	}
 
+	want := map[string]bool{"app 0s": true, "db 168h0m0s": true, "* 720h0m0s": true}
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		a.mu.Lock()
-		done := len(a.checked) == 1 && len(a.rescans) == 1
+		done := len(a.checked) == len(want)
 		a.mu.Unlock()
 		if done || time.Now().After(deadline) {
 			break
@@ -127,15 +144,37 @@ func TestCheckAndRescanReachTheWatcherOnce(t *testing.T) {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if len(a.checked) != 1 || a.checked[0] != "app" || len(a.rescans) != 1 || a.rescans[0] != "db" {
-		t.Errorf("checked %v, rescanned %v", a.checked, a.rescans)
+	if len(a.checked) != len(want) {
+		t.Fatalf("checked %v, want %v", a.checked, want)
+	}
+	for _, c := range a.checked {
+		if !want[c] {
+			t.Errorf("checked %q, which was not asked for (want %v)", c, want)
+		}
+	}
+}
+
+// A look-back that does not parse is refused, not read as "since the last
+// check", and nothing is asked of the watcher.
+func TestAnUnreadableLookBackIsRefused(t *testing.T) {
+	a := newActionServer(t)
+	for _, since := range []string{"a week", "-1d", "365d"} {
+		if msg := a.post(t, "/v1/check-all", url.Values{"since": {since}}); !strings.Contains(msg, "since") {
+			t.Errorf("since=%q = %q, want a refusal", since, msg)
+		}
+	}
+	time.Sleep(50 * time.Millisecond)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if len(a.checked) != 0 {
+		t.Errorf("checked %v after only refusals", a.checked)
 	}
 }
 
 // Every action holds the token: each is reached from another host.
 func TestActionsRequireTheToken(t *testing.T) {
 	a := newActionServer(t)
-	for _, path := range []string{"/v1/discard/1", "/v1/block/1", "/v1/unblock", "/v1/check/app", "/v1/rescan/app"} {
+	for _, path := range []string{"/v1/discard/1", "/v1/block/1", "/v1/unblock", "/v1/check/app", "/v1/check-all"} {
 		resp, err := http.Post(a.srv.URL+path, "text/plain", nil)
 		if err != nil {
 			t.Fatal(err)
