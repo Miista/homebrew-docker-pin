@@ -151,3 +151,24 @@ services:
 		t.Error("a blocked digest was queued")
 	}
 }
+
+// A list of blocks says what a person recognises: the version, not only the
+// digest.
+func TestBlocksListWhatWasBlocked(t *testing.T) {
+	q := NewPending()
+	e, _ := q.PutEntry(releaseOf("db", "postgres", "17.2"), now)
+	q.Block(e.ID, "sha256:bad", "", "soren", now)
+
+	blocks := q.Blocks()
+	if len(blocks) != 1 {
+		t.Fatalf("blocks = %+v", blocks)
+	}
+	b := blocks[0]
+	if b.Image != "postgres" || b.Release != "17.2" || b.Digest != "sha256:bad" || b.By != "soren" {
+		t.Errorf("block = %+v", b)
+	}
+	q.Unblock("postgres", "sha256:bad", "soren", now)
+	if got := q.Blocks(); len(got) != 0 {
+		t.Errorf("an unblocked release is still listed: %+v", got)
+	}
+}

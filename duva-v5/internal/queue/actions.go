@@ -98,8 +98,12 @@ func (q *Pending) Block(entryID int64, digest, reason, actor string, now time.Ti
 		if err := tx.QueryRow(`SELECT id FROM images WHERE repo = ?`, e.Image).Scan(&imageID); err != nil {
 			return err
 		}
-		_, err := tx.Exec(`INSERT INTO blocked_releases (image_id, digest, reason, blocked_by, blocked_at)
-			VALUES (?, ?, ?, ?, ?)`, imageID, digest, reason, actor, now.UTC().Format(time.RFC3339))
+		release := e.To
+		if e.Kind == "" {
+			release = e.Tag // a digest move: the tag it moved on
+		}
+		_, err := tx.Exec(`INSERT INTO blocked_releases (image_id, digest, release, reason, blocked_by, blocked_at)
+			VALUES (?, ?, ?, ?, ?, ?)`, imageID, digest, release, reason, actor, now.UTC().Format(time.RFC3339))
 		if err != nil {
 			var exists int
 			if tx.QueryRow(`SELECT COUNT(*) FROM blocked_releases
@@ -203,4 +207,36 @@ func (q *Pending) Asked(service, what, actor string, now time.Time) {
 		}
 		return actorEvent(tx, 0, serviceID, now, what, actor, service)
 	}))
+}
+
+// Block is one standing block, as a list of them shows it.
+type Block struct {
+	Image   string `json:"image"`
+	Digest  string `json:"digest"`
+	Release string `json:"release"` // the version, or tag, it was blocked at
+	Reason  string `json:"reason"`
+	By      string `json:"by"`
+	At      string `json:"at"`
+}
+
+// Blocks returns the standing blocks, the most recent first.
+func (q *Pending) Blocks() []Block {
+	rows, err := q.st.DB().Query(`SELECT i.repo, b.digest, b.release, b.reason, b.blocked_by, b.blocked_at
+		FROM blocked_releases b JOIN images i ON i.id = b.image_id
+		WHERE b.unblocked_at IS NULL ORDER BY b.blocked_at DESC, b.id DESC`)
+	if err != nil {
+		q.fail(err)
+		return []Block{}
+	}
+	defer rows.Close()
+	out := []Block{}
+	for rows.Next() {
+		var b Block
+		if err := rows.Scan(&b.Image, &b.Digest, &b.Release, &b.Reason, &b.By, &b.At); err != nil {
+			q.fail(err)
+			return out
+		}
+		out = append(out, b)
+	}
+	return out
 }

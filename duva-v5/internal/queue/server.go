@@ -104,6 +104,8 @@ type Snapshot struct {
 	Pending []Entry `json:"pending"`
 	// Soaking is what applies itself when its soak runs out, every entry.
 	Soaking []Entry `json:"soaking"`
+	// Blocks are the releases a person blocked, still standing.
+	Blocks []Block `json:"blocks"`
 	// CanApply is whether an update approved now would actually be attempted.
 	//
 	// Not merely "an updater is configured". An updater that is there and would
@@ -163,6 +165,7 @@ func (s *Server) Snapshot() Snapshot {
 		Version:  s.Version,
 		Pending:  s.Queue.Waiting(),
 		Soaking:  s.Queue.Soaking(),
+		Blocks:   s.Queue.Blocks(),
 		CanApply: canApply,
 		Blocker:  blocker,
 		WhyNot:   whyNot,

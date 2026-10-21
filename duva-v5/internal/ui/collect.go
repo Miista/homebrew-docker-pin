@@ -55,6 +55,7 @@ type LocalQueue interface {
 	Discard(id int64, actor string) string
 	Block(id int64, reason, actor string) string
 	CheckNow(service, actor string) string
+	Unblock(image, digest, actor string) string
 	RescanNow(service, actor string) string
 }
 
@@ -97,6 +98,8 @@ type snapshot struct {
 	queue []queue.Entry
 	// soaking is what that queue holds waiting out a soak.
 	soaking []queue.Entry
+	// blocks are the releases blocked on that host.
+	blocks []queue.Block
 	// canApply is whether this queue has an update. Per queue, not per
 	// collector: one host can have an updater while another does not.
 	canApply bool
@@ -142,7 +145,7 @@ func (c *Collector) Collect() {
 			for _, svc := range snap.Applying {
 				applying[svc] = true
 			}
-			results[i] = snapshot{queue: snap.Pending, soaking: snap.Soaking, canApply: snap.CanApply,
+			results[i] = snapshot{queue: snap.Pending, soaking: snap.Soaking, blocks: snap.Blocks, canApply: snap.CanApply,
 				blocker: string(snap.Blocker), whyNot: snap.WhyNot,
 				applying: applying, err: err}
 		}(i, d)
@@ -161,6 +164,7 @@ func (c *Collector) Collect() {
 			prev := c.cache[d.Host]
 			results[i].queue = prev.queue
 			results[i].soaking = prev.soaking
+			results[i].blocks = prev.blocks
 			// Never applyable while unreachable, whatever the last answer
 			// said: the route to the updater is through the queue.
 			results[i].canApply = false
@@ -621,4 +625,31 @@ func (c *Collector) Soaking() []Hosted {
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].ReleaseAt < out[j].ReleaseAt })
 	return out
+}
+
+// HostedBlock is a standing block, labelled with the host it is on.
+type HostedBlock struct {
+	queue.Block
+	Host string `json:"host"`
+}
+
+// Blocks returns every host's standing blocks.
+func (c *Collector) Blocks() []HostedBlock {
+	c.fresh()
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	out := []HostedBlock{}
+	for _, d := range c.Upstreams {
+		for _, b := range c.cache[d.Host].blocks {
+			out = append(out, HostedBlock{Block: b, Host: d.Host})
+		}
+	}
+	return out
+}
+
+// Unblock lifts a block on host.
+func (c *Collector) Unblock(host, image, digest, actor string) error {
+	return c.act(host, actor,
+		func(l LocalQueue) string { return l.Unblock(image, digest, actor) },
+		"/v1/unblock", url.Values{"image": {image}, "digest": {digest}})
 }

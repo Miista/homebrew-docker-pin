@@ -80,6 +80,10 @@ func (r *recordedActions) Check(host, service, actor string) error {
 	r.calls = append(r.calls, "check "+host+" "+service+" "+actor)
 	return nil
 }
+func (r *recordedActions) Unblock(host, image, digest, actor string) error {
+	r.calls = append(r.calls, "unblock "+host+" "+image+"@"+digest+" "+actor)
+	return nil
+}
 func (r *recordedActions) Rescan(host, service, actor string) error {
 	r.calls = append(r.calls, "rescan "+host+" "+service+" "+actor)
 	return nil
@@ -119,5 +123,26 @@ func TestNoActionsMeansNoRoutes(t *testing.T) {
 	h.ServeHTTP(w, r)
 	if w.Code == http.StatusOK && strings.Contains(w.Body.String(), "message") {
 		t.Errorf("a read-only page answered an action: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestUnblockFromThePage(t *testing.T) {
+	acts := &recordedActions{}
+	h := (&Server{Source: &fakeSource{}, Actions: acts, Actor: func(*http.Request) string { return "soren" }}).Handler()
+	form := url.Values{"image": {"postgres"}, "digest": {"sha256:bad"}}
+	r := httptest.NewRequest(http.MethodPost, "/api/unblock/optiplex", strings.NewReader(form.Encode()))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	h.ServeHTTP(httptest.NewRecorder(), r)
+	if len(acts.calls) != 1 || acts.calls[0] != "unblock optiplex postgres@sha256:bad soren" {
+		t.Errorf("calls = %v", acts.calls)
+	}
+}
+
+func TestUnblockReachesALocalQueue(t *testing.T) {
+	local := &localQueue{}
+	c := NewCollector([]Upstream{{Host: "optiplex", Local: local}})
+	c.Unblock("optiplex", "postgres", "sha256:bad", "soren")
+	if len(local.acted) != 1 || local.acted[0] != "unblock postgres@sha256:bad by soren" {
+		t.Errorf("acted = %v", local.acted)
 	}
 }

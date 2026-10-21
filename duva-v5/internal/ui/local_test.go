@@ -55,6 +55,11 @@ func (l *localQueue) RescanNow(service, actor string) string {
 	return ""
 }
 
+func (l *localQueue) Unblock(image, digest, actor string) string {
+	l.acted = append(l.acted, "unblock "+image+"@"+digest+" by "+actor)
+	return ""
+}
+
 func (l *localQueue) Stream(service string, w http.ResponseWriter, r *http.Request) error {
 	fmt.Fprintln(w, "applying "+service)
 	return nil

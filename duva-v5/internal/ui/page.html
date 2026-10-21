@@ -205,6 +205,17 @@
                  background: var(--card); color: var(--fg); }
   .panel input::placeholder { color: var(--faint); }
   .panel .hint { flex-basis: 100%; margin: .15rem 0 0; color: var(--faint); }
+  .foot-link { margin-left: auto; color: var(--faint); text-decoration: none; }
+  .foot-link:hover { color: var(--fg); text-decoration: underline; }
+  .blist { list-style: none; margin: 0; padding: 0; }
+  .blist li { display: flex; align-items: center; gap: .6rem; padding: .45rem 0;
+              border-top: 1px solid var(--line-soft); }
+  .blist li:first-child { border-top: 0; }
+  .blist .what { flex: 1; min-width: 0; }
+  .blist .name { display: block; font-size: .875rem; font-weight: 600; overflow-wrap: anywhere; }
+  .blist .rel { font-weight: 400; }
+  .blist .by { display: block; font-size: .72rem; color: var(--faint); }
+
   /* ---------- the discard dialog ---------- */
   /* The page's own card, raised: same surface, line and radius, so it reads
      as part of the page in either scheme rather than as the browser's. */
@@ -503,8 +514,29 @@
     </form>
   </dialog>
 
+  <!-- The blocked releases, from the footer: rarely needed, so out of the
+       way, but there for the day one should come back. -->
+  <dialog class="dlg" id="blocks">
+    <form method="dialog">
+      <h2>Blocked releases</h2>
+      <ul class="blist">
+        <li v-for="b in blocks" :key="b.host + b.image + b.digest">
+          <span class="what">
+            <span class="name">{{ b.image }} <span class="mono rel">{{ b.release || b.digest.slice(7, 19) }}</span></span>
+            <span class="by mono">{{ b.host }} &middot; {{ b.by }} &middot; {{ dateOf(b.at) }}</span>
+          </span>
+          <button class="act" type="button" @click="unblock(b)">Unblock</button>
+        </li>
+      </ul>
+      <p class="hint">Unblocked, a release is offered again the next time it is found.</p>
+      <div class="buttons"><button class="act">Close</button></div>
+    </form>
+  </dialog>
+
   <footer>
     <span>duva {{ version }}</span>
+    <a href="#" class="foot-link" v-if="actions && blocks.length"
+       @click.prevent="openBlocks()">Blocked ({{ blocks.length }})</a>
   </footer>
 </main>
 
@@ -523,6 +555,7 @@ createApp({
     return {
       rows: initial.rows || [],
       soaking: initial.soaking || [],
+      blocks: initial.blocks || [],
       unreachable: initial.unreachable || [],
       blocked: initial.blocked || [],
       canApply: initial.can_apply,
@@ -573,6 +606,7 @@ createApp({
           const s = await r.json()
           this.rows = s.rows || []
           this.soaking = s.soaking || []
+          this.blocks = s.blocks || []
           this.unreachable = s.unreachable || []
           this.blocked = s.blocked || []
           this.canApply = s.can_apply
@@ -670,6 +704,28 @@ createApp({
         this.closeDiscard()
         if (!this.alsoBlock) return this.act("discard", r)
         return this.act("block", r)
+      },
+
+      openBlocks() {
+        document.getElementById("blocks").showModal()
+      },
+
+      async unblock(b) {
+        const res = await fetch("/api/unblock/" + encodeURIComponent(b.host), {
+          method: "POST", body: new URLSearchParams({ image: b.image, digest: b.digest }) })
+        if (res.status === 401) { location.reload(); return }
+        const { message } = await res.json()
+        this.result = message
+          ? { service: b.image, level: "error", message }
+          : { service: b.image, level: "ok",
+              message: (b.release || "the release") + " unblocked; offered again the next time it is found" }
+        await this.poll()
+        if (!this.blocks.length) document.getElementById("blocks").close()
+      },
+
+      // A day, for when something was blocked.
+      dateOf(at) {
+        return at ? new Date(at).toLocaleDateString(undefined, { day: "numeric", month: "short" }) : ""
       },
 
       // The soaking rows the tab and the search box allow.
