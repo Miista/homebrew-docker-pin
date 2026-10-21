@@ -149,7 +149,7 @@ func TestTheCardDrawsItsOwnTopEdgeWithoutTheHead(t *testing.T) {
 	s := &Server{Source: &fakeSource{}, Approver: &fakeApprover{}}
 	_, body := get(t, s, "/")
 
-	phone := mediaBlock(body, "max-width: 30rem")
+	phone := mediaBlock(body, "max-width: 45rem")
 	if phone == "" {
 		t.Fatal("no narrow-phone media query in the page")
 	}
@@ -489,7 +489,7 @@ func TestFilteringDoesNotNarrowWhatIsKnown(t *testing.T) {
 	_, body := get(t, s, "/")
 
 	// The count and the host lock read rows, which stays whole.
-	if !strings.Contains(body, "({{ rows.length }})") {
+	if !strings.Contains(body, `<h1>Queue <span class="count">{{ rows.length }}</span>`) {
 		t.Error("the heading counts something other than the whole queue")
 	}
 	if !strings.Contains(body, "this.rows.some(r => this.running(r.key) && r.host === host)") {

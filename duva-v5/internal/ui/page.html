@@ -6,263 +6,234 @@
 <link rel="icon" type="image/png" href="/favicon.png">
 <title>duva</title>
 <style>
+  /* The dark scheme is the design's own; the light one is the same page with
+     the values turned over. Geist is used where it is installed and nothing
+     is fetched for it: a signed-in page that calls out to a font host on every
+     load tells that host who is looking at it, and when. */
   :root {
     color-scheme: light dark;
-    --bg: #faf9f7; --card: #ffffff; --fg: #1b1a18; --muted: #6e6b66;
-    --faint: #948f89; --line: #e6e3de; --line-soft: #efece7;
-    --accent: #1d5e52; --accent-fg: #ffffff; --tint: #f2efea;
-    --major: #a8281f; --major-bg: #fbeceb; --major-line: #eccfcc;
-    --minor: #7d5300; --digest: #55524e;
-    --ok: #2f6b4f;
+    --bg: #f6f6f7; --card: #ffffff; --raised: #ffffff; --hover: #f1f1f3;
+    --fg: #18181b; --soft: #3f4046; --muted: #5f6168; --faint: #8b8d94;
+    --line: #e2e2e6; --line-soft: #ececef; --edge: #d6d6db;
+    --accent: oklch(0.52 0.1 170); --accent-hi: oklch(0.47 0.1 170); --accent-fg: #ffffff;
+    --danger: oklch(0.55 0.17 25); --danger-fill: oklch(0.6 0.18 25);
+    --major: oklch(0.55 0.17 25); --minor: oklch(0.56 0.13 75); --patch: oklch(0.52 0.11 165);
+    --digest: oklch(0.52 0.12 250); --unknown: oklch(0.55 0.01 260);
+    --wait: oklch(0.56 0.13 75); --ok: oklch(0.52 0.11 165);
+    --shadow: rgba(0, 0, 0, .12); --scrim: rgba(20, 21, 23, .38);
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #141517; --card: #1c1e21; --fg: #e9e7e4; --muted: #9b9791;
-      --faint: #7c7873; --line: #2c2f33; --line-soft: #24272a;
-      --accent: #64c3ad; --accent-fg: #10221e; --tint: #1b1d20;
-      --major: #ff8377; --major-bg: #2b1c1a; --major-line: #4a2b27;
-      --minor: #d9a55c; --digest: #b4b0ab;
-      --ok: #7bc79c;
+      --bg: #101113; --card: #151619; --raised: #1b1c20; --hover: #202125;
+      --fg: #e9e9ec; --soft: #c9cad0; --muted: #8b8d94; --faint: #6c6e75;
+      --line: #232428; --line-soft: #1e1f23; --edge: #2a2b30;
+      --accent: oklch(0.78 0.11 170); --accent-hi: oklch(0.84 0.11 170); --accent-fg: #0d1512;
+      --danger: oklch(0.72 0.14 25); --danger-fill: oklch(0.64 0.17 25);
+      --major: oklch(0.72 0.15 25); --minor: oklch(0.8 0.13 75); --patch: oklch(0.78 0.11 165);
+      --digest: oklch(0.76 0.1 250); --unknown: oklch(0.62 0.01 260);
+      --wait: oklch(0.8 0.13 75); --ok: oklch(0.78 0.11 165);
+      --shadow: rgba(0, 0, 0, .45); --scrim: rgba(6, 7, 8, .7);
     }
   }
   * { box-sizing: border-box; }
   body {
-    margin: 0; padding: 1.75rem 1.15rem 3rem; background: var(--bg); color: var(--fg);
-    font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-    -webkit-text-size-adjust: 100%;
+    margin: 0; padding: 28px 32px 40px; background: var(--bg); color: var(--fg);
+    font: 14px/1.5 Geist, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased; -webkit-text-size-adjust: 100%;
   }
-  main { max-width: 66rem; margin: 0 auto;
+  main { max-width: 1056px; margin: 0 auto;
          /* The last column is fixed, not max-content: the head is a grid of
             its own with nothing in that cell, so a sized-to-content column
             came out a different width there and slid the head's labels off
-            the columns they name. */
-         --cols: 11rem minmax(0, 1fr) 5rem 15rem; }
-  code, .mono { font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+            the columns they name. 146px is Update's 110 and the menu's 30. */
+         --cols: minmax(160px, 1fr) 220px 130px 146px; }
+  code, .mono { font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { color: var(--accent-hi); }
+  button { font: inherit; cursor: pointer; }
+  form { margin: 0; }
 
   /* ---------- header ---------- */
-  .top { display: flex; align-items: baseline; gap: .55rem; flex-wrap: wrap;
-         padding-bottom: .7rem; border-bottom: 1px solid var(--line); }
-  /* align-self overrides .top's baseline alignment, which suits the text
-     beside it but has no equivalent meaning for an image. */
-  .logo { align-self: center; }
-  /* Pushed to the far end of the header. Hidden unless the sign-in gate is on:
-     it serves /auth/client.js, which sets data-authy on <html>. */
-  .signout { margin-left: auto; font-size: .78rem; color: var(--faint); text-decoration: none; }
+  .top { display: flex; align-items: center; gap: 12px 16px; flex-wrap: wrap; }
+  .brand { display: flex; align-items: center; gap: 12px; }
+  .mark { font-size: 15px; font-weight: 700; letter-spacing: .18em;
+          text-transform: uppercase; }
+  .status { margin-left: auto; display: flex; align-items: center; gap: 16px;
+            flex-wrap: wrap; }
+  /* Hidden unless the sign-in gate is on: it serves /auth/client.js, which
+     sets data-authy on <html>. */
+  .signout { font-size: 12px; color: var(--faint); }
   .signout:hover { color: var(--fg); }
   html:not([data-authy]) .only-with-gate { display: none !important }
-  .mark { font-size: 1.1rem; font-weight: 700; letter-spacing: .12em;
-          text-transform: uppercase; color: var(--fg); }
-  .host { font-size: 1.1rem; font-weight: 400; color: var(--muted);
-          letter-spacing: -.01em; }
-  .count { font-size: .78rem; color: var(--faint); font-weight: 400;
-           font-variant-numeric: tabular-nums; }
+
+  /* ---------- when each host last looked ---------- */
+  .checked { display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+             font-size: 12px; color: var(--faint); }
+  .checked .h { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+  .checked .h::before { content: ""; width: 6px; height: 6px; border-radius: 50%;
+                        background: var(--accent); }
+  .checked .h .mono { color: var(--soft); }
+
+  /* ---------- buttons ---------- */
+  /* The outlined one: everything that is not the row's main action. */
+  .act { height: 30px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--edge);
+         background: transparent; color: var(--soft); font-size: 13px; white-space: nowrap; }
+  .act:hover:not(:disabled) { background: var(--hover); color: var(--fg); }
+  .act:disabled { color: var(--faint); cursor: not-allowed; }
+  .act:focus-visible, .apply:focus-visible, .more:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .check { width: 140px; padding: 0; }
+
+  .apply { height: 30px; min-width: 110px; padding: 0 14px; white-space: nowrap;
+           border-radius: 8px; border: 1px solid transparent;
+           background: var(--accent); color: var(--accent-fg);
+           font-size: 13px; font-weight: 600; }
+  .apply:hover:not(:disabled) { background: var(--accent-hi); }
+  .apply:active:not(:disabled) { transform: translateY(1px); }
+  /* Greyed rather than hidden: the row still has a decision waiting, and
+     removing the button would make it look like one that does not. */
+  .apply:disabled { background: none; border-color: var(--edge);
+                    color: var(--faint); font-weight: 500; cursor: not-allowed; }
 
   /* ---------- result banner ---------- */
-  /* Same reason as .steps div: a failure reason carries the pinned image
+  /* Same reason as .steps li: a failure reason carries the pinned image
      line, digest and all, and one 71-character token has nowhere to break. */
-  .banner { margin: 1.1rem 0 0; padding: .6rem .8rem; font-size: .9rem;
+  .banner { margin: 20px 0 0; padding: 10px 14px; font-size: 13.5px;
             background: var(--card); border: 1px solid var(--line);
-            border-radius: 8px; overflow-wrap: anywhere; }
-  .banner-error { background: var(--major-bg); border-color: var(--major-line);
-                  color: var(--major); }
+            border-radius: 10px; overflow-wrap: anywhere; }
+  .banner-error { color: var(--danger);
+                  border-color: color-mix(in oklch, var(--danger) 40%, transparent);
+                  background: color-mix(in oklch, var(--danger) 8%, var(--card)); }
   /* A standing fact, not a failure: muted rather than red. */
   .banner-note { color: var(--muted); }
   /* Transient: it clears on its own, so it should catch the eye without
      reading as something broken. Amber, between the muted note and the red. */
-  .banner-wait { color: var(--minor); border-color: var(--minor); }
+  .banner-wait { color: var(--wait); border-color: color-mix(in oklch, var(--wait) 45%, transparent); }
   .banner .who { font-weight: 650; }
 
   /* ---------- section framing ---------- */
-  /* The .45rem below used to come from the subtitle that sat here. With the
-     heading alone it has to come from the heading, or it sits flush on the
-     column head. */
-  h1 { font-size: .95rem; font-weight: 700; margin: 1.6rem 0 .55rem;
-       letter-spacing: -.005em; }
+  .intro { margin: 36px 0 18px; display: flex; flex-direction: column; gap: 6px; }
+  h1 { margin: 0; font-size: 26px; font-weight: 600; letter-spacing: -.02em;
+       display: flex; align-items: baseline; gap: 10px; }
+  .count { font-family: "Geist Mono", ui-monospace, Menlo, monospace;
+           font-size: 15px; font-weight: 500; color: var(--faint);
+           font-variant-numeric: tabular-nums; }
+  .lead { margin: 0; color: var(--muted); font-size: 14px; }
 
   /* ---------- filters: the host tabs and the search box ---------- */
-  .filters { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap;
-             margin: 0 0 .55rem; }
-  .tabs { display: flex; gap: .25rem; }
-  .tabs button { font: inherit; font-size: .78rem; cursor: pointer;
-                 padding: .2rem .55rem; border-radius: 999px;
-                 border: 1px solid var(--line); background: none;
-                 color: var(--muted); }
-  .tabs button:hover { border-color: var(--muted); }
-  .tabs button.on { background: var(--tint); border-color: var(--muted);
-                    color: var(--fg); font-weight: 600; }
+  .filters { display: flex; gap: 10px; align-items: stretch; flex-wrap: wrap;
+             margin: 0 0 18px; }
+  .tabs { display: flex; gap: 2px; padding: 3px; background: var(--card);
+          border: 1px solid var(--line); border-radius: 10px; }
+  .tabs button { display: flex; align-items: center; gap: 7px; height: 28px;
+                 padding: 0 12px; border: 0; border-radius: 7px; background: transparent;
+                 color: var(--muted); font-size: 13px; }
+  .tabs button:hover { color: var(--fg); }
+  .tabs button.sel { background: var(--hover); color: var(--fg); }
   /* The count is the reason to click a tab, so it reads as part of the label
      rather than as a badge competing with it. */
-  .tabs .n { font-variant-numeric: tabular-nums; color: var(--faint);
-             margin-left: .3rem; }
-  .tabs button.on .n { color: var(--muted); }
-  .search { font: inherit; font-size: .78rem; flex: 1; min-width: 12rem;
-            padding: .22rem .5rem; border-radius: 6px;
-            border: 1px solid var(--line); background: var(--card);
-            color: var(--fg); }
-  .search::placeholder { color: var(--faint); }
-  .none { margin: .9rem 0 0; color: var(--muted); font-size: .8rem; }
+  .tabs .n { font-family: "Geist Mono", ui-monospace, Menlo, monospace;
+             font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
+  .search { flex: 1; min-width: 220px; display: flex; align-items: center; gap: 8px;
+            height: 36px; padding: 0 12px; background: var(--card);
+            border: 1px solid var(--line); border-radius: 10px; }
+  .search:focus-within { border-color: var(--edge); }
+  .search .glass { color: var(--faint); font-size: 14px; }
+  .search input { flex: 1; min-width: 0; background: transparent; border: 0; outline: 0;
+                  color: var(--fg); font: inherit; font-size: 13px; }
+  .search input::placeholder { color: var(--faint); }
+  .search input::-webkit-search-cancel-button { display: none; }
+  .search kbd { font-family: "Geist Mono", ui-monospace, Menlo, monospace; font-size: 11px;
+                color: var(--muted); padding: 2px 6px; border: 1px solid var(--edge);
+                border-radius: 5px; background: var(--raised); }
+  .none { margin: 0; padding: 40px 20px; text-align: center; color: var(--faint); font-size: 14px;
+          background: var(--card); border: 1px solid var(--line); border-top: 0;
+          border-radius: 0 0 14px 14px; }
 
-  /* ---------- rows ---------- */
+  /* ---------- the table: a card, its head, its rows ---------- */
+  .head { display: grid; grid-template-columns: var(--cols); gap: 16px;
+          padding: 12px 20px; background: var(--card); border: 1px solid var(--line);
+          border-bottom: 0; border-radius: 14px 14px 0 0; }
+  .head span { font-size: 11px; font-weight: 500; text-transform: uppercase;
+               letter-spacing: .08em; color: var(--faint); }
   .rows { list-style: none; margin: 0; padding: 0; }
+  main > .rows, .soak > .rows { background: var(--card); border: 1px solid var(--line);
+                 border-top: 0; border-radius: 0 0 14px 14px; }
   /* > li, not li: a row's own steps are a nested <ul class="steps"> with its
      own <li> lines (see below), and a plain descendant selector here matched
-     those too -- turning each streamed step into its own 42px grid row with
-     a divider, the same layout as a whole service row, rather than the tight
+     those too -- turning each streamed step into its own grid row with a
+     divider, the same layout as a whole service row, rather than the tight
      muted list .steps intends. */
   .rows > li { display: grid; align-items: center; grid-template-columns: var(--cols);
-             gap: 0 .55rem; min-height: 42px; padding: .2rem 0;
-             border-top: 1px solid var(--line-soft); }
-  .rows > li form, .head span:last-child { grid-column: 4; justify-self: end; }
-  .head { display: grid; grid-template-columns: var(--cols); gap: 0 .55rem;
-          padding: .4rem .9rem .3rem;
-          background: var(--card); border: 1px solid var(--line);
-          border-bottom: 0; border-radius: 10px 10px 0 0; }
-  main > .rows, .soak > .rows { padding: 0 .9rem;
-                 background: var(--card); border: 1px solid var(--line);
-                 border-top: 0; border-radius: 0 0 10px 10px; }
-  .head span { font-size: .69rem; font-weight: 700; text-transform: uppercase;
-               letter-spacing: .07em; color: var(--faint); }
-  /* The host a row came from, shown only when a hub is serving several. */
-  .on { display: block; font-size: .7rem; font-weight: 500; color: var(--accent);
-        letter-spacing: .02em; margin-top: .1rem; }
-  .svc { font-size: .9rem; font-weight: 550; letter-spacing: -.005em; white-space: nowrap;
-         min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-  .img { display: block; font-size: .72rem; color: var(--faint);
-         font-weight: 400; letter-spacing: 0; opacity: 0; transition: opacity .12s;
-         margin-top: -.15rem; overflow: hidden; text-overflow: ellipsis;
-         white-space: nowrap; }
+               gap: 0 16px; padding: 16px 20px; border-top: 1px solid var(--line-soft);
+               transition: background .15s; }
+  .rows > li:hover { background: color-mix(in oklch, var(--hover) 45%, transparent); }
+  .rows > li:last-child { border-radius: 0 0 13px 13px; }
+  .svc { display: flex; flex-direction: column; gap: 5px; min-width: 0;
+         font-size: 14.5px; font-weight: 600; }
+  .svc .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* The host a row came from, shown only when a hub is serving several; the
+     image beside it on hover, where a pointer can ask. */
+  .svc .sub { font-size: 11.5px; font-weight: 400; color: var(--muted);
+              overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .svc .img { color: var(--faint); opacity: 0; transition: opacity .12s; }
   .rows > li:hover .img, .rows > li:focus-within .img { opacity: 1; }
   /* min-width: 0 lets the grid track's width win over the content's
      intrinsic size, so a long tag clips rather than overflowing into the
      Kind column. */
-  .jump { white-space: nowrap; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-  .jump .from { color: var(--faint); font-size: .8rem; }
-  .jump .to { color: var(--fg); font-weight: 400; }
-  .arrow { color: var(--faint); padding: 0 .4rem; }
+  .jump { font-size: 13px; white-space: nowrap; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .jump .from { color: var(--faint); }
+  .jump .to { color: var(--fg); font-weight: 500; }
+  .arrow { color: var(--faint); opacity: .7; padding: 0 10px; }
 
   /* ---------- kind = severity ---------- */
-  .kind { font-size: .69rem; font-weight: 700; text-transform: uppercase;
-          letter-spacing: .07em; white-space: nowrap; }
-  .kind-major { color: var(--major); }
-  .kind-minor { color: var(--minor); }
-  .kind-patch, .kind-digest { color: var(--digest); font-weight: 700; }
-  /* No dotted underline. It is the convention for "hover me", but .kind is a
-     grid cell, so the border ran the width of the column rather than the word
-     -- and a phone has no hover to offer anyway. The title attribute stays:
-     free where there is a pointer, silent where there is not. */
-  /* Fainter than the rest, because it is the only kind that is not a
-     measurement: duva could not compare the two tags, so there is nothing
-     being reported about how big the change is. It is also the reliable tell
-     for a candidate that should not have been offered. */
-  .kind-unknown { color: var(--faint); font-weight: 600; cursor: help; }
+  .kind { justify-self: start; display: inline-flex; align-items: center; gap: 6px;
+          height: 22px; padding: 0 9px; border-radius: 999px; white-space: nowrap;
+          font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
+          color: var(--k); background: color-mix(in oklch, var(--k) 12%, transparent); }
+  .kind::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+  .kind-major { --k: var(--major); }
+  .kind-minor { --k: var(--minor); }
+  .kind-patch { --k: var(--patch); }
+  .kind-digest { --k: var(--digest); }
+  /* Grey, because it is the only kind that is not a measurement: duva could
+     not compare the two tags, so there is nothing being reported about how
+     big the change is. It is also the reliable tell for a candidate that
+     should not have been offered. The title holds why it waits; a phone has
+     no hover to offer, so nothing promises one. */
+  .kind-unknown { --k: var(--unknown); cursor: help; }
 
-  /* ---------- buttons ---------- */
-  form { margin: 0; }
-  button { font: inherit; cursor: pointer; }
-  .apply { font-size: .8rem; line-height: 1.25; padding: .15rem .6rem;
-           border: 1px solid transparent; border-radius: 5px;
-           background: var(--accent); color: var(--accent-fg); font-weight: 600; }
-  .apply:hover:not(:disabled) { filter: brightness(1.07); }
-  .apply:active:not(:disabled) { transform: translateY(1px); }
-  /* Greyed rather than hidden: the row still has a decision waiting, and
-     removing the button would make it look like one that does not. */
-  .apply:disabled { background: none; border-color: var(--line);
-                    color: var(--faint); font-weight: 400; cursor: not-allowed; }
-  .apply:focus-visible { outline: 1px solid currentColor; outline-offset: 2px; }
-
-  /* The row's controls: Update, and the button that opens the rest. One cell,
-     so the head's last column lines up with both. */
-  .acts { grid-column: 4; justify-self: end; display: inline-flex; gap: .3rem;
-          align-items: center; }
-  .more { font-size: .8rem; line-height: 1.25; padding: .15rem .45rem;
-          border: 1px solid var(--line); border-radius: 5px; background: none;
+  /* ---------- a row's controls: Update, and a menu of the rest ---------- */
+  /* One cell, so the head's last column lines up with both. */
+  .acts { grid-column: 4; display: flex; gap: 6px; align-items: center; position: relative; }
+  .more { width: 30px; height: 30px; padding: 0; display: grid; place-items: center;
+          border: 1px solid var(--edge); border-radius: 8px; background: transparent;
           color: var(--muted); }
-  .more:hover, .more[aria-expanded="true"] { border-color: var(--muted); color: var(--fg); }
-  .more:focus-visible { outline: 1px solid currentColor; outline-offset: 2px; }
-
-  /* ---------- a row's other actions ---------- */
-  /* Below the row, like an apply's steps: what is done to one entry is read
-     beside it. */
-  .panel { grid-column: 1 / -1; margin: .1rem 0 .4rem; padding: .5rem .65rem;
-           background: var(--tint); border-radius: 6px; font-size: .78rem;
-           color: var(--muted); display: flex; flex-wrap: wrap; gap: .35rem;
-           align-items: center; }
-  .panel .why { flex-basis: 100%; color: var(--fg); overflow-wrap: anywhere;
-                margin-bottom: .15rem; }
-  .act { font-size: .78rem; line-height: 1.25; padding: .15rem .55rem;
-         border: 1px solid var(--line); border-radius: 5px;
-         background: var(--card); color: var(--fg); }
-  .act:hover:not(:disabled) { border-color: var(--muted); }
-  .act:disabled { color: var(--faint); cursor: not-allowed; }
-  .act:focus-visible { outline: 1px solid currentColor; outline-offset: 2px; }
+  .more:hover, .more[aria-expanded="true"] { background: var(--hover); color: var(--fg); }
+  .more svg { transition: transform .15s; }
+  .more[aria-expanded="true"] svg { transform: rotate(180deg); }
+  .menu { position: absolute; top: 36px; right: 0; z-index: 10; min-width: 140px;
+          display: flex; flex-direction: column; gap: 2px; padding: 4px;
+          background: var(--raised); border: 1px solid var(--edge); border-radius: 10px;
+          box-shadow: 0 12px 32px var(--shadow); }
+  .menu button { height: 32px; padding: 0 10px; text-align: left; border: 0; border-radius: 7px;
+                 background: transparent; color: var(--fg); font-size: 13px; white-space: nowrap; }
+  .menu button:hover:not(:disabled) { background: var(--hover); }
+  .menu button:disabled { color: var(--faint); cursor: not-allowed; }
+  .menu hr { height: 1px; margin: 4px 2px; border: 0; background: var(--edge); }
   /* Block is the one that cannot be shrugged off: it stops a release on
      every service running the image until someone lifts it. */
-  .act-danger { color: var(--major); border-color: var(--major-line); }
-  .panel form { flex-basis: 100%; display: flex; gap: .35rem; flex-wrap: wrap;
-                margin-top: .15rem; }
-  .panel input { font: inherit; flex: 1; min-width: 12rem; padding: .2rem .45rem;
-                 border: 1px solid var(--line); border-radius: 5px;
-                 background: var(--card); color: var(--fg); }
-  .panel input::placeholder { color: var(--faint); }
-  .panel .hint { flex-basis: 100%; margin: .15rem 0 0; color: var(--faint); }
-  .foot-link { margin-left: auto; color: var(--faint); text-decoration: none; }
-  .foot-link:hover { color: var(--fg); text-decoration: underline; }
-  .blist { list-style: none; margin: 0; padding: 0; }
-  .blist li { display: flex; align-items: center; gap: .6rem; padding: .45rem 0;
-              border-top: 1px solid var(--line-soft); }
-  .blist li:first-child { border-top: 0; }
-  .blist .what { flex: 1; min-width: 0; }
-  .blist .name { display: block; font-size: .875rem; font-weight: 600; overflow-wrap: anywhere; }
-  .blist .rel { font-weight: 400; }
-  .blist .by { display: block; font-size: .72rem; color: var(--faint); }
-
-  /* ---------- dialogs ---------- */
-  /* The page's own card, raised: same surface, line and radius, so it reads
-     as part of the page in either scheme rather than as the browser's. */
-  .dlg { width: min(28rem, calc(100% - 2rem)); padding: 0; border: 1px solid var(--line);
-         border-radius: 10px; background: var(--card); color: var(--fg);
-         box-shadow: 0 12px 40px rgba(0, 0, 0, .18); }
-  .dlg::backdrop { background: rgba(20, 21, 23, .38); }
-  .dlg form { margin: 0; padding: 1.05rem 1.15rem 1rem; display: flex;
-              flex-direction: column; gap: .7rem; }
-  .dlg h2 { margin: 0; font-size: 1rem; font-weight: 700; letter-spacing: -.005em; }
-  .dlg h2 .to { font-weight: 400; }
-  .dlg .sub { margin: -.45rem 0 0; font-size: .78rem; color: var(--faint); overflow-wrap: anywhere; }
-  .dlg .say { margin: 0; font-size: .875rem; }
-  .dlg .hint { margin: 0; font-size: .78rem; color: var(--muted); }
-  .dlg .buttons { display: flex; justify-content: flex-end; gap: .4rem; margin-top: .15rem; }
-  .dlg .buttons .act { font-size: .84rem; padding: .3rem .8rem; }
-  /* The confirming button, filled: the one the dialog is for. Red when it
-     stops something from being applied. */
-  .dlg .go { border: 1px solid transparent; border-radius: 5px; font-weight: 600;
-             font-size: .84rem; padding: .3rem .8rem;
-             background: var(--accent); color: var(--accent-fg); }
-  .dlg .go.danger { background: var(--major); color: #fff; }
-  .dlg .go:disabled { background: none; border-color: var(--line);
-                      color: var(--faint); font-weight: 400; cursor: not-allowed; }
-  @media (prefers-color-scheme: dark) {
-    .dlg { box-shadow: 0 12px 40px rgba(0, 0, 0, .5); }
-    .dlg::backdrop { background: rgba(0, 0, 0, .55); }
-    /* The dark scheme's red is light, so the text on it is dark. */
-    .dlg .go.danger { color: #1c1e21; }
-  }
-
-  /* ---------- when each host last looked ---------- */
-  .checked { display: flex; align-items: center; flex-wrap: wrap; gap: .25rem .7rem;
-             margin: .7rem 0 0; font-size: .78rem; color: var(--faint); }
-  .checked .h { white-space: nowrap; }
-  .checked .h .mono { color: var(--muted); }
-  .checked .act { margin-left: auto; font-size: .75rem; padding: .1rem .55rem; }
+  .menu .danger { color: var(--danger); }
+  .menu .danger:hover:not(:disabled) { background: color-mix(in oklch, var(--danger) 12%, transparent); }
 
   /* A row from a decider that has stopped answering: shown, because it was
      really queued, but faded because it cannot be confirmed. */
-  .rows > li.stale { opacity: .55; }
+  .rows > li.stale { opacity: .5; }
 
   /* ---------- an apply, as it happens ---------- */
-  .steps { grid-column: 1 / -1; margin: .1rem 0 .35rem;
-           padding: .45rem .65rem .45rem 1.6rem;
-           background: var(--tint); border-radius: 6px; font-size: .78rem;
-           color: var(--muted); }
+  .steps { grid-column: 1 / -1; margin: 12px 0 0;
+           padding: 10px 14px 10px 30px;
+           background: var(--bg); border: 1px solid var(--line-soft); border-radius: 8px;
+           font-size: 12.5px; color: var(--muted); }
   /* A digest is 71 characters with no space or hyphen in it, so a browser has
      nowhere to break the line and lets it run past the panel and off the
      screen -- which on a phone means most of the step is unreadable.
@@ -270,55 +241,100 @@
      this is one word. anywhere is the rule that breaks mid-token. */
   .steps li { padding: .05rem 0; overflow-wrap: anywhere; }
   .steps .ok { color: var(--ok); font-weight: 600; }
-  .steps .bad { color: var(--major); font-weight: 600; }
+  .steps .bad { color: var(--danger); font-weight: 600; }
 
-  /* ---------- soaking: applies itself, later ---------- */
+  /* ---------- scheduled: applies itself, later ---------- */
   /* Its own section, because it is its own thing: nothing here waits for a
-     person. Quieter than the queue, for the same reason. */
-  .soak h1 { color: var(--muted); }
-  .soak .count, .soak .lead { font-weight: 400; color: var(--faint); }
-  .soak .lead { font-size: .8rem; margin: -.35rem 0 .55rem; }
-  .when { font-size: .78rem; color: var(--muted); white-space: nowrap; }
-  .when .in { display: block; color: var(--faint); font-size: .72rem; }
+     person. */
+  .soak .intro { margin-top: 46px; }
+  .soak h2 { margin: 0; font-size: 20px; font-weight: 600; letter-spacing: -.02em;
+             display: flex; align-items: baseline; gap: 10px; }
+  .soak h2 .count { font-size: 14px; }
+  .when { display: flex; flex-direction: column; gap: 4px; font-size: 13px;
+          color: var(--soft); white-space: nowrap; }
+  .when .in { font-size: 11.5px; color: var(--faint); }
 
   /* ---------- empty state: the common case ---------- */
-  .empty { padding: 3rem 1rem 2.75rem; text-align: center; }
+  .empty { margin-top: 36px; padding: 48px 20px; text-align: center;
+           background: var(--card); border: 1px solid var(--line); border-radius: 14px; }
   .tick { width: 2.1rem; height: 2.1rem; margin: 0 auto .9rem;
           border-radius: 50%; border: 1.5px solid var(--ok); position: relative; }
   .tick::after { content: ""; position: absolute; left: .58rem; top: .46rem;
                  width: .46rem; height: .8rem; border: 1.5px solid var(--ok);
                  border-top: 0; border-left: 0; transform: rotate(42deg); }
-  .empty h1 { margin: 0; font-size: 1rem; }
-  .empty p { margin: .25rem auto 0; color: var(--muted); font-size: .875rem;
-             max-width: 24rem; text-wrap: pretty; }
+  .empty h1 { display: block; font-size: 16px; letter-spacing: -.01em; }
+  .empty p { margin: .3rem auto 0; color: var(--muted); font-size: 14px;
+             max-width: 26rem; text-wrap: pretty; }
+
+  /* ---------- dialogs ---------- */
+  /* The page's raised surface, so it reads as part of the page in either
+     scheme rather than as the browser's. */
+  .dlg { width: min(420px, calc(100% - 48px)); padding: 0; border: 1px solid var(--edge);
+         border-radius: 14px; background: var(--raised); color: var(--fg);
+         box-shadow: 0 24px 64px var(--shadow); }
+  .dlg.wide { width: min(460px, calc(100% - 48px)); }
+  .dlg::backdrop { background: var(--scrim); backdrop-filter: blur(3px); }
+  .dlg form { display: flex; flex-direction: column; }
+  .dlg .body { display: flex; flex-direction: column; gap: 14px; padding: 22px 22px 18px; }
+  .dlg .title { display: flex; flex-direction: column; gap: 6px; }
+  .dlg h2 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -.01em; }
+  .dlg h2 .to { font-size: 13px; font-weight: 500; color: var(--soft); }
+  .dlg .sub { margin: 0; font-size: 11.5px; color: var(--faint); overflow-wrap: anywhere; }
+  .dlg .say { margin: 0; font-size: 14px; line-height: 1.5; color: var(--soft); text-wrap: pretty; }
+  .dlg .hint { margin: 0; font-size: 13px; line-height: 1.5; color: var(--muted); text-wrap: pretty; }
+  .dlg .buttons { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 22px;
+                  border-top: 1px solid var(--line); }
+  .dlg .buttons .act { height: 32px; min-width: 84px; }
+  /* The confirming button, filled: the one the dialog is for. Red when it
+     stops something from being applied. */
+  .dlg .go { height: 32px; min-width: 84px; padding: 0 14px; border-radius: 8px; border: 0;
+             font-size: 13px; font-weight: 600; background: var(--accent); color: var(--accent-fg); }
+  .dlg .go.danger { background: var(--danger-fill); color: #fff; }
+  .dlg .go.danger:hover { filter: brightness(1.08); }
+  .blist { list-style: none; margin: 0; padding: 0 10px; }
+  .blist li { display: flex; align-items: center; justify-content: space-between; gap: 16px;
+              padding: 14px 12px; border-bottom: 1px solid var(--line-soft); }
+  .blist .what { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+  .blist .name { font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
+  .blist .rel { font-size: 12.5px; font-weight: 500; color: var(--soft); margin-left: 8px; }
+  .blist .by { font-size: 11.5px; color: var(--faint); }
+  .blist .act { min-width: 96px; flex-shrink: 0; }
+  .dlg .note { padding: 14px 22px 18px; }
 
   /* ---------- footer ---------- */
-  footer { margin-top: 1.25rem; padding-top: .7rem; border-top: 1px solid var(--line);
-           display: flex; gap: .5rem; flex-wrap: wrap;
-           color: var(--faint); font-size: .78rem; }
+  footer { margin-top: 36px; padding-top: 18px; border-top: 1px solid var(--line-soft);
+           display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+           color: var(--faint); font-size: 12px; }
+  .foot-link { color: var(--muted); }
+  .foot-link:hover { color: var(--fg); }
 
-  /* ---------- narrow phones: two tight lines, no sideways scroll ---------- */
-  @media (max-width: 30rem) {
-    body { padding: 1.25rem .9rem 2.5rem; }
+  /* ---------- phones: two lines a row, no sideways scroll ---------- */
+  @media (max-width: 45rem) {
+    body { padding: 20px 16px 32px; }
+    .status { margin-left: 0; width: 100%; justify-content: space-between; }
+    .intro { margin-top: 28px; }
+    .search { min-width: 0; height: 44px; flex-basis: 100%; }
+    /* 16px, or iOS zooms the page in on focus. */
+    .search input { font-size: 16px; }
+    .search kbd { display: none; }
+    .tabs { flex-basis: 100%; }
+    .tabs button { flex: 1; justify-content: center; height: 38px; }
     /* The head draws the card's top edge, which is why main > .rows sets
-       border-top: 0. Hiding it leaves the card open at the top, and the first
-       row's own border-top stands in for it -- inset on both sides, because a
-       row sits inside the card's .7rem padding. That is the short line above
-       the list. Both halves are needed: the card draws its own edge, and the
-       first row stops drawing one. Either alone still looks wrong. */
+       border-top: 0. Hiding it leaves the card open at the top, so the card
+       draws its own edge and the first row stops drawing one. Either alone
+       still looks wrong. */
     .head { display: none; }
-    main > .rows, .soak > .rows { padding: 0 .7rem;
-                   border-top: 1px solid var(--line); border-radius: 10px; }
-    .rows > li:first-child { border-top: 0; }
-    .rows > li { grid-template-columns: minmax(0, 1fr) max-content max-content;
-               row-gap: 0; padding: .4rem 0; min-height: 0; }
-    .svc { grid-column: 1; white-space: normal; }
-    .img { opacity: 1; }
-    .kind { grid-column: 2; justify-self: end; }
-    .rows > li form { grid-column: 3; grid-row: 1 / span 2; justify-self: end; }
-    .acts { grid-column: 1 / -1; grid-row: 3; justify-self: end; margin-top: .3rem; }
-    .jump { grid-column: 1 / 3; grid-row: 2; }
-    .apply { padding: .3rem .7rem; }
+    main > .rows, .soak > .rows { border-top: 1px solid var(--line); border-radius: 14px; }
+    .none { border-top: 1px solid var(--line); border-radius: 14px; }
+    .rows > li:first-child { border-top: 0; border-radius: 13px 13px 0 0; }
+    .rows > li:only-child { border-radius: 13px; }
+    .rows > li { grid-template-columns: minmax(0, 1fr) auto; gap: 12px; padding: 14px 16px; }
+    .svc { grid-column: 1; grid-row: 1; }
+    .svc .img { opacity: 1; }
+    .acts { grid-column: 2; grid-row: 1; }
+    .jump { grid-column: 1; grid-row: 2; }
+    .kind, .when { grid-column: 2; grid-row: 2; justify-self: end; }
+    .when { align-items: flex-end; }
   }
 </style>
 <!-- Served by the sign-in gate; a 404 when the gate is off, which keeps the
@@ -330,16 +346,15 @@
 
      The Go template renders the markup below with petite-vue's directives
      still in it, and the initial state as JSON at the bottom. Without
-     JavaScript nothing renders at all -- see the note below.
-     server-side and the page is complete and correct. With it, petite-vue
-     mounts over the same markup and takes over -- the queue polls, and an
-     apply's steps stream into the row that started it.
+     JavaScript nothing renders at all -- see the note below. With it,
+     petite-vue mounts over the markup and takes over -- the queue polls, and
+     an apply's steps stream into the row that started it.
 
      This is what makes the two update channels one thing. A poll writes to
      `state`, a stream writes to `steps`, and the DOM follows from both
      without either knowing the other exists. -->
 <noscript>
-  <div class="banner banner-error" style="max-width:66rem;margin:1.75rem auto;">
+  <div class="banner banner-error" style="max-width:1056px;margin:28px auto;">
     <span class="who">JavaScript is off</span> — this page is markup the browser
     fills in, so with it disabled there is nothing here. The queue itself is
     still readable as JSON at <code>/api/state</code>, and a decider will
@@ -348,23 +363,26 @@
 </noscript>
 
 <main v-scope="Queue()" @vue:mounted="start()">
-  <div class="top">
-    <img class="logo" src="/logo.png" alt="" width="24" height="24">
-    <span class="mark">duva</span>
-    <a class="signout only-with-gate" href="/auth/logout">Sign out</a>
-  </div>
-
-  <!-- When duva last looked for new releases, per host: each checks on its
-       own schedule. Hover for the exact time. -->
-  <div class="checked" v-if="checks.length">
-    <span>Last checked</span>
-    <span class="h" v-for="c in checks" :key="c.host" :title="c.at ? new Date(c.at).toLocaleString() : ''">
-      <span class="mono">{{ c.host }}</span> {{ ago(c.at) }}
+  <header class="top">
+    <span class="brand">
+      <img class="logo" src="/logo.png" alt="" width="26" height="26">
+      <span class="mark">duva</span>
     </span>
-    <button class="act" v-if="actions" :disabled="checking"
-            title="Look for new releases on every host now"
-            @click="checkAll()">{{ checking ? "Checking…" : "Check for updates" }}</button>
-  </div>
+    <!-- When duva last looked for new releases, per host: each checks on its
+         own schedule. Hover for the exact time. -->
+    <div class="status">
+      <div class="checked" v-if="checks.length">
+        <span>Last checked</span>
+        <span class="h" v-for="c in checks" :key="c.host" :title="c.at ? new Date(c.at).toLocaleString() : ''">
+          <span class="mono">{{ c.host }}</span><span>{{ ago(c.at) }}</span>
+        </span>
+      </div>
+      <button class="act check" v-if="actions" :disabled="checking"
+              title="Look for new releases on every host now"
+              @click="checkAll()">{{ checking ? "Checking…" : "Check for updates" }}</button>
+      <a class="signout only-with-gate" href="/auth/logout">Sign out</a>
+    </div>
+  </header>
 
   <!-- Two kinds of blocked, and what a person should do about them differs.
        No actor is standing: nothing changes until a compose file is edited,
@@ -393,10 +411,11 @@
   </div>
 
   <template v-if="rows.length">
-  <h1>Queue <span class="count">({{ rows.length }})</span></h1>
+  <div class="intro">
+    <h1>Queue <span class="count">{{ rows.length }}</span></h1>
+    <p class="lead">Pending image updates across your hosts.</p>
+  </div>
 
-  <!-- Only when there is more than one host. A single tab reading "optiplex"
-       beside "All" offers a choice between a thing and the same thing. -->
   <!-- No v-if on the tabs. petite-vue's v-if reads el.parentElement, and the
        first element inside a <template v-if> has none while the block is being
        built -- it throws "null is not an object (evaluating 's.insertBefore')"
@@ -406,23 +425,27 @@
        thing. -->
   <div class="filters">
     <div class="tabs" :style="hosts().length > 1 ? '' : 'display:none'">
-      <button :class="host === '' ? 'on' : ''" @click="host = ''">
+      <button :class="host === '' ? 'sel' : ''" @click="host = ''">
         All <span class="n">{{ rows.length }}</span>
       </button>
       <button v-for="h in hosts()" :key="h"
-              :class="host === h ? 'on' : ''" @click="host = h">
+              :class="host === h ? 'sel' : ''" @click="host = h">
         {{ h }} <span class="n">{{ countFor(h) }}</span>
       </button>
     </div>
-    <input class="search" type="search" v-model="q" placeholder="Filter by service, image or tag">
+    <label class="search">
+      <span class="glass" aria-hidden="true">&#8981;</span>
+      <input id="q" type="search" v-model="q" placeholder="Filter by service, image or tag">
+      <kbd>{{ hotkey }}</kbd>
+    </label>
   </div>
 
   <div class="head" aria-hidden="true">
-    <span>Service</span><span>Change</span><span>Kind</span><span></span>
+    <span>Service</span><span>Change</span><span>Kind</span><span>Actions</span>
   </div>
   <ul class="rows">
     <li v-for="r in shown()" :key="r.key" :class="r.stale ? 'stale' : ''">
-      <span class="svc">{{ r.service }}<span class="on mono" v-if="r.host">{{ r.host }}</span><span class="img mono">{{ r.image }}</span></span>
+      <span class="svc"><span class="name">{{ r.service }}</span><span class="sub mono">{{ r.host }}<span class="img">{{ r.host ? " · " : "" }}{{ r.image }}</span></span></span>
 
       <span class="jump mono" v-if="r.moved"><span class="to">{{ r.tag }}</span></span>
       <span class="jump mono" v-else><span class="from">{{ r.current_tag }}</span><span class="arrow">&rarr;</span><span class="to">{{ r.candidate }}</span></span>
@@ -435,18 +458,18 @@
                 :disabled="!r.can_apply || running(r.key) || busyHost(r.host)"
                 :title="buttonReason(r)"
                 @click="apply(r)">{{ running(r.key) ? "Updating…" : "Update" }}</button>
-        <button class="more" v-if="actions" title="Force check, block"
+        <button class="more" v-if="actions" title="Force check, block" aria-haspopup="menu"
                 :aria-expanded="open === r.key ? 'true' : 'false'"
-                @click="toggle(r.key)">&hellip;</button>
+                @click="toggle(r.key)"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        <span class="menu" role="menu" v-if="actions && open === r.key">
+          <button role="menuitem" :disabled="r.stale" @click="act('rescan', r)"
+                  title="Ignore where the last check left off and look over the past week again">Force check</button>
+          <hr>
+          <button role="menuitem" class="danger" :disabled="r.stale || running(r.key)"
+                  title="Never apply this release, until it is unblocked"
+                  @click="startBlock(r)">Block</button>
+        </span>
       </span>
-
-      <div class="panel" v-if="actions && open === r.key">
-        <button class="act" :disabled="r.stale" @click="act('rescan', r)">Force check</button>
-        <button class="act act-danger" :disabled="r.stale || running(r.key)"
-                @click="startBlock(r)">Block</button>
-        <p class="hint">Force check ignores where the last check left off and looks over the past week again. Block never applies this release, until it is unblocked.</p>
-      </div>
-
 
       <ul class="steps" v-if="steps[r.key] || finished[r.key]">
         <li v-for="line in (steps[r.key] || [])">{{ line }}</li>
@@ -467,44 +490,44 @@
     <p v-else>Every container duva watches is where you left it. Nothing will change without your say.</p>
   </div>
 
-  <!-- What applies itself when its soak runs out. Not in the queue above:
+  <!-- What applies itself when its delay runs out. Not in the queue above:
        nobody needs to do anything, so it is told apart rather than mixed in.
        A section with v-if, not a <template>: petite-vue's v-if needs a
        parent element to put the block into. -->
   <section class="soak" v-if="soaking.length">
-    <h1>Scheduled <span class="count">({{ soaking.length }})</span></h1>
-    <p class="lead">Allowed by policy and delayed (duva.delay); each applies itself at the time shown.</p>
+    <div class="intro">
+      <h2>Scheduled <span class="count">{{ soaking.length }}</span></h2>
+      <p class="lead">Allowed by policy and delayed (duva.delay); each updates itself at the time shown.</p>
+    </div>
     <div class="head" aria-hidden="true">
-      <span>Service</span><span>Change</span><span>Applies</span><span></span>
+      <span>Service</span><span>Change</span><span>Applies</span><span>Actions</span>
     </div>
     <ul class="rows">
       <li v-for="r in shownSoaking()" :key="r.key + '#' + r.entry" :class="r.stale ? 'stale' : ''">
-        <span class="svc">{{ r.service }}<span class="on mono" v-if="r.host">{{ r.host }}</span><span class="img mono">{{ r.image }}</span></span>
+        <span class="svc"><span class="name">{{ r.service }}</span><span class="sub mono">{{ r.host }}<span class="img">{{ r.host ? " · " : "" }}{{ r.image }}</span></span></span>
 
         <span class="jump mono" v-if="r.moved"><span class="to">{{ r.tag }}</span></span>
         <span class="jump mono" v-else><span class="from">{{ r.current_tag }}</span><span class="arrow">&rarr;</span><span class="to">{{ r.candidate }}</span></span>
 
-        <span class="when" :title="r.why">{{ when(r.release_at) }}<span class="in">{{ until(r.release_at) }}</span></span>
-
-        <span class="acts">
-          <button class="apply" v-if="canApply"
-                  :disabled="!r.can_apply || running(r.key) || busyHost(r.host)"
-                  :title="buttonReason(r) || 'Apply it now, without waiting for the delay'"
-                  @click="apply(r)">{{ running(r.key) ? "Updating…" : "Apply now" }}</button>
-          <button class="more" v-if="actions" title="Block"
-                  :aria-expanded="open === r.key + '#' + r.entry ? 'true' : 'false'"
-                  @click="toggle(r.key + '#' + r.entry)">&hellip;</button>
-        </span>
+        <span class="when" :title="r.why">{{ when(r.release_at) }}<span class="in mono">{{ until(r.release_at) }}</span></span>
 
         <!-- Told apart by its entry: a service can be in both tables. No
              Force check here: a scheduled release has not been passed over,
              and finding it again changes nothing. -->
-        <div class="panel" v-if="actions && open === r.key + '#' + r.entry">
-          <button class="act act-danger" :disabled="r.stale || running(r.key)"
-                  @click="startBlock(r)">Block</button>
-          <p class="hint">Block never applies this release, until it is unblocked.</p>
-        </div>
-
+        <span class="acts">
+          <button class="apply" v-if="canApply"
+                  :disabled="!r.can_apply || running(r.key) || busyHost(r.host)"
+                  :title="buttonReason(r) || 'Update now, without waiting for the delay'"
+                  @click="apply(r)">{{ running(r.key) ? "Updating…" : "Update now" }}</button>
+          <button class="more" v-if="actions" title="Block" aria-haspopup="menu"
+                  :aria-expanded="open === r.key + '#' + r.entry ? 'true' : 'false'"
+                  @click="toggle(r.key + '#' + r.entry)"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+          <span class="menu" role="menu" v-if="actions && open === r.key + '#' + r.entry">
+            <button role="menuitem" class="danger" :disabled="r.stale || running(r.key)"
+                    title="Never apply this release, until it is unblocked"
+                    @click="startBlock(r)">Block</button>
+          </span>
+        </span>
 
         <ul class="steps" v-if="steps[r.key] || finished[r.key]">
           <li v-for="line in (steps[r.key] || [])">{{ line }}</li>
@@ -519,10 +542,14 @@
        about whichever row was clicked, in either section. -->
   <dialog class="dlg" id="block" @close="blockRow = null">
     <form v-if="blockRow" @submit.prevent="block()">
-      <h2>Block {{ blockRow.service }} <span class="to mono">{{ blockRow.moved ? "this digest" : blockRow.candidate }}</span>?</h2>
-      <p class="sub mono">{{ blockRow.host }} &middot; {{ blockRow.image }}</p>
-      <p class="say">Block this update from being applied, on any service running {{ blockRow.image }}.</p>
-      <p class="hint">You can unblock it under Blocked, at the bottom of the page.</p>
+      <div class="body">
+        <div class="title">
+          <h2>Block {{ blockRow.service }} <span class="to mono">{{ blockRow.moved ? "this digest" : blockRow.candidate }}</span>?</h2>
+          <p class="sub mono">{{ blockRow.host ? blockRow.host + " · " : "" }}{{ blockRow.image }}</p>
+        </div>
+        <p class="say">Block this update from being applied, on any service running {{ blockRow.image }}.</p>
+        <p class="hint">You can unblock it under Blocked, at the bottom of the page.</p>
+      </div>
       <div class="buttons">
         <button class="act" type="button" @click="closeBlock()">Cancel</button>
         <button class="go danger" type="submit">Block</button>
@@ -532,24 +559,24 @@
 
   <!-- The blocked releases, from the footer: rarely needed, so out of the
        way, but there for the day one should come back. -->
-  <dialog class="dlg" id="blocks">
+  <dialog class="dlg wide" id="blocks">
     <form method="dialog">
-      <h2>Blocked releases</h2>
+      <div class="body"><h2>Blocked releases</h2></div>
       <ul class="blist">
         <li v-for="b in blocks" :key="b.host + b.image + b.digest">
           <span class="what">
-            <span class="name">{{ b.image }} <span class="mono rel">{{ b.release || b.digest.slice(7, 19) }}</span></span>
+            <span class="name">{{ b.image }}<span class="mono rel">{{ b.release || b.digest.slice(7, 19) }}</span></span>
             <span class="by mono">{{ b.host }} &middot; {{ b.by }} &middot; {{ dateOf(b.at) }}</span>
           </span>
           <button class="act" type="button" @click="unblock(b)">Unblock</button>
         </li>
       </ul>
-      <p class="hint">Unblocking puts the release back in the queue, waiting for you.</p>
+      <p class="hint note">Unblocking puts the release back in the queue, waiting for you.</p>
       <div class="buttons"><button class="act">Close</button></div>
     </form>
   </dialog>
 
-  <footer>
+  <footer class="mono">
     <span>duva {{ version }}</span>
     <a href="#" class="foot-link" v-if="actions && blocks.length"
        @click.prevent="openBlocks()">Blocked</a>
@@ -557,8 +584,7 @@
 </main>
 
 <!-- The first paint's data, so the page is correct before any request is
-     made. Written by the template rather than fetched, which is what keeps
-     the no-JavaScript case whole. -->
+     made. Written by the template rather than fetched. -->
 <script type="application/json" id="initial">[[ .InitialJSON ]]</script>
 
 <script type="module">
@@ -579,13 +605,14 @@ createApp({
       canApply: initial.can_apply,
       actions: initial.actions,
       version: initial.version,
-      open: "",         // the row whose actions are open
+      open: "",         // the row whose menu is open
       blockRow: null,   // the row the block dialog is about
       steps: {},        // key -> lines so far
       finished: {},     // key -> terminal status
       result: {},       // the last apply's answer, when it refused
       host: "",         // "" is every host
       q: "",            // what was typed in the search box
+      hotkey: /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent) ? "⌘K" : "Ctrl K",
 
       // Pick up applies this page did not start.
       //
@@ -611,6 +638,21 @@ createApp({
         setInterval(() => { if (!document.hidden) this.poll() }, 15000)
         document.addEventListener("visibilitychange", () => {
           if (!document.hidden) this.poll()
+        })
+        // A menu closes on a click anywhere outside the row's controls.
+        document.addEventListener("click", e => {
+          if (this.open && !e.target.closest(".acts")) this.open = ""
+        })
+        // ⌘K (Ctrl K) jumps to the filter; Escape closes a menu, or clears
+        // and leaves the filter.
+        document.addEventListener("keydown", e => {
+          const q = document.getElementById("q")
+          if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k" && q) {
+            e.preventDefault(); q.focus(); q.select()
+          } else if (e.key === "Escape") {
+            if (this.open) this.open = ""
+            else if (q && document.activeElement === q) { this.q = ""; q.blur() }
+          }
         })
       },
 
@@ -770,7 +812,7 @@ createApp({
         return at ? new Date(at).toLocaleDateString(undefined, { day: "numeric", month: "short" }) : ""
       },
 
-      // The soaking rows the tab and the search box allow.
+      // The scheduled rows the tab and the search box allow.
       shownSoaking() {
         const q = this.q.trim().toLowerCase()
         return this.soaking.filter(r =>
@@ -779,7 +821,7 @@ createApp({
                   r.candidate + " " + r.tag).toLowerCase().includes(q)))
       },
 
-      // When a soak ends, in the reader's own clock.
+      // When a delay ends, in the reader's own clock.
       when(at) {
         if (!at) return ""
         return new Date(at).toLocaleString(undefined,
@@ -806,6 +848,7 @@ createApp({
       // Blocking acts on the entry; a rescan on the service. Either way the
       // answer is a sentence, empty on success.
       async act(kind, r, body) {
+        this.open = ""
         const subject = kind === "block" ? r.entry : r.service
         const res = await fetch("/api/" + kind + "/" + encodeURIComponent(r.host) + "/" + encodeURIComponent(subject),
                                 { method: "POST", body })
@@ -818,12 +861,8 @@ createApp({
         this.result = message
           ? { service: r.service, level: "error", message }
           : { service: r.service, level: "ok", message: done[kind] }
-        if (!message) {
-          this.open = ""
-        }
         await this.poll()
       },
-
 
       async apply(r) {
         this.result = {}
@@ -832,7 +871,7 @@ createApp({
         const { [r.key]: _done, ...others } = this.finished
         this.finished = others
         this.steps = { ...this.steps, [r.key]: [] }
-        // By its entry: a service can have one soaking and one waiting.
+        // By its entry: a service can have one scheduled and one waiting.
         const applied = await fetch("/api/apply/" + r.key + "?entry=" + r.entry, { method: "POST" })
         if (applied.status === 401) { location.reload(); return }
         const res = await applied.json()
