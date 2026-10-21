@@ -232,17 +232,27 @@
   .dlg .hint { margin: 0; font-size: .78rem; color: var(--muted); }
   .dlg .buttons { display: flex; justify-content: flex-end; gap: .4rem; margin-top: .15rem; }
   .dlg .buttons .act { font-size: .84rem; padding: .3rem .8rem; }
-  /* The confirming button, filled: the one the dialog is for. The accent,
-     not red: a block is undone from the list in the footer. */
+  /* The confirming button, filled: the one the dialog is for. Red when it
+     stops something from being applied. */
   .dlg .go { border: 1px solid transparent; border-radius: 5px; font-weight: 600;
              font-size: .84rem; padding: .3rem .8rem;
              background: var(--accent); color: var(--accent-fg); }
+  .dlg .go.danger { background: var(--major); color: #fff; }
   .dlg .go:disabled { background: none; border-color: var(--line);
                       color: var(--faint); font-weight: 400; cursor: not-allowed; }
   @media (prefers-color-scheme: dark) {
     .dlg { box-shadow: 0 12px 40px rgba(0, 0, 0, .5); }
     .dlg::backdrop { background: rgba(0, 0, 0, .55); }
+    /* The dark scheme's red is light, so the text on it is dark. */
+    .dlg .go.danger { color: #1c1e21; }
   }
+
+  /* ---------- when each host last looked ---------- */
+  .checked { display: flex; align-items: center; flex-wrap: wrap; gap: .25rem .7rem;
+             margin: .7rem 0 0; font-size: .78rem; color: var(--faint); }
+  .checked .h { white-space: nowrap; }
+  .checked .h .mono { color: var(--muted); }
+  .checked .act { margin-left: auto; font-size: .75rem; padding: .1rem .55rem; }
 
   /* A row from a decider that has stopped answering: shown, because it was
      really queued, but faded because it cannot be confirmed. */
@@ -342,6 +352,18 @@
     <img class="logo" src="/logo.png" alt="" width="24" height="24">
     <span class="mark">duva</span>
     <a class="signout only-with-gate" href="/auth/logout">Sign out</a>
+  </div>
+
+  <!-- When duva last looked for new releases, per host: each checks on its
+       own schedule. Hover for the exact time. -->
+  <div class="checked" v-if="checks.length">
+    <span>Last checked</span>
+    <span class="h" v-for="c in checks" :key="c.host" :title="c.at ? new Date(c.at).toLocaleString() : ''">
+      <span class="mono">{{ c.host }}</span> {{ ago(c.at) }}
+    </span>
+    <button class="act" v-if="actions" :disabled="checking"
+            title="Look for new releases on every host now"
+            @click="checkAll()">{{ checking ? "Checking…" : "Check now" }}</button>
   </div>
 
   <!-- Two kinds of blocked, and what a person should do about them differs.
@@ -498,7 +520,7 @@
       <p class="hint">You can unblock it under Blocked, at the bottom of the page.</p>
       <div class="buttons">
         <button class="act" type="button" @click="closeBlock()">Cancel</button>
-        <button class="go" type="submit">Block</button>
+        <button class="go danger" type="submit">Block</button>
       </div>
     </form>
   </dialog>
@@ -545,6 +567,8 @@ createApp({
       rows: initial.rows || [],
       soaking: initial.soaking || [],
       blocks: initial.blocks || [],
+      checks: initial.checks || [],
+      checking: false,  // a check-all was just asked for
       unreachable: initial.unreachable || [],
       blocked: initial.blocked || [],
       canApply: initial.can_apply,
@@ -595,6 +619,7 @@ createApp({
           this.rows = s.rows || []
           this.soaking = s.soaking || []
           this.blocks = s.blocks || []
+          this.checks = s.checks || []
           this.unreachable = s.unreachable || []
           this.blocked = s.blocked || []
           this.canApply = s.can_apply
@@ -690,6 +715,32 @@ createApp({
         const r = this.blockRow
         this.closeBlock()
         return this.act("block", r)
+      },
+
+      // How long ago, coarsely: a check happens daily, so minutes are the
+      // finest that matters.
+      ago(at) {
+        if (!at) return "not yet"
+        const m = Math.floor((Date.now() - new Date(at)) / 60000)
+        if (m < 1) return "just now"
+        if (m < 60) return m + "m ago"
+        const h = Math.floor(m / 60)
+        if (h < 24) return h + "h ago"
+        return Math.floor(h / 24) + "d ago"
+      },
+
+      // Every host looks for new releases now. What it finds arrives in the
+      // queue as any finding does; the times above move as each host starts.
+      async checkAll() {
+        this.checking = true
+        const res = await fetch("/api/check-all", { method: "POST" })
+        if (res.status === 401) { location.reload(); return }
+        const { message } = await res.json()
+        this.result = message
+          ? { service: "Check now", level: "error", message }
+          : { service: "Check now", level: "ok", message: "looking for new releases on every host; anything found will appear here" }
+        setTimeout(() => this.poll(), 3000)
+        setTimeout(() => { this.checking = false; this.poll() }, 15000)
       },
 
       openBlocks() {

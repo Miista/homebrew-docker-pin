@@ -80,6 +80,10 @@ func (r *recordedActions) Check(host, service, actor string) error {
 	r.calls = append(r.calls, "check "+host+" "+service+" "+actor)
 	return nil
 }
+func (r *recordedActions) CheckAll(actor string) error {
+	r.calls = append(r.calls, "check all "+actor)
+	return nil
+}
 func (r *recordedActions) Unblock(host, image, digest, actor string) error {
 	r.calls = append(r.calls, "unblock "+host+" "+image+"@"+digest+" "+actor)
 	return nil
@@ -144,5 +148,41 @@ func TestUnblockReachesALocalQueue(t *testing.T) {
 	c.Unblock("optiplex", "postgres", "sha256:bad", "soren")
 	if len(local.acted) != 1 || local.acted[0] != "unblock postgres@sha256:bad by soren" {
 		t.Errorf("acted = %v", local.acted)
+	}
+}
+
+// Every host is asked, whatever another answers, and a refusal says which.
+func TestCheckAllAsksEveryHost(t *testing.T) {
+	optiplex := &localQueue{}
+	var asked string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked = r.URL.Path
+		json.NewEncoder(w).Encode(map[string]string{"message": "a check was asked for a moment ago"})
+	}))
+	defer srv.Close()
+	c := NewCollector([]Upstream{{Host: "optiplex", Local: optiplex}, {Host: "pi", URL: srv.URL}})
+
+	err := c.CheckAll("soren")
+	if len(optiplex.acted) != 1 || optiplex.acted[0] != "check all by soren" {
+		t.Errorf("optiplex acted = %v", optiplex.acted)
+	}
+	if asked != "/v1/check-all" {
+		t.Errorf("pi was asked %q", asked)
+	}
+	if err == nil || !strings.Contains(err.Error(), "pi: ") {
+		t.Errorf("err = %v, want pi's refusal, named", err)
+	}
+}
+
+// The page is told when each host last looked, in the configured order.
+func TestTheStateSaysWhenEachHostChecked(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{"last_check": "2026-10-21T03:00:00Z"})
+	}))
+	defer srv.Close()
+	c := NewCollector([]Upstream{{Host: "pi", URL: srv.URL}})
+	checks := c.LastChecks()
+	if len(checks) != 1 || checks[0] != (HostCheck{Host: "pi", At: "2026-10-21T03:00:00Z"}) {
+		t.Errorf("checks = %+v", checks)
 	}
 }

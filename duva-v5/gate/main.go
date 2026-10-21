@@ -25,7 +25,6 @@ package gate
 import (
 	"context"
 	"fmt"
-	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/settings"
 	"net/http"
 	"os"
 	"time"
@@ -43,6 +42,7 @@ import (
 	// Aliased: this binary lives in queue/, so the bare name would be
 	// ambiguous with the package it is the command for.
 	q "github.com/Miista/homebrew-docker-pin/duva-v5/internal/queue"
+	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/settings"
 	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/store"
 )
 
@@ -107,6 +107,9 @@ type Options struct {
 	// a version change. Nil leaves each action unavailable.
 	Check, Rescan func(service string) error
 	Resolve       func(image, tag string) (string, error)
+	// LastChecked is when the watcher last looked for new tags, for the
+	// page. Nil: not reported.
+	LastChecked func() time.Time
 	// Store is where the queue is kept. Nil opens /data/duva.db.
 	Store *store.Store
 	// Labels reads a service's policy from its container. Nil reads it from
@@ -232,6 +235,8 @@ func New(log zerolog.Logger, opts Options) (*Gate, error) {
 			Check:   opts.Check,
 			Rescan:  opts.Rescan,
 			Resolve: opts.Resolve,
+
+			LastChecked: opts.LastChecked,
 		},
 		applying:   applying,
 		live:       live,

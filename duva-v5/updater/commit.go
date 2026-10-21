@@ -2,12 +2,13 @@ package updater
 
 import (
 	"fmt"
-	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/settings"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"text/template"
+
+	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/settings"
 )
 
 // The subject the updater commits under.

@@ -79,11 +79,18 @@ type Actions interface {
 	Check(host, service, actor string) error
 	Rescan(host, service, actor string) error
 	Unblock(host, image, digest, actor string) error
+	// CheckAll asks every host to look for new tags now.
+	CheckAll(actor string) error
 }
 
 // BlockSource is a Source that also reports what is blocked.
 type BlockSource interface {
 	Blocks() []HostedBlock
+}
+
+// CheckSource is a Source that also reports when each host last checked.
+type CheckSource interface {
+	LastChecks() []HostCheck
 }
 
 // Server serves the queue.
@@ -125,6 +132,7 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("/api/check/", s.action("/api/check/", s.check))
 		mux.HandleFunc("/api/rescan/", s.action("/api/rescan/", s.rescan))
 		mux.HandleFunc("/api/unblock/", s.unblock)
+		mux.HandleFunc("/api/check-all", s.checkAll)
 	}
 	mux.HandleFunc("/", s.index)
 	return mux
@@ -235,10 +243,12 @@ type state struct {
 	// own, shown apart from what waits for a person.
 	Soaking []row `json:"soaking"`
 	// Blocks are the releases a person blocked, on every host.
-	Blocks      []HostedBlock `json:"blocks"`
-	Unreachable []Problem     `json:"unreachable"`
-	Blocked     []Blocked     `json:"blocked"`
-	CanApply    bool          `json:"can_apply"`
+	Blocks []HostedBlock `json:"blocks"`
+	// Checks is when each host last looked for new tags.
+	Checks      []HostCheck `json:"checks"`
+	Unreachable []Problem   `json:"unreachable"`
+	Blocked     []Blocked   `json:"blocked"`
+	CanApply    bool        `json:"can_apply"`
 	// Actions is whether the page offers discard, block, check and rescan.
 	Actions bool   `json:"actions"`
 	Version string `json:"version"`
@@ -260,6 +270,10 @@ func (s *Server) snapshot() state {
 	if bs, ok := s.Source.(BlockSource); ok {
 		blocks = bs.Blocks()
 	}
+	checks := []HostCheck{}
+	if cs, ok := s.Source.(CheckSource); ok {
+		checks = cs.LastChecks()
+	}
 	// Initialised rather than left nil: Go encodes a nil slice as JSON null,
 	// and a page reading .length off it throws before rendering anything.
 	unreachable := s.Source.Unreachable()
@@ -274,6 +288,7 @@ func (s *Server) snapshot() state {
 		Rows:        rows,
 		Soaking:     soaking,
 		Blocks:      blocks,
+		Checks:      checks,
 		Unreachable: unreachable,
 		Blocked:     blocked,
 		CanApply:    s.Approver != nil,
@@ -535,6 +550,20 @@ func (s *Server) unblock(w http.ResponseWriter, r *http.Request) {
 	host := strings.TrimPrefix(r.URL.Path, "/api/unblock/")
 	message := ""
 	if err := s.Actions.Unblock(host, r.FormValue("image"), r.FormValue("digest"), s.actor(r)); err != nil {
+		message = err.Error()
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	json.NewEncoder(w).Encode(map[string]string{"message": message})
+}
+
+// checkAll asks every host to look for new tags now: POST /api/check-all.
+func (s *Server) checkAll(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	message := ""
+	if err := s.Actions.CheckAll(s.actor(r)); err != nil {
 		message = err.Error()
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")

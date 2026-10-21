@@ -25,8 +25,8 @@ package watcher
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
-	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/settings"
 	"os"
 	"regexp"
 	"strings"
@@ -43,6 +43,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/Miista/homebrew-docker-pin/compose"
+	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/settings"
 	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/store"
 	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/watch"
 	"github.com/Miista/homebrew-docker-pin/internal/croncal"
@@ -158,9 +159,24 @@ var runMu sync.Mutex
 
 // Check checks one service now, by its compose name or container name: what
 // the page's "check now" asks for. Its cutoff is kept, so only what is new
-// since the last check is found.
+// since the last check is found. An empty service checks every one.
 func Check(log zerolog.Logger, service string, opts Options) error {
 	return run(log, service, opts)
+}
+
+// LastChecked is when this host last looked for new tags: the latest cutoff
+// recorded, which each service's check stamps as it starts. Zero when nothing
+// has been checked yet.
+func LastChecked(st *store.Store) time.Time {
+	var raw sql.NullString
+	if err := st.DB().QueryRow(`SELECT MAX(cutoff) FROM watch_cutoffs`).Scan(&raw); err != nil || !raw.Valid {
+		return time.Time{}
+	}
+	at, err := time.Parse(time.RFC3339Nano, raw.String)
+	if err != nil {
+		return time.Time{}
+	}
+	return at
 }
 
 // Rescan forgets one service's cutoff and checks it, so it looks back the

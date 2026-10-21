@@ -54,6 +54,9 @@ type Server struct {
 	// whose digest the queue has not learned. Nil: only entries that carry
 	// a digest can be blocked.
 	Resolve func(image, tag string) (string, error)
+	// LastChecked is when this host last looked for new tags. Nil: not
+	// reported.
+	LastChecked func() time.Time
 
 	cooldownMu sync.Mutex
 	lastAsked  map[string]time.Time
@@ -77,6 +80,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/unblock", s.guard(s.post("/v1/unblock", s.unblockBy)))
 	mux.HandleFunc("/v1/check/", s.guard(s.post("/v1/check/", s.checkBy)))
 	mux.HandleFunc("/v1/rescan/", s.guard(s.post("/v1/rescan/", s.rescanBy)))
+	mux.HandleFunc("/v1/check-all", s.guard(s.post("/v1/check-all", func(_ string, r *http.Request) string {
+		return s.CheckAll(actorOf(r))
+	})))
 	return mux
 }
 
@@ -106,6 +112,9 @@ type Snapshot struct {
 	Soaking []Entry `json:"soaking"`
 	// Blocks are the releases a person blocked, still standing.
 	Blocks []Block `json:"blocks"`
+	// LastCheck is when this host last looked for new tags, RFC 3339; empty
+	// before its first check.
+	LastCheck string `json:"last_check,omitempty"`
 	// CanApply is whether an update approved now would actually be attempted.
 	//
 	// Not merely "an updater is configured". An updater that is there and would
@@ -160,16 +169,23 @@ func (s *Server) snapshot(w http.ResponseWriter, r *http.Request) {
 // Snapshot is what /v1/snapshot answers, for a UI in the same process.
 func (s *Server) Snapshot() Snapshot {
 	canApply, blocker, whyNot := s.actorReadiness()
+	lastCheck := ""
+	if s.LastChecked != nil {
+		if at := s.LastChecked(); !at.IsZero() {
+			lastCheck = at.UTC().Format(time.RFC3339)
+		}
+	}
 	return Snapshot{
-		Host:     s.Host,
-		Version:  s.Version,
-		Pending:  s.Queue.Waiting(),
-		Soaking:  s.Queue.Soaking(),
-		Blocks:   s.Queue.Blocks(),
-		CanApply: canApply,
-		Blocker:  blocker,
-		WhyNot:   whyNot,
-		Applying: s.applying(),
+		Host:      s.Host,
+		Version:   s.Version,
+		Pending:   s.Queue.Waiting(),
+		Soaking:   s.Queue.Soaking(),
+		Blocks:    s.Queue.Blocks(),
+		LastCheck: lastCheck,
+		CanApply:  canApply,
+		Blocker:   blocker,
+		WhyNot:    whyNot,
+		Applying:  s.applying(),
 	}
 }
 
@@ -426,6 +442,24 @@ func (s *Server) cooled(service string) bool {
 // CheckNow asks the watcher to look at a service now.
 func (s *Server) CheckNow(service, actor string) string {
 	return s.ask(service, actor, "check", s.Check)
+}
+
+// CheckAll asks the watcher to look at every service now: the page's
+// "Check now". Once a minute at most, like a check of one.
+func (s *Server) CheckAll(actor string) string {
+	if s.Check == nil {
+		return "nothing here can check"
+	}
+	if !s.cooled("*") {
+		return "a check was asked for a moment ago; try again in a minute"
+	}
+	s.Queue.Asked("", "check-all", actor, time.Now())
+	go func() {
+		if err := s.Check(""); err != nil {
+			s.Queue.fail(fmt.Errorf("checking every service: %w", err))
+		}
+	}()
+	return ""
 }
 
 // RescanNow asks the watcher to forget a service's cutoff and look again.

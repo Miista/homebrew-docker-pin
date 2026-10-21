@@ -25,7 +25,6 @@ package updater
 import (
 	"errors"
 	"fmt"
-	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/settings"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -42,6 +41,7 @@ import (
 	"github.com/Miista/homebrew-docker-pin/compose"
 	"github.com/Miista/homebrew-docker-pin/dockerapi"
 
+	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/settings"
 	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/update"
 )
 

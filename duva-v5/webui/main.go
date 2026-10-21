@@ -23,7 +23,6 @@ package webui
 import (
 	"context"
 	"fmt"
-	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/settings"
 	"net/http"
 	"os"
 	"strconv"
@@ -36,6 +35,7 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/settings"
 	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/ui"
 	"github.com/miista/authy"
 )

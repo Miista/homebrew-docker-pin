@@ -55,6 +55,11 @@ func (l *localQueue) RescanNow(service, actor string) string {
 	return ""
 }
 
+func (l *localQueue) CheckAll(actor string) string {
+	l.acted = append(l.acted, "check all by "+actor)
+	return l.refuse
+}
+
 func (l *localQueue) Unblock(image, digest, actor string) string {
 	l.acted = append(l.acted, "unblock "+image+"@"+digest+" by "+actor)
 	return ""

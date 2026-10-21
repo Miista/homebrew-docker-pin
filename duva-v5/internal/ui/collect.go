@@ -56,6 +56,7 @@ type LocalQueue interface {
 	Block(id int64, reason, actor string) string
 	CheckNow(service, actor string) string
 	Unblock(image, digest, actor string) string
+	CheckAll(actor string) string
 	RescanNow(service, actor string) string
 }
 
@@ -100,6 +101,8 @@ type snapshot struct {
 	soaking []queue.Entry
 	// blocks are the releases blocked on that host.
 	blocks []queue.Block
+	// lastCheck is when that host last looked for new tags, RFC 3339.
+	lastCheck string
 	// canApply is whether this queue has an update. Per queue, not per
 	// collector: one host can have an updater while another does not.
 	canApply bool
@@ -145,7 +148,8 @@ func (c *Collector) Collect() {
 			for _, svc := range snap.Applying {
 				applying[svc] = true
 			}
-			results[i] = snapshot{queue: snap.Pending, soaking: snap.Soaking, blocks: snap.Blocks, canApply: snap.CanApply,
+			results[i] = snapshot{queue: snap.Pending, soaking: snap.Soaking, blocks: snap.Blocks,
+				lastCheck: snap.LastCheck, canApply: snap.CanApply,
 				blocker: string(snap.Blocker), whyNot: snap.WhyNot,
 				applying: applying, err: err}
 		}(i, d)
@@ -165,6 +169,7 @@ func (c *Collector) Collect() {
 			results[i].queue = prev.queue
 			results[i].soaking = prev.soaking
 			results[i].blocks = prev.blocks
+			results[i].lastCheck = prev.lastCheck
 			// Never applyable while unreachable, whatever the last answer
 			// said: the route to the updater is through the queue.
 			results[i].canApply = false
@@ -652,4 +657,41 @@ func (c *Collector) Unblock(host, image, digest, actor string) error {
 	return c.act(host, actor,
 		func(l LocalQueue) string { return l.Unblock(image, digest, actor) },
 		"/v1/unblock", url.Values{"image": {image}, "digest": {digest}})
+}
+
+// HostCheck is when one host last looked for new tags.
+type HostCheck struct {
+	Host string `json:"host"`
+	// At is RFC 3339; empty before that host's first check, or while it
+	// has never answered.
+	At string `json:"at"`
+}
+
+// LastChecks is each host's last check, in the configured order.
+func (c *Collector) LastChecks() []HostCheck {
+	c.fresh()
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	out := make([]HostCheck, 0, len(c.Upstreams))
+	for _, d := range c.Upstreams {
+		out = append(out, HostCheck{Host: d.Host, At: c.cache[d.Host].lastCheck})
+	}
+	return out
+}
+
+// CheckAll asks every host to look for new tags now. Every host is asked,
+// whatever another answers; the answer is each refusal, by host.
+func (c *Collector) CheckAll(actor string) error {
+	var refused []string
+	for _, d := range c.Upstreams {
+		if err := c.act(d.Host, actor,
+			func(l LocalQueue) string { return l.CheckAll(actor) },
+			"/v1/check-all", nil); err != nil {
+			refused = append(refused, d.Host+": "+err.Error())
+		}
+	}
+	if len(refused) > 0 {
+		return fmt.Errorf("%s", strings.Join(refused, "; "))
+	}
+	return nil
 }

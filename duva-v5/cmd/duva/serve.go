@@ -96,6 +96,8 @@ func serve() error {
 		Check:   func(service string) error { return watcher.Check(watchLog, service, watching) },
 		Rescan:  func(service string) error { return watcher.Rescan(watchLog, service, watching) },
 		Resolve: registry.RemoteDigest,
+		// For the page's "last checked".
+		LastChecked: func() time.Time { return watcher.LastChecked(st) },
 		// The service sync's view of this host. Translated here: the queue
 		// knows nothing about docker.
 		Containers: func() ([]q.Container, error) {
