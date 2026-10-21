@@ -363,7 +363,7 @@
     </span>
     <button class="act" v-if="actions" :disabled="checking"
             title="Look for new releases on every host now"
-            @click="checkAll()">{{ checking ? "Checking…" : "Check now" }}</button>
+            @click="checkAll()">{{ checking ? "Checking…" : "Check for updates" }}</button>
   </div>
 
   <!-- Two kinds of blocked, and what a person should do about them differs.
@@ -435,16 +435,16 @@
                 :disabled="!r.can_apply || running(r.key) || busyHost(r.host)"
                 :title="buttonReason(r)"
                 @click="apply(r)">{{ running(r.key) ? "Updating…" : "Update" }}</button>
-        <button class="more" v-if="actions" title="Re-scan, block"
+        <button class="more" v-if="actions" title="Force check, block"
                 :aria-expanded="open === r.key ? 'true' : 'false'"
                 @click="toggle(r.key)">&hellip;</button>
       </span>
 
       <div class="panel" v-if="actions && open === r.key">
-        <button class="act" :disabled="r.stale" @click="act('rescan', r)">Re-scan</button>
+        <button class="act" :disabled="r.stale" @click="act('rescan', r)">Force check</button>
         <button class="act act-danger" :disabled="r.stale || running(r.key)"
                 @click="startBlock(r)">Block</button>
-        <p class="hint">Re-scan looks back over the whole window again. Block never applies this release, until it is unblocked.</p>
+        <p class="hint">Force check ignores where the last check left off and looks over the past week again. Block never applies this release, until it is unblocked.</p>
       </div>
 
 
@@ -491,17 +491,17 @@
                   :disabled="!r.can_apply || running(r.key) || busyHost(r.host)"
                   :title="buttonReason(r) || 'Apply it now, without waiting for the delay'"
                   @click="apply(r)">{{ running(r.key) ? "Updating…" : "Apply now" }}</button>
-          <button class="more" v-if="actions" title="Re-scan, block"
+          <button class="more" v-if="actions" title="Force check, block"
                   :aria-expanded="open === r.key + '#' + r.entry ? 'true' : 'false'"
                   @click="toggle(r.key + '#' + r.entry)">&hellip;</button>
         </span>
 
         <!-- Told apart by its entry: a service can be in both tables. -->
         <div class="panel" v-if="actions && open === r.key + '#' + r.entry">
-          <button class="act" :disabled="r.stale" @click="act('rescan', r)">Re-scan</button>
+          <button class="act" :disabled="r.stale" @click="act('rescan', r)">Force check</button>
           <button class="act act-danger" :disabled="r.stale || running(r.key)"
                   @click="startBlock(r)">Block</button>
-          <p class="hint">Re-scan looks back over the whole window again. Block never applies this release, until it is unblocked.</p>
+          <p class="hint">Force check ignores where the last check left off and looks over the past week again. Block never applies this release, until it is unblocked.</p>
         </div>
 
 
@@ -741,8 +741,8 @@ createApp({
         if (res.status === 401) { location.reload(); return }
         const { message } = await res.json()
         this.result = message
-          ? { service: "Check now", level: "error", message }
-          : { service: "Check now", level: "ok", message: "looking for new releases on every host; anything found will appear here" }
+          ? { service: "Check for updates", level: "error", message }
+          : { service: "Check for updates", level: "ok", message: "looking for new releases on every host; anything found will appear here" }
         setTimeout(() => this.poll(), 3000)
         setTimeout(() => { this.checking = false; this.poll() }, 15000)
       },
@@ -811,7 +811,7 @@ createApp({
         if (res.status === 401) { location.reload(); return }
         const { message } = await res.json()
         const done = {
-          rescan: "looking back over the whole window again; anything found will appear here",
+          rescan: "checking the past week again; anything found will appear here",
           block: "blocked; it won't be applied on any service running " + r.image,
         }
         this.result = message
