@@ -27,6 +27,7 @@ import (
 	"database/sql"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -167,10 +168,30 @@ func Check(log zerolog.Logger, service string, back time.Duration, opts Options)
 	return run(log, service, back, opts)
 }
 
-// Watched is every service the watcher has checked, by compose name, sorted:
-// what a person may pick to check again. A service retired from the compose
-// file keeps its cutoff, so a caller that knows which still run narrows this.
+// watching is the services the last full check looked at, by compose name,
+// sorted: exactly what a check of every service covers now.
+var (
+	watchingMu sync.Mutex
+	watching   []string
+)
+
+// Watched is every service the watcher checks, by compose name, sorted: what
+// a person may pick to check again. The last full check's list, not the
+// cutoffs: a service unpinned, or retired from the compose file, keeps its
+// cutoff, and picking it would ask for a check of something not watched.
+// Until the first full check after a start, the cutoffs are all there is.
 func Watched(st *store.Store) []string {
+	watchingMu.Lock()
+	known := watching
+	watchingMu.Unlock()
+	if known != nil {
+		return known
+	}
+	return checked(st)
+}
+
+// checked is every service with a recorded cutoff.
+func checked(st *store.Store) []string {
 	rows, err := st.DB().Query(`SELECT service FROM watch_cutoffs ORDER BY service`)
 	if err != nil {
 		return nil
@@ -225,6 +246,16 @@ func run(log zerolog.Logger, only string, back time.Duration, opts Options) erro
 	services, err := readServices(root, log, opts.Labels)
 	if err != nil {
 		return err
+	}
+	if only == "" {
+		names := make([]string, 0, len(services))
+		for _, svc := range services {
+			names = append(names, svc.Name)
+		}
+		sort.Strings(names)
+		watchingMu.Lock()
+		watching = names
+		watchingMu.Unlock()
 	}
 	if only != "" {
 		services = justOne(services, only)

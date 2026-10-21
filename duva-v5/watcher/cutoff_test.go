@@ -262,6 +262,36 @@ func TestAnOverrideIsNeverAFirstCheck(t *testing.T) {
 	}
 }
 
+// What may be picked to check is what a full check covers now, not every
+// service with a cutoff: one unpinned or retired keeps its cutoff, and on
+// optiplex that offered v4's four stopped containers and an unpinned mealie.
+// The cutoffs stand in only until the first full check after a start.
+func TestWatchedIsWhatTheLastFullCheckCovered(t *testing.T) {
+	useTempState(t)
+	mem := loadOrFail(t)
+	for _, name := range []string{"app", "db", "unpinned-since"} {
+		mem.Checked(name, time.Now())
+	}
+	if err := mem.save(); err != nil {
+		t.Fatal(err)
+	}
+	watchingMu.Lock()
+	old := watching
+	watching = nil
+	watchingMu.Unlock()
+	t.Cleanup(func() { watchingMu.Lock(); watching = old; watchingMu.Unlock() })
+
+	if got := strings.Join(Watched(memStore), ","); got != "app,db,unpinned-since" {
+		t.Errorf("before a full check = %q, want the cutoffs", got)
+	}
+	watchingMu.Lock()
+	watching = []string{"app", "db"}
+	watchingMu.Unlock()
+	if got := strings.Join(Watched(memStore), ","); got != "app,db" {
+		t.Errorf("after a full check = %q, want what it covered", got)
+	}
+}
+
 // A check asked to look back further looks back to whichever is earlier: its
 // own cutoff, or how far it was asked. Never later -- asking for a week must
 // not look less far back than an ordinary check, for a service not checked
