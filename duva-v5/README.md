@@ -160,10 +160,9 @@ newest matters, so a newer one supersedes it.
 
 ### Seeing what is waiting, and acting on it
 
-On the page, each row has **Block**: that release is never applied, on any
-service running the image, until you unblock it from **Blocked** at
-the foot of the page, which puts it back in the queue. Each queued row's **⋯**
-has Re-scan. **Check now**, beside when each host last checked, looks for new
+On the page, each row's **⋯** has **Block**: that release is never applied, on
+any service running the image, until you unblock it from **Blocked** at the
+foot of the page, which puts it back in the queue. It also has Re-scan. **Check now**, beside when each host last checked, looks for new
 releases on every host at once. These are commands too, run inside duva's container (`docker exec
 <duva> duva ...`), going through this host's queue API with its own token as
 the page does; the history records who -- the signed-in person, or "cli".

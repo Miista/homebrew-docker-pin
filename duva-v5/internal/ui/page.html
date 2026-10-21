@@ -435,18 +435,16 @@
                 :disabled="!r.can_apply || running(r.key) || busyHost(r.host)"
                 :title="buttonReason(r)"
                 @click="apply(r)">{{ running(r.key) ? "Updating…" : "Update" }}</button>
-        <button class="act" v-if="actions"
-                :disabled="r.stale || running(r.key)"
-                title="Never apply this release; unblock it under Blocked"
-                @click="startBlock(r)">Block</button>
-        <button class="more" v-if="actions" title="Re-scan"
+        <button class="more" v-if="actions" title="Re-scan, block"
                 :aria-expanded="open === r.key ? 'true' : 'false'"
-                @click="toggle(r)">&hellip;</button>
+                @click="toggle(r.key)">&hellip;</button>
       </span>
 
       <div class="panel" v-if="actions && open === r.key">
         <button class="act" :disabled="r.stale" @click="act('rescan', r)">Re-scan</button>
-        <p class="hint">Forgets how far back this service was checked, and looks over the whole window again.</p>
+        <button class="act act-danger" :disabled="r.stale || running(r.key)"
+                @click="startBlock(r)">Block</button>
+        <p class="hint">Re-scan looks back over the whole window again. Block never applies this release, until it is unblocked.</p>
       </div>
 
 
@@ -493,11 +491,18 @@
                   :disabled="!r.can_apply || running(r.key) || busyHost(r.host)"
                   :title="buttonReason(r) || 'Apply it now, without waiting for the delay'"
                   @click="apply(r)">{{ running(r.key) ? "Updating…" : "Apply now" }}</button>
-          <button class="act" v-if="actions"
-                  :disabled="r.stale || running(r.key)"
-                  title="Never apply this release; unblock it under Blocked"
-                  @click="startBlock(r)">Block</button>
+          <button class="more" v-if="actions" title="Re-scan, block"
+                  :aria-expanded="open === r.key + '#' + r.entry ? 'true' : 'false'"
+                  @click="toggle(r.key + '#' + r.entry)">&hellip;</button>
         </span>
+
+        <!-- Told apart by its entry: a service can be in both tables. -->
+        <div class="panel" v-if="actions && open === r.key + '#' + r.entry">
+          <button class="act" :disabled="r.stale" @click="act('rescan', r)">Re-scan</button>
+          <button class="act act-danger" :disabled="r.stale || running(r.key)"
+                  @click="startBlock(r)">Block</button>
+          <p class="hint">Re-scan looks back over the whole window again. Block never applies this release, until it is unblocked.</p>
+        </div>
 
 
         <ul class="steps" v-if="steps[r.key] || finished[r.key]">
@@ -791,8 +796,10 @@ createApp({
         return "in " + Math.max(1, Math.round(ms / 60000)) + "m"
       },
 
-      toggle(r) {
-        this.open = this.open === r.key ? "" : r.key
+      // Opens or closes a row's menu, by the row's id: its key in the queue,
+      // key#entry in Scheduled, since a service can be in both.
+      toggle(id) {
+        this.open = this.open === id ? "" : id
       },
 
       // Blocking acts on the entry; a rescan on the service. Either way the
