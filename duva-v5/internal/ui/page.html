@@ -216,7 +216,7 @@
   .blist .rel { font-weight: 400; }
   .blist .by { display: block; font-size: .72rem; color: var(--faint); }
 
-  /* ---------- the discard dialog ---------- */
+  /* ---------- dialogs ---------- */
   /* The page's own card, raised: same surface, line and radius, so it reads
      as part of the page in either scheme rather than as the browser's. */
   .dlg { width: min(28rem, calc(100% - 2rem)); padding: 0; border: 1px solid var(--line);
@@ -228,29 +228,21 @@
   .dlg h2 { margin: 0; font-size: 1rem; font-weight: 700; letter-spacing: -.005em; }
   .dlg h2 .to { font-weight: 400; }
   .dlg .sub { margin: -.45rem 0 0; font-size: .78rem; color: var(--faint); overflow-wrap: anywhere; }
-  .dlg .also { display: flex; align-items: center; gap: .45rem; font-size: .875rem;
-               cursor: pointer; }
-  .dlg .also input { margin: 0; accent-color: var(--major); }
+  .dlg .say { margin: 0; font-size: .875rem; }
   .dlg .hint { margin: 0; font-size: .78rem; color: var(--muted); }
-  .dlg .hint.warn { color: var(--major); }
   .dlg .buttons { display: flex; justify-content: flex-end; gap: .4rem; margin-top: .15rem; }
   .dlg .buttons .act { font-size: .84rem; padding: .3rem .8rem; }
-  /* The confirming button, filled: the one the dialog is for. Red when it
-     blocks, the accent when it only discards. */
+  /* The confirming button, filled: the one the dialog is for. The accent,
+     not red: ignoring is undone from the list in the footer. */
   .dlg .go { border: 1px solid transparent; border-radius: 5px; font-weight: 600;
              font-size: .84rem; padding: .3rem .8rem;
              background: var(--accent); color: var(--accent-fg); }
-  .dlg .go.danger { background: var(--major); color: #fff; }
   .dlg .go:disabled { background: none; border-color: var(--line);
                       color: var(--faint); font-weight: 400; cursor: not-allowed; }
   @media (prefers-color-scheme: dark) {
     .dlg { box-shadow: 0 12px 40px rgba(0, 0, 0, .5); }
     .dlg::backdrop { background: rgba(0, 0, 0, .55); }
-    .dlg .go.danger { color: #1c1e21; }
   }
-  /* After the dark scheme's colour for the red button, or that wins and a
-     disabled one has dark text on no background: invisible. */
-  .dlg .go.danger:disabled { color: var(--faint); }
 
   /* A row from a decider that has stopped answering: shown, because it was
      really queued, but faded because it cannot be confirmed. */
@@ -423,8 +415,8 @@
                 @click="apply(r)">{{ running(r.key) ? "Updating…" : "Update" }}</button>
         <button class="act" v-if="actions"
                 :disabled="r.stale || running(r.key)"
-                title="Drop it, and choose whether to block it"
-                @click="startDiscard(r)">Discard</button>
+                title="Never apply this release; undo it under Ignored"
+                @click="startIgnore(r)">Ignore</button>
         <button class="more" v-if="actions" title="Check now, re-scan"
                 :aria-expanded="open === r.key ? 'true' : 'false'"
                 @click="toggle(r)">&hellip;</button>
@@ -482,8 +474,8 @@
                   @click="apply(r)">{{ running(r.key) ? "Updating…" : "Apply now" }}</button>
           <button class="act" v-if="actions"
                   :disabled="r.stale || running(r.key)"
-                  title="Drop it, and choose whether to block it"
-                  @click="startDiscard(r)">Discard</button>
+                  title="Never apply this release; undo it under Ignored"
+                  @click="startIgnore(r)">Ignore</button>
         </span>
 
 
@@ -496,20 +488,17 @@
     </ul>
   </section>
 
-  <!-- Discard asks here, and offers to block. One dialog for the page: it
-       is about one row at a time, whichever section the row is in. -->
-  <dialog class="dlg" id="discard" @close="discardRow = null">
-    <form v-if="discardRow" @submit.prevent="discard()">
-      <h2>Discard {{ discardRow.service }} <span class="to mono">{{ discardRow.moved ? "this digest" : discardRow.candidate }}</span>?</h2>
-      <p class="sub mono">{{ discardRow.host }} &middot; {{ discardRow.image }}</p>
-      <label class="also"><input type="checkbox" v-model="alsoBlock"> Also block this release</label>
-      <p class="hint" :class="alsoBlock ? 'warn' : ''">{{ alsoBlock
-        ? "Never applied, on any service running " + discardRow.image + ", until it is unblocked."
-        : "Dropped for now. If it is found again, it comes back." }}</p>
+  <!-- Ignore asks first, and says what it does. One dialog for the page,
+       about whichever row was clicked, in either section. -->
+  <dialog class="dlg" id="ignore" @close="ignoreRow = null">
+    <form v-if="ignoreRow" @submit.prevent="ignore()">
+      <h2>Ignore {{ ignoreRow.service }} <span class="to mono">{{ ignoreRow.moved ? "this digest" : ignoreRow.candidate }}</span>?</h2>
+      <p class="sub mono">{{ ignoreRow.host }} &middot; {{ ignoreRow.image }}</p>
+      <p class="say">Ignoring this update will block it from being applied, on any service running {{ ignoreRow.image }}.</p>
+      <p class="hint">You can undo this under Ignored, at the bottom of the page.</p>
       <div class="buttons">
-        <button class="act" type="button" @click="closeDiscard()">Cancel</button>
-        <button class="go" :class="alsoBlock ? 'danger' : ''" type="submit"
-                >{{ alsoBlock ? "Discard and block" : "Discard" }}</button>
+        <button class="act" type="button" @click="closeIgnore()">Cancel</button>
+        <button class="go" type="submit">Ignore</button>
       </div>
     </form>
   </dialog>
@@ -518,17 +507,17 @@
        way, but there for the day one should come back. -->
   <dialog class="dlg" id="blocks">
     <form method="dialog">
-      <h2>Blocked releases</h2>
+      <h2>Ignored releases</h2>
       <ul class="blist">
         <li v-for="b in blocks" :key="b.host + b.image + b.digest">
           <span class="what">
             <span class="name">{{ b.image }} <span class="mono rel">{{ b.release || b.digest.slice(7, 19) }}</span></span>
             <span class="by mono">{{ b.host }} &middot; {{ b.by }} &middot; {{ dateOf(b.at) }}</span>
           </span>
-          <button class="act" type="button" @click="unblock(b)">Unblock</button>
+          <button class="act" type="button" @click="unblock(b)">Stop ignoring</button>
         </li>
       </ul>
-      <p class="hint">Unblocking puts the release back in the queue, waiting for you.</p>
+      <p class="hint">Stopping ignoring puts the release back in the queue, waiting for you.</p>
       <div class="buttons"><button class="act">Close</button></div>
     </form>
   </dialog>
@@ -536,7 +525,7 @@
   <footer>
     <span>duva {{ version }}</span>
     <a href="#" class="foot-link" v-if="actions && blocks.length"
-       @click.prevent="openBlocks()">Blocked ({{ blocks.length }})</a>
+       @click.prevent="openBlocks()">Ignored ({{ blocks.length }})</a>
   </footer>
 </main>
 
@@ -562,8 +551,7 @@ createApp({
       actions: initial.actions,
       version: initial.version,
       open: "",         // the row whose actions are open
-      discardRow: null, // the row the discard dialog is about
-      alsoBlock: false, // whether that discard blocks the release too
+      ignoreRow: null,  // the row the ignore dialog is about
       steps: {},        // key -> lines so far
       finished: {},     // key -> terminal status
       result: {},       // the last apply's answer, when it refused
@@ -686,23 +674,21 @@ createApp({
         return b && b.reason ? r.host + " — " + b.reason : r.host + " cannot apply right now"
       },
 
-      // Discard asks first, and offers to block: the same decision -- not
-      // this one -- with or without it coming back.
-      startDiscard(r) {
+      // Ignore asks first: it blocks the release, on every service running
+      // the image, and the dialog says so.
+      startIgnore(r) {
         this.open = ""
-        this.discardRow = r
-        this.alsoBlock = false
-        document.getElementById("discard").showModal()
+        this.ignoreRow = r
+        document.getElementById("ignore").showModal()
       },
 
-      closeDiscard() {
-        document.getElementById("discard").close()
+      closeIgnore() {
+        document.getElementById("ignore").close()
       },
 
-      async discard() {
-        const r = this.discardRow
-        this.closeDiscard()
-        if (!this.alsoBlock) return this.act("discard", r)
+      async ignore() {
+        const r = this.ignoreRow
+        this.closeIgnore()
         return this.act("block", r)
       },
 
@@ -718,7 +704,7 @@ createApp({
         this.result = message
           ? { service: b.image, level: "error", message }
           : { service: b.image, level: "ok",
-              message: (b.release || "the release") + " unblocked, and back in the queue" }
+              message: (b.release || "the release") + " no longer ignored, and back in the queue" }
         await this.poll()
         if (!this.blocks.length) document.getElementById("blocks").close()
       },
@@ -759,10 +745,10 @@ createApp({
         this.open = this.open === r.key ? "" : r.key
       },
 
-      // Discard and block act on the entry; check and rescan on the service.
+      // Ignoring acts on the entry; check and rescan on the service.
       // Either way the answer is a sentence, empty on success.
       async act(kind, r, body) {
-        const subject = kind === "discard" || kind === "block" ? r.entry : r.service
+        const subject = kind === "block" ? r.entry : r.service
         const res = await fetch("/api/" + kind + "/" + encodeURIComponent(r.host) + "/" + encodeURIComponent(subject),
                                 { method: "POST", body })
         if (res.status === 401) { location.reload(); return }
@@ -770,8 +756,7 @@ createApp({
         const done = {
           check: "checking now; anything new will appear here",
           rescan: "looking back over the whole window again; anything found will appear here",
-          discard: "discarded for now; found again, it comes back",
-          block: "discarded and blocked; it will not be applied on any service running " + r.image,
+          block: "ignored; it won't be offered again on any service running " + r.image,
         }
         this.result = message
           ? { service: r.service, level: "error", message }
