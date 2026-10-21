@@ -410,10 +410,16 @@
   /* ---------- phones ---------- */
   @media (max-width: 45rem) {
     main { padding: 0 12px calc(96px + env(safe-area-inset-bottom)); }
-    /* Transparent, so the glow shows through it as it does the rest of the
-       page; not sticky, or rows would scroll by behind the logo. */
-    .top { position: relative; z-index: 30; height: 56px; margin: 0 -12px;
-           padding: 0 8px 0 16px; flex-wrap: nowrap; gap: 10px; }
+    /* Always there, and transparent at the top of the page so the glow shows
+       through it as through the rest. Once the page scrolls under it, a
+       frosted pane of the same dark, so rows do not run legibly behind the
+       logo -- the glow still shows through that. */
+    .top { position: sticky; top: 0; z-index: 30; height: 56px; margin: 0 -12px;
+           padding: 0 8px 0 16px; flex-wrap: nowrap; gap: 10px;
+           transition: background .2s ease, box-shadow .2s ease; }
+    .scrolled .top { background: color-mix(in oklch, var(--bg) 55%, transparent);
+                     -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+                     box-shadow: 0 1px 0 var(--divider); }
     .brand { gap: 10px; }
     .brand img { width: 22px; height: 22px; }
     .mark { font-size: 14px; }
@@ -950,6 +956,10 @@ createApp({
         // decider answering for nobody every 15s is the sort of thing noticed
         // in a log months later. Nor does it animate.
         setInterval(() => { if (!document.hidden) this.poll() }, 15000)
+        // The header frosts over once the page has scrolled under it.
+        const frost = () => document.documentElement.classList.toggle("scrolled", scrollY > 4)
+        addEventListener("scroll", frost, { passive: true })
+        frost()
         document.addEventListener("visibilitychange", () => {
           document.documentElement.classList.toggle("hidden-tab", document.hidden)
           if (!document.hidden) this.poll()
