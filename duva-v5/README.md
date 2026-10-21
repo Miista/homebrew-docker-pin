@@ -173,12 +173,13 @@ newest matters, so a newer one supersedes it.
 
 On the page, the menu beside each row's Update button has **Block**: that
 release is never applied, on any service running the image, until you unblock
-it from **Blocked** at the foot of the page, which puts it back in the queue.
-In the queue the menu also has **Force check**, which ignores where that
-service's last check left off and looks over the past week again -- for a
-release duva passed over. Scheduled rows have Block only. **Check for
-updates**, in the header beside when each host last checked, looks for new
-releases on every host at once. These are commands too, run inside duva's container (`docker exec
+it from **Blocked releases** in the menu at the top, which puts it back in the
+queue. In the queue the row's menu also has **Force check**, which ignores
+where that service's last check left off and looks over the past week again
+-- for a release duva passed over. Scheduled rows have Block only. **Check for
+updates**, in the header, looks for new releases on every host at once. On a
+phone, tapping a row opens a sheet with the same actions, and Check for
+updates is in the menu. These are commands too, run inside duva's container (`docker exec
 <duva> duva ...`), going through this host's queue API with its own token as
 the page does; the history records who -- the signed-in person, or "cli".
 `duva queue` prints what is waiting, by service, with each entry's id.
