@@ -139,29 +139,28 @@ func TestOtherRowsOnABusyHostAreDisabled(t *testing.T) {
 	}
 }
 
-// On a phone the column head is hidden, and it was the head that drew the
-// card's top edge -- main > .rows sets border-top: 0 for exactly that reason.
-// Without it the first row's own border-top becomes the visible top of the
-// card, and because a row sits inside the card's horizontal padding that
-// border is inset on both sides: a short line floating above the list rather
-// than the card's edge.
-func TestTheCardDrawsItsOwnTopEdgeWithoutTheHead(t *testing.T) {
+// On a phone a row's buttons are hidden and the row opens a sheet instead.
+// The sheet's Block must go through the same confirmation as the desktop's
+// menu: a block reaches every service running the image, and a sheet is one
+// stray tap from doing it. The script decides "is this a phone" by the same
+// width the stylesheet hides the buttons at, or a tablet between the two
+// would get neither the buttons nor the sheet.
+func TestThePhoneSheetConfirmsABlock(t *testing.T) {
 	s := &Server{Source: &fakeSource{}, Approver: &fakeApprover{}}
 	_, body := get(t, s, "/")
 
 	phone := mediaBlock(body, "max-width: 45rem")
 	if phone == "" {
-		t.Fatal("no narrow-phone media query in the page")
+		t.Fatal("no phone media query in the page")
 	}
-	if !strings.Contains(phone, ".head { display: none; }") {
-		t.Fatal("the head is no longer hidden on phones; this test guards the consequence of that")
+	if !strings.Contains(phone, ".acts { display: none; }") {
+		t.Fatal("a row's buttons are no longer hidden on phones; this test guards the sheet that replaces them")
 	}
-	// Both cards: the queue's, and the Soaking section's beneath it.
-	if !strings.Contains(ruleFor(phone, "main > .rows, .soak > .rows"), "border-top") {
-		t.Error("the card does not draw its own top edge, so the first row's inset border shows as one")
+	if !strings.Contains(body, `matchMedia("(max-width: 45rem)")`) {
+		t.Error("the script's phone width is not the stylesheet's")
 	}
-	if !strings.Contains(ruleFor(phone, ".rows > li:first-child"), "border-top: 0") {
-		t.Error("the first row still draws a border, which doubles the card's edge")
+	if !strings.Contains(body, `@click="startBlock(sheetRow())"`) {
+		t.Error("the sheet's Block does not ask first")
 	}
 }
 
@@ -446,11 +445,11 @@ func TestTheRegistryHostIsStrippedFromWhatIsShown(t *testing.T) {
 	}
 }
 
-// The queue can be narrowed to one host, and searched.
+// The queue is grouped by host, and can be searched.
 //
-// Thirty-three rows across two hosts is a list nobody reads: the tabs answer
-// "what is waiting on this box" and the search answers "where is that one
-// service", which are the two questions actually asked of it.
+// Thirty-three rows across two hosts is a list nobody reads: a card per host
+// answers "what is waiting on this box" and the search answers "where is
+// that one service", which are the two questions actually asked of it.
 func TestTheQueueCanBeNarrowed(t *testing.T) {
 	s := &Server{
 		Source:   &fakeSource{pending: []Hosted{entry("authelia", "4.39.20", "4.39.26", version.KindPatch)}},
@@ -458,13 +457,13 @@ func TestTheQueueCanBeNarrowed(t *testing.T) {
 	}
 	_, body := get(t, s, "/")
 
-	// The table renders the filtered view, not the whole queue.
-	if !strings.Contains(body, `v-for="r in shown()"`) {
-		t.Error("the table does not render the filtered rows")
+	// The cards render the filtered view, not the whole queue.
+	if !strings.Contains(body, `v-for="g in groups(shown())"`) {
+		t.Error("the host cards do not render the filtered rows")
 	}
-	// Tabs come from the rows, so a host with nothing waiting has none.
-	if !strings.Contains(body, "new Set(this.rows.map(r => r.host))") {
-		t.Error("the host tabs are not derived from what is queued")
+	// Cards come from the rows, so a host with nothing waiting has none.
+	if !strings.Contains(body, "new Set(list.map(r => r.host))") {
+		t.Error("the host cards are not derived from what is queued")
 	}
 	// Searching covers the fields a person would type: the service, the image
 	// it runs, and either end of the change.
@@ -489,8 +488,8 @@ func TestFilteringDoesNotNarrowWhatIsKnown(t *testing.T) {
 	_, body := get(t, s, "/")
 
 	// The count and the host lock read rows, which stays whole.
-	if !strings.Contains(body, `<h1>Queue <span class="count">{{ rows.length }}</span>`) {
-		t.Error("the heading counts something other than the whole queue")
+	if !strings.Contains(body, `Queue <span class="n">{{ rows.length }}</span>`) {
+		t.Error("the Queue tab counts something other than the whole queue")
 	}
 	if !strings.Contains(body, "this.rows.some(r => this.running(r.key) && r.host === host)") {
 		t.Error("busyHost no longer asks the whole queue, so a filtered-away apply would be missed")
