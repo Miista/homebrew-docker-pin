@@ -11,22 +11,21 @@
 //
 //	/compose   the compose project directory, read-only
 //
-// Configuration:
+// Configuration, through internal/settings (DUVA_SETTING_<KEY>):
 //
-//	DUVA_HOST         what this queue calls itself, for a UI over several
-//	DUVA_QUEUE_TOKEN        the bearer token a UI must present
-//	DUVA_UPDATE_TIMEOUT how long an apply may run before it is called failed
-//	DUVA_RECONCILE_INTERVAL how often a queued entry is re-checked against the
-//	                    compose file, to catch one satisfied by something other
-//	                    than this queue's own apply (default 10m); also how
-//	                    often a soaked entry is checked for release
+//	host               what this queue calls itself, for a page over several
+//	api_token          the bearer token a peer's page must present
+//	update_timeout     how long an apply may run before it is called failed
+//	reconcile_interval how often a queued entry is re-checked against the
+//	                   compose file, to catch one satisfied by something other
+//	                   than this queue's own apply (default 10m); also how
+//	                   often a delayed entry is checked for release
 package gate
 
 import (
 	"context"
 	"fmt"
 	"net/http"
-	"os"
 	"time"
 	// The timezone database, embedded in the binary. Go reads TZ on its
 	// own, but resolves a name like Europe/Copenhagen against the host's
@@ -313,14 +312,7 @@ type config struct {
 }
 
 func loadConfig() (config, error) {
-	c := config{Host: os.Getenv("DUVA_HOST")}
-	if c.Host == "" {
-		if h, err := os.Hostname(); err == nil && h != "" {
-			c.Host = h
-		} else {
-			c.Host = "unknown-host"
-		}
-	}
+	c := config{Host: settings.HostName()}
 	// A duration that does not parse is not one to fall back from: the
 	// fallback would be silently different from what was asked for, and
 	// nobody would know until an apply hung.

@@ -36,11 +36,19 @@ func TestOpenBringsTheSchemaUpToDate(t *testing.T) {
 	if err != nil || v != latest(t) {
 		t.Errorf("version = %d %v, want %d", v, err, latest(t))
 	}
-	for _, table := range []string{"images", "services", "watch_cutoffs", "watch_held", "settings", "queue_entries", "queue_events", "blocked_releases"} {
+	count := func(table string) int {
 		var n int
-		if err := s.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&n); err != nil || n != 1 {
+		s.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&n)
+		return n
+	}
+	for _, table := range []string{"images", "services", "watch_cutoffs", "watch_held", "queue_entries", "queue_events", "blocked_releases"} {
+		if count(table) != 1 {
 			t.Errorf("table %s is missing", table)
 		}
+	}
+	// Settings are the environment's alone (0004).
+	if count("settings") != 0 {
+		t.Error("the settings table is still there")
 	}
 }
 

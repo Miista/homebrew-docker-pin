@@ -31,19 +31,19 @@ services:
     group_add:
       - "${DOCKER_GID}"
     environment:
-      DUVA_HOST: integration
+      DUVA_SETTING_HOST: integration
       # serve checks once at startup, so restarting it is how a test asks
       # for a check; this schedule never fires.
       DUVA_SETTING_SCHEDULE: "0 3 * * *"
       DUVA_SETTING_LOG_LEVEL: debug
-      DUVA_QUEUE_TOKEN: integration-token
+      DUVA_SETTING_API_TOKEN: integration-token
       # The receiver stands in for ntfy, so a test can assert on what was
       # announced rather than on what a log line said.
       DUVA_SETTING_NTFY_ENDPOINT: http://ntfy:8080
       DUVA_SETTING_NTFY_TOPIC: duva
       # The project, mounted at the path it has on the host, so a relative
       # bind in it resolves to a path the daemon can also find.
-      DUVA_REPO: ${PROJECT_DIR}
+      DUVA_SETTING_REPO: ${PROJECT_DIR}
       DUVA_SETTING_COMMIT_TEMPLATE: "pin {{.Container}} to {{if eq .OldVersion .NewVersion}}{{.NewDigest}}{{else}}{{.NewVersion}}{{end}}"
       # How often a soaked entry is checked for release. Seconds here so the
       # scenario sees a soak end; the default is ten minutes.

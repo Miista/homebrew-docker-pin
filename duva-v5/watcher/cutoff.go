@@ -35,7 +35,7 @@ type memory struct {
 	services map[string]serviceState
 	// fallback is the cutoff for a service with none recorded.
 	fallback time.Time
-	// override is set when DUVA_SINCE forced the cutoff. Nothing is
+	// override is set when DUVA_SETTING_SINCE forced the cutoff. Nothing is
 	// recorded in that case: an override asks a question, it does not change
 	// what the watcher believes.
 	override bool
@@ -50,7 +50,7 @@ type memory struct {
 // one this matters for -- it has no history, so the window is the only thing
 // standing between it and being reported at all.
 //
-// An override is not a first check. DUVA_SINCE asks a question against
+// An override is not a first check. DUVA_SETTING_SINCE asks a question against
 // a window someone chose, and answering a different one would make the flag
 // mean something other than what it says.
 func (m *memory) FirstCheck(service string) bool {

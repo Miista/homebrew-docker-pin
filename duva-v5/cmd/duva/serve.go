@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -36,25 +35,23 @@ import (
 // queue applies through the updater's Local. Only the queue's API still
 // listens, because a UI on another host reads it.
 //
-// With DUVA_UI set it serves the page too, on uiAddr: this host's queue by
-// call, other hosts' through DUVA_QUEUES as before. On its own port, not the
-// queue API's, because the page is published to the internet and the API is
-// not, and sharing a port would publish both.
+// With the ui setting on it serves the page too, on uiAddr: this host's queue
+// by call, its peers' over their API. On its own port, not the API's, because
+// the page is published to the internet and the API is not, and sharing a
+// port would publish both.
 //
-// The project is the updater's -- DUVA_REPO, mounted at the path it has on
+// The project is the updater's -- the repo setting, mounted at the path it has on
 // the host -- and every component reads that one, rather than v4's read-only
 // copy at /compose.
 func serve() error {
-	if err := settings.CheckRenamed(os.Getenv); err != nil {
+	if err := settings.CheckRenamed(os.Environ()); err != nil {
 		return err
 	}
-	// The store first: settings are read through it, the log level included.
 	st, err := store.Open(dataFile)
 	if err != nil {
 		return err
 	}
 	defer st.Close()
-	settings.Use(st)
 	level, err := settings.String(settings.LogLevel, "")
 	if err != nil {
 		return err
@@ -137,7 +134,7 @@ func serve() error {
 		return nil
 	})
 
-	if withUI, err := boolEnv("DUVA_UI"); err != nil {
+	if withUI, err := settings.Bool(settings.UI, false); err != nil {
 		return err
 	} else if withUI {
 		local := &ui.Upstream{Host: queue.Host(), Local: queue.API}
@@ -161,21 +158,8 @@ func serve() error {
 	return err2
 }
 
-// uiAddr is where serve listens for the page when DUVA_UI is set.
+// uiAddr is where serve listens for the page when the ui setting is on.
 const uiAddr = ":8081"
-
-// boolEnv reads a boolean variable, false when unset.
-func boolEnv(key string) (bool, error) {
-	raw := os.Getenv(key)
-	if raw == "" {
-		return false, nil
-	}
-	v, err := strconv.ParseBool(raw)
-	if err != nil {
-		return false, fmt.Errorf("%s=%q is not a boolean", key, raw)
-	}
-	return v, nil
-}
 
 // follow keeps watching the daemon's container events, poking the queue on
 // each, until ctx is done.

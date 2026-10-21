@@ -6,13 +6,13 @@ import (
 
 func noToken(string) string { return "" }
 
-func TestParseQueues(t *testing.T) {
-	got, err := parseQueues("optiplex=http://a:8080, pi=http://b:8080 ", noToken)
+func TestParsePeers(t *testing.T) {
+	got, err := parsePeers("optiplex=http://a:8080, pi=http://b:8080 ", noToken)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
 	if len(got) != 2 {
-		t.Fatalf("got %d queues, want 2", len(got))
+		t.Fatalf("got %d peers, want 2", len(got))
 	}
 	if got[0].Host != "optiplex" || got[0].URL != "http://a:8080" {
 		t.Errorf("first = %+v", got[0])
@@ -23,9 +23,9 @@ func TestParseQueues(t *testing.T) {
 }
 
 // The negative cases. Each of these is a config a person would write by
-// mistake, and each must be refused rather than half-understood: a queue
+// mistake, and each must be refused rather than half-understood: a peer
 // silently dropped is a host whose queue is never shown.
-func TestParseQueuesRejects(t *testing.T) {
+func TestParsePeersRejects(t *testing.T) {
 	for _, tc := range []struct{ name, raw string }{
 		{"no url", "optiplex"},
 		{"empty host", "=http://a:8080"},
@@ -33,54 +33,37 @@ func TestParseQueuesRejects(t *testing.T) {
 		{"duplicate host", "optiplex=http://a:8080,optiplex=http://b:8080"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := parseQueues(tc.raw, noToken); err == nil {
-				t.Errorf("parseQueues(%q) was accepted", tc.raw)
+			if _, err := parsePeers(tc.raw, noToken); err == nil {
+				t.Errorf("parsePeers(%q) was accepted", tc.raw)
 			}
 		})
 	}
 }
 
-// Empty is not an error here -- main decides what no queues means, and does
+// Empty is not an error here -- Run decides what no queues means, and does
 // refuse. Parsing and policy are separate so the refusal has one home.
-func TestParseQueuesEmpty(t *testing.T) {
-	got, err := parseQueues("  ", noToken)
+func TestParsePeersEmpty(t *testing.T) {
+	got, err := parsePeers("  ", noToken)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
 	if len(got) != 0 {
-		t.Errorf("got %d queues, want none", len(got))
+		t.Errorf("got %d peers, want none", len(got))
 	}
 }
 
-func TestTokenEnv(t *testing.T) {
-	for _, tc := range []struct{ host, want string }{
-		{"optiplex", "DUVA_QUEUE_TOKEN_OPTIPLEX"},
-		// A host name may carry characters an environment variable name
-		// cannot; they become underscores rather than being dropped, so two
-		// different hosts cannot collapse onto one variable.
-		{"raspberry.local", "DUVA_QUEUE_TOKEN_RASPBERRY_LOCAL"},
-		{"family-dashboard", "DUVA_QUEUE_TOKEN_FAMILY_DASHBOARD"},
-	} {
-		if got := tokenEnv(tc.host); got != tc.want {
-			t.Errorf("tokenEnv(%q) = %q, want %q", tc.host, got, tc.want)
-		}
-	}
-}
-
-// Per-host wins over the shared token, so adding a host with its own token
-// does not mean re-tokening the others.
-// A token is per host, and there is no shared fallback.
+// A token is per peer, and this host's own is not a fallback for one.
 //
-// Each queue mints its own when none is injected, so in practice every host
-// has a different one. A "shared" variable ended up holding whichever host was
-// configured first -- and the others then failed with a token mismatch rather
-// than with "no token for that host", which is the harder failure to read.
-func TestATokenIsPerHost(t *testing.T) {
-	t.Setenv("DUVA_QUEUE_TOKEN", "not-a-fallback")
-	t.Setenv("DUVA_QUEUE_TOKEN_PI", "just-the-pi")
-	t.Setenv("DUVA_QUEUE_TOKEN_OPTIPLEX", "just-optiplex")
+// In practice every host has a different token. A "shared" variable ended up
+// holding whichever host was configured first -- and the others then failed
+// with a token mismatch rather than with "no token for that host", which is
+// the harder failure to read.
+func TestATokenIsPerPeer(t *testing.T) {
+	t.Setenv("DUVA_SETTING_API_TOKEN", "not-a-fallback")
+	t.Setenv("DUVA_SETTING_PEER_PI_TOKEN", "just-the-pi")
+	t.Setenv("DUVA_SETTING_PEER_OPTIPLEX_TOKEN", "just-optiplex")
 
-	got, err := parseQueues("optiplex=http://a:8080,pi=http://b:8080", tokenFromEnv)
+	got, err := parsePeers("optiplex=http://a:8080,pi=http://b:8080", peerToken)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -92,14 +75,14 @@ func TestATokenIsPerHost(t *testing.T) {
 	}
 }
 
-// A host with no token of its own gets none, rather than silently borrowing
-// another host's. The UI warns and that queue reads as unreachable, which is
+// A peer with no token of its own gets none, rather than silently borrowing
+// another host's. The page warns and that host reads as unreachable, which is
 // the honest answer.
-func TestAHostWithoutATokenGetsNone(t *testing.T) {
-	t.Setenv("DUVA_QUEUE_TOKEN", "not-a-fallback")
-	t.Setenv("DUVA_QUEUE_TOKEN_PI", "just-the-pi")
+func TestAPeerWithoutATokenGetsNone(t *testing.T) {
+	t.Setenv("DUVA_SETTING_API_TOKEN", "not-a-fallback")
+	t.Setenv("DUVA_SETTING_PEER_PI_TOKEN", "just-the-pi")
 
-	got, err := parseQueues("optiplex=http://a:8080,pi=http://b:8080", tokenFromEnv)
+	got, err := parsePeers("optiplex=http://a:8080,pi=http://b:8080", peerToken)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}

@@ -11,15 +11,15 @@
 //	/compose                  the repository, read-write: the pin is rewritten here
 //	/var/run/docker.sock      to pull and to replace a container
 //
-// Configuration:
+// Configuration, through internal/settings (DUVA_SETTING_<KEY>):
 //
-//	DUVA_REPO             the repository, mounted at the path it has on the
-//	                      host. Required: nothing can guess it.
-//	DUVA_COMPOSE_DIR      where the compose file is within it. Left out when
-//	                      it is at the repository root.
-//	DUVA_COMMIT_TEMPLATE  what a change is committed under
-//	DUVA_GIT_PUSH         publish commits (default off)
-//	DUVA_LOG_LEVEL        trace/debug/info/warn/error
+//	repo             the repository, mounted at the path it has on the
+//	                 host. Required: nothing can guess it.
+//	compose_dir      where the compose file is within it. Left out when it
+//	                 is at the repository root.
+//	commit_template  what a change is committed under
+//	git.push         publish commits (default off)
+//	log_level        trace/debug/info/warn/error
 package updater
 
 import (
@@ -27,7 +27,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	// The timezone database, embedded in the binary. Go reads TZ on its
 	// own, but resolves a name like Europe/Copenhagen against the host's
@@ -63,36 +62,36 @@ const addr = ":8080"
 // path on the host -- with the two differing there is no single answer, since
 // a bind needs the host's path and an `include:` needs this container's, and
 // with them equal both are the same string.
-var repoDir = os.Getenv("DUVA_REPO")
+var repoDir = settings.Value(settings.Repo)
 
-// projectFile is the compose file this stage works through: DUVA_REPO
-// is the repository, DUVA_COMPOSE_DIR is where within it the compose
-// file is, and it must be exactly there.
+// projectFile is the compose file this stage works through: the repo setting
+// is the repository, compose_dir is where within it the compose file is, and
+// it must be exactly there.
 func projectFile() (string, error) {
 	// The repository is required, with no default. Nothing can guess the path
 	// it has on the host, and an updater pointed at the wrong repository
 	// behaves exactly like one pointed at the right repository -- until a
 	// commit lands somewhere nobody expected.
 	if repoDir == "" {
-		return "", fmt.Errorf("DUVA_REPO is not set: it must be the repository, " +
-			"mounted at the same path it has on the host")
+		return "", fmt.Errorf("%s is not set: it must be the repository, "+
+			"mounted at the same path it has on the host", settings.EnvVar(settings.Repo))
 	}
 	// The path is {repo}/{compose dir}, and the compose directory is left out
 	// when the compose file is at the root of the repository -- which is the
 	// ordinary case for a repository that holds one project.
-	sub := os.Getenv("DUVA_COMPOSE_DIR")
+	sub := settings.Value(settings.ComposeDir)
 	if sub == "" {
 		return compose.FileIn(repoDir)
 	}
 	if filepath.IsAbs(sub) {
-		return "", fmt.Errorf("DUVA_COMPOSE_DIR must be relative to %s, got %q", repoDir, sub)
+		return "", fmt.Errorf("%s must be relative to %s, got %q", settings.EnvVar(settings.ComposeDir), repoDir, sub)
 	}
 	dir := filepath.Join(repoDir, sub)
 	// Join cleans ".." away rather than erroring, so a value trying to escape
 	// would otherwise resolve quietly to somewhere else.
 	rel, err := filepath.Rel(repoDir, dir)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("DUVA_COMPOSE_DIR %q escapes %s", sub, repoDir)
+		return "", fmt.Errorf("%s %q escapes %s", settings.EnvVar(settings.ComposeDir), sub, repoDir)
 	}
 	// Down only, never up. The subdirectory descends -- an absolute or
 	// ..-escaping value is refused above -- and FileIn consults no parent. A
@@ -117,7 +116,7 @@ func New(log zerolog.Logger, blocked func(image, digest string) (string, bool)) 
 		return nil, err
 	}
 	if !push {
-		log.Info().Msg("DUVA_GIT_PUSH is off: commits stay local")
+		log.Info().Msg(settings.EnvVar(settings.GitPush) + " is off: commits stay local")
 	}
 	return &Server{
 		Version:    Version,
@@ -141,8 +140,8 @@ func SelfUpdate(args []string) error {
 	return selfUpdate(newLogger(level), args)
 }
 
-// ProjectFile is the compose file the updater rewrites: DUVA_REPO, and
-// DUVA_COMPOSE_DIR within it. In one process it is the project every
+// ProjectFile is the compose file the updater rewrites: the repo setting, and
+// compose_dir within it. In one process it is the project every
 // component reads.
 func ProjectFile() (string, error) { return projectFile() }
 
@@ -155,7 +154,7 @@ func setup() (push bool, tmpl string, err error) {
 	// discovering it after a container was already replaced.
 	//
 	// Which is also why the project is resolved here rather than at the first
-	// apply: DUVA_REPO and DUVA_COMPOSE_DIR are both required,
+	// apply: the repo, and the compose file within it, are required,
 	// and a process that started happily and then refused every request is a
 	// worse way to learn that than one that never started.
 	if _, err := projectFile(); err != nil {
@@ -208,21 +207,6 @@ func writable(dir string) error {
 	name := probe.Name()
 	probe.Close()
 	return os.Remove(name)
-}
-
-func boolEnv(key string, fallback bool) bool {
-	raw, ok := os.LookupEnv(key)
-	if !ok || raw == "" {
-		return fallback
-	}
-	v, err := strconv.ParseBool(raw)
-	if err != nil {
-		// A typo silently meaning "no" is the kind of thing discovered
-		// months later, when something has not been happening.
-		fmt.Fprintf(os.Stderr, "Error: %s=%q is not a boolean\n", key, raw)
-		os.Exit(1)
-	}
-	return v
 }
 
 // readiness reports whether this updater would take work right now.

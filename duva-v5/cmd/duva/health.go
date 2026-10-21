@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"os"
 	"time"
+
+	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/settings"
 )
 
 // health is the exit code for `duva health`, the image's HEALTHCHECK: 0 when
@@ -16,7 +18,7 @@ import (
 // what a health check would have reported.
 func health() int {
 	addrs := []string{"127.0.0.1:8080"}
-	if on, _ := boolEnv("DUVA_UI"); on {
+	if on, _ := settings.Bool(settings.UI, false); on {
 		addrs = append(addrs, "127.0.0.1"+uiAddr)
 	}
 	return healthOf(addrs)

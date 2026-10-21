@@ -1,7 +1,7 @@
 // duva: one binary for watching pinned services and applying the updates
 // their policy allows.
 //
-// `duva serve` runs watch, queue, updater and, with DUVA_UI, the page, in
+// `duva serve` runs watch, queue, updater and, with DUVA_SETTING_UI, the page, in
 // one process (docs/duva-v5-one-binary.md).
 package main
 

@@ -15,10 +15,10 @@ why.
 | **watch** | what tags exist, and when they were published |
 | **queue** | is this an update, how big, may it be applied, and when |
 | **update** | pull, write the pin, recreate, commit |
-| **ui** | the approval page, over every host's queue; on one host, with `DUVA_UI` |
+| **ui** | the approval page, over every host's queue; on one host, with `DUVA_SETTING_UI` |
 
-Every host runs `duva serve`. One of them also serves the page, and reaches the
-other hosts' queues over their queue API.
+Every host runs `duva serve`, and they are peers. One of them also serves the
+page, and reaches the others' queues over their API.
 
 ## Deploying
 
@@ -32,9 +32,9 @@ duva:
   user: "1000:1000"
   group_add: ["989"]
   environment:
-    DUVA_HOST: optiplex
-    DUVA_REPO: /home/guldmund/docker
-    DUVA_QUEUE_TOKEN: ${DUVA_QUEUE_TOKEN}
+    DUVA_SETTING_HOST: optiplex
+    DUVA_SETTING_REPO: /home/guldmund/docker
+    DUVA_SETTING_API_TOKEN: ${DUVA_API_TOKEN}
     # The host prefix is literal text: this repository's commit-msg hook
     # requires <box>/<service>.
     DUVA_SETTING_COMMIT_TEMPLATE: "optiplex/{{.Container}}: update to {{if eq .OldVersion .NewVersion}}{{.NewDigest}}{{else}}{{.NewVersion}}{{end}}"
@@ -53,9 +53,9 @@ duva:
     # image's ownership (uid 1000).
     - duva-data:/data
   ports:
-    # The queue API, for the UI on another host. Bind it to the LAN address,
-    # not 0.0.0.0, and firewall it to the UI's host. Not needed at all on
-    # the host that serves the UI.
+    # The API, for the page on a peer. Bind it to the LAN address, not
+    # 0.0.0.0, and firewall it to the page's host. Not needed at all on the
+    # host that serves the page.
     - "192.168.1.10:8080:8080"
 ```
 
@@ -63,26 +63,26 @@ On the host that serves the page, add:
 
 ```yaml
   environment:
-    DUVA_UI: "true"
-    DUVA_UI_OIDC_ISSUER: https://auth.example.com
-    DUVA_UI_OIDC_CLIENT_ID: duva
-    DUVA_UI_OIDC_CLIENT_SECRET: ${DUVA_UI_OIDC_CLIENT_SECRET}
-    DUVA_UI_OIDC_BASE_URL: https://duva.example.com
-    # The other hosts' queues. Tokens are not in this list.
-    DUVA_QUEUES: pi=http://192.168.1.11:8080
-    DUVA_QUEUE_TOKEN_PI: ${DUVA_QUEUE_TOKEN_PI}
-  # The page is on 8081, apart from the queue API on 8080: the page is
-  # published (through the reverse proxy), and the API must not be.
+    DUVA_SETTING_UI: "true"
+    DUVA_SETTING_UI_OIDC_ISSUER: https://auth.example.com
+    DUVA_SETTING_UI_OIDC_CLIENT_ID: duva
+    DUVA_SETTING_UI_OIDC_CLIENT_SECRET: ${DUVA_UI_OIDC_CLIENT_SECRET}
+    DUVA_SETTING_UI_OIDC_BASE_URL: https://duva.example.com
+    # The other hosts. Tokens are not in this list: each is its own setting,
+    # and is that host's DUVA_SETTING_API_TOKEN.
+    DUVA_SETTING_PEERS: pi=http://192.168.1.11:8080
+    DUVA_SETTING_PEER_PI_TOKEN: ${DUVA_PI_API_TOKEN}
+  # The page is on 8081, apart from the API on 8080: the page is published
+  # (through the reverse proxy), and the API must not be.
 ```
 
 The page holds the authority to replace containers on every host, and runs in
 a process that holds this host's docker socket. Sign-in is OIDC, always: duva
-refuses to start without all four `DUVA_UI_OIDC_*` settings, and refuses
-`DUVA_UI_AUTH_DISABLED`, `DUVA_UI_LOCAL_ENABLED` and
+refuses to start without all four `DUVA_SETTING_UI_OIDC_*` settings, and
+refuses v4's `DUVA_UI_AUTH_DISABLED`, `DUVA_UI_LOCAL_ENABLED` and
 `DUVA_UI_AUTH_PUBLIC_PATHS` by name, so a v4 configuration that set them fails
 to start rather than running with less protection than intended. Register
-`<DUVA_UI_OIDC_BASE_URL>/auth/callback` as the redirect URI. Only `/healthz`
-is public.
+`<base url>/auth/callback` as the redirect URI. Only `/healthz` is public.
 
 ## The user it runs as
 
@@ -178,9 +178,11 @@ queue. In the queue the row's menu also has **Force check**, which ignores
 where that service's last check left off and looks over the past week again
 -- for a release duva passed over. Scheduled rows have Block only. **Check for
 updates**, also in the menu at the top, looks for new releases on every host
-at once. On a phone, tapping a row opens a sheet with the same actions. These are commands too, run inside duva's container (`docker exec
-<duva> duva ...`), going through this host's queue API with its own token as
-the page does; the history records who -- the signed-in person, or "cli".
+at once. On a phone, tapping a row opens a sheet with the same actions.
+
+These are commands too, run inside duva's container (`docker exec <duva> duva
+...`), going through this host's API with its own `api_token` as the page
+does; the history records who -- the signed-in person, or "cli".
 `duva queue` prints what is waiting, by service, with each entry's id.
 
 | | |
@@ -223,15 +225,22 @@ duva's own container without its compose labels or network aliases.
 
 ## Configuration
 
-Settings are read through [configy](https://github.com/miista/configy), as in
-every app here: `DUVA_SETTING_<KEY>` (the key upper-cased, `.` as `_`) when it
-is set, and otherwise the value stored in duva's database -- where nothing
-writes yet, so in practice the environment or the default. An empty variable
-counts as unset. A value that does not parse refuses to start, never falls
-back.
+Every setting is read through [configy](https://github.com/miista/configy), as
+in every app here: `DUVA_SETTING_<KEY>`, the key upper-cased with `.` as `_`.
+From the environment only: nothing edits settings from the page, so none is
+stored, and a secret never lands in the database. An empty variable counts as
+unset. A value that does not parse refuses to start, never falls back.
 
 | setting | variable | |
 |---|---|---|
+| `repo` | `DUVA_SETTING_REPO` | the repository, mounted at the path it has on the host. Required |
+| `compose_dir` | `DUVA_SETTING_COMPOSE_DIR` | the compose project, relative to `repo`; default its root |
+| `host` | `DUVA_SETTING_HOST` | what this host is called on the page; default the hostname |
+| `api_token` | `DUVA_SETTING_API_TOKEN` | the token a peer's page, or the CLI, must present to this host's API. Required |
+| `ui` | `DUVA_SETTING_UI` | serve the page on 8081 |
+| `ui.oidc.issuer`, `.client_id`, `.client_secret`, `.base_url` | `DUVA_SETTING_UI_OIDC_ISSUER`, ... | sign-in; all four required with `ui` |
+| `peers` | `DUVA_SETTING_PEERS` | the other hosts, `host=url,host=url` |
+| `peer.<host>.token` | `DUVA_SETTING_PEER_<HOST>_TOKEN` | each peer's `api_token`. A `-` or `.` in the host name is `_` |
 | `commit_template` | `DUVA_SETTING_COMMIT_TEMPLATE` | the commit message; fields `.Container`, `.Image`, `.OldVersion`, `.NewVersion`, `.OldDigest`, `.NewDigest`. Unset gets a default; a template that does not render refuses to start |
 | `git.push` | `DUVA_SETTING_GIT_PUSH` | push each commit; default false |
 | `schedule` | `DUVA_SETTING_SCHEDULE` | when to look for new tags, 5-field cron; default `0 3 * * *`. Also once at startup |
@@ -244,23 +253,10 @@ back.
 | `log_level` | `DUVA_SETTING_LOG_LEVEL` | trace, debug, info (default), warn, error |
 | `read_only` | `DUVA_SETTING_READ_ONLY` | the page shows the queue and approves nothing |
 
-What duva needs before its database is open, or what would lock people out if
-it were edited from behind the sign-in, is a plain variable instead:
-
-| variable | |
-|---|---|
-| `DUVA_HOST` | what this host is called on the page; default the hostname |
-| `DUVA_REPO` | the repository, mounted at the path it has on the host. Required |
-| `DUVA_COMPOSE_DIR` | the compose project, relative to `DUVA_REPO`; default its root |
-| `DUVA_QUEUE_TOKEN` | the token the page must present to this host's queue. Required |
-| `DUVA_UI` | serve the page on 8081 |
-| `DUVA_UI_OIDC_ISSUER`, `_CLIENT_ID`, `_CLIENT_SECRET`, `_BASE_URL` | sign-in; all four required with `DUVA_UI` |
-| `DUVA_QUEUES` | the other hosts' queues, `host=url,host=url` |
-| `DUVA_QUEUE_TOKEN_<HOST>` | each other host's `DUVA_QUEUE_TOKEN` |
-
-A setting set under its old name (`DUVA_SCHEDULE`, `NTFY_TOKEN`, ...) refuses
-to start, naming the new one: read under the old name it would be silently
-ignored, and duva would run on a default nobody chose.
+A setting set under its old name (`DUVA_REPO`, `DUVA_QUEUES`,
+`DUVA_QUEUE_TOKEN_PI`, `NTFY_TOKEN`, ...) refuses to start, naming the new
+one: read under the old name it would be silently ignored, and duva would run
+on a default nobody chose.
 
 `/data` holds `duva.db`, a SQLite database -- what is waiting, the history of
 every decision and who made it, the blocklist, the services duva knows, and
@@ -280,15 +276,15 @@ v5 replaces the four v4 containers on each host with one.
    `detector.json` out of the watcher's, with `docker cp`, into v5's `/data`
    before its first start. v5 imports them into its database on that start
    and renames them `.migrated`; going back to v4 can rename them back.
-2. **Rename and drop variables.** Settings are `DUVA_SETTING_*` now (see
-   Configuration); duva names any it finds under the old name.
+2. **Rename and drop variables.** Every variable is `DUVA_SETTING_*` now
+   (see Configuration); duva names any it finds under the old name.
    `DUVA_WEBHOOK_URL`, `DUVA_UPDATE_URL` and
    `DUVA_UPDATE_TOKEN` are gone: nothing talks over a network inside a host
    any more. The page's local account and `DUVA_UI_AUTH_DISABLED` are gone.
-3. **Set `DUVA_QUEUE_TOKEN` on every host.** v4 minted one when it was unset;
-   v5 refuses to start.
-4. **Move the page** from v4's UI container to `DUVA_UI` on one host's duva,
-   and point the reverse proxy at port 8081.
+3. **Set `DUVA_SETTING_API_TOKEN` on every host.** v4 minted a queue token
+   when it was unset; v5 refuses to start.
+4. **Move the page** from v4's UI container to `DUVA_SETTING_UI` on one
+   host's duva, and point the reverse proxy at port 8081.
 5. **Remove the v4 containers** and their volumes once v5 has checked once.
 
 v4's updater cannot hand itself to v5 (they are different images), so the

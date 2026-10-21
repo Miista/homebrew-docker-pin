@@ -10,7 +10,7 @@ import (
 // --- config ------------------------------------------------------------------
 
 func TestConfigDefaults(t *testing.T) {
-	t.Setenv("DUVA_HOST", "")
+	t.Setenv("DUVA_SETTING_HOST", "")
 	t.Setenv("DUVA_SETTING_UPDATE_TIMEOUT", "")
 	c, err := loadConfig()
 	if err != nil {
@@ -27,7 +27,7 @@ func TestConfigDefaults(t *testing.T) {
 }
 
 func TestConfigReadsTheEnvironment(t *testing.T) {
-	t.Setenv("DUVA_HOST", "pi")
+	t.Setenv("DUVA_SETTING_HOST", "pi")
 	t.Setenv("DUVA_SETTING_UPDATE_TIMEOUT", "5m")
 
 	c, err := loadConfig()
@@ -87,7 +87,7 @@ func TestTheProjectIsWhatIsMounted(t *testing.T) {
 
 // An injected token is used as given.
 func TestAnInjectedTokenIsUsed(t *testing.T) {
-	t.Setenv("DUVA_QUEUE_TOKEN", "s3cret")
+	t.Setenv("DUVA_SETTING_API_TOKEN", "s3cret")
 	if got, err := tokenFromEnv(); err != nil || got != "s3cret" {
 		t.Errorf("token = %q, want what was injected", got)
 	}
@@ -96,7 +96,7 @@ func TestAnInjectedTokenIsUsed(t *testing.T) {
 // No token is a refusal to start, not a queue left open and not one with a
 // token minted and printed to the log.
 func TestNoTokenIsARefusal(t *testing.T) {
-	t.Setenv("DUVA_QUEUE_TOKEN", "")
+	t.Setenv("DUVA_SETTING_API_TOKEN", "")
 	if _, err := tokenFromEnv(); err == nil {
 		t.Fatal("a queue with no token was allowed to start")
 	}

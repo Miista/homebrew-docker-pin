@@ -5,9 +5,10 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"time"
+
+	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/settings"
 )
 
 // act runs one of the queue's actions from a terminal, as
@@ -47,9 +48,9 @@ func act(action string, args []string) error {
 
 // postLocal sends an action to this host's queue API, as the CLI.
 func postLocal(path string, form url.Values) error {
-	token := os.Getenv("DUVA_QUEUE_TOKEN")
+	token := settings.Value(settings.APIToken)
 	if token == "" {
-		return fmt.Errorf("DUVA_QUEUE_TOKEN is not set: run this inside duva's container")
+		return fmt.Errorf("%s is not set: run this inside duva's container", settings.EnvVar(settings.APIToken))
 	}
 	req, err := http.NewRequest(http.MethodPost, "http://127.0.0.1:8080"+path, strings.NewReader(form.Encode()))
 	if err != nil {

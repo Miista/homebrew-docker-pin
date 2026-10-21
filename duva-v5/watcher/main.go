@@ -14,20 +14,18 @@
 //
 //	/data      per-service cutoffs, and findings not yet handed on
 //
-// Configuration:
+// Configuration, through internal/settings (DUVA_SETTING_<KEY>):
 //
-//	DUVA_HOST            what this watcher calls itself
-//	DUVA_SCHEDULE        a 5-field cron expression
-//	DUVA_SINCE           override the cutoff for one run (RFC 3339, or a
-//	                         duration like 168h meaning "the last week")
-//	DUVA_LOG_LEVEL       trace/debug/info/warn/error
+//	schedule   a 5-field cron expression
+//	since      override the cutoff for one run (RFC 3339, or a duration
+//	           like 168h meaning "the last week")
+//	log_level  trace/debug/info/warn/error
 package watcher
 
 import (
 	"context"
 	"database/sql"
 	"fmt"
-	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -103,7 +101,7 @@ type Options struct {
 	Store *store.Store
 }
 
-// Serve checks once now and then on DUVA_SCHEDULE, until ctx is done.
+// Serve checks once now and then on the schedule setting, until ctx is done.
 func Serve(ctx context.Context, log zerolog.Logger, opts Options) error {
 	expr, err := scheduleFromEnv()
 	if err != nil {
@@ -113,7 +111,7 @@ func Serve(ctx context.Context, log zerolog.Logger, opts Options) error {
 	// schedule that does not parse should stop this now, not in a day, with
 	// nothing in the log to say why nothing happened.
 	if _, err := croncal.Next(expr, time.Now()); err != nil {
-		return fmt.Errorf("DUVA_SCHEDULE %q: %w", expr, err)
+		return fmt.Errorf("%s %q: %w", settings.EnvVar(settings.Schedule), expr, err)
 	}
 	log.Info().Msgf("checking on schedule %q", expr)
 
@@ -205,14 +203,6 @@ func Rescan(log zerolog.Logger, service string, opts Options) error {
 func run(log zerolog.Logger, only string, opts Options) error {
 	runMu.Lock()
 	defer runMu.Unlock()
-	host := os.Getenv("DUVA_HOST")
-	if host == "" {
-		if h, err := os.Hostname(); err == nil && h != "" {
-			host = h
-		} else {
-			host = "unknown-host"
-		}
-	}
 
 	root := opts.Root
 	if root == "" {

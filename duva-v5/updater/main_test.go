@@ -17,14 +17,14 @@ func TestTheRepositoryIsRequired(t *testing.T) {
 		old := repoDir
 		repoDir = ""
 		t.Cleanup(func() { repoDir = old })
-		t.Setenv("DUVA_COMPOSE_DIR", sub)
+		t.Setenv("DUVA_SETTING_COMPOSE_DIR", sub)
 
 		_, err := projectFile()
 		if err == nil {
 			t.Fatalf("compose dir %q: no error, so it would start against a path nobody chose", sub)
 		}
-		if !strings.Contains(err.Error(), "DUVA_REPO") {
-			t.Errorf("the error does not name DUVA_REPO: %v", err)
+		if !strings.Contains(err.Error(), "DUVA_SETTING_REPO") {
+			t.Errorf("the error does not name DUVA_SETTING_REPO: %v", err)
 		}
 	}
 }
@@ -40,7 +40,7 @@ func TestTheComposeDirectoryIsOptional(t *testing.T) {
 	old := repoDir
 	repoDir = repo
 	t.Cleanup(func() { repoDir = old })
-	t.Setenv("DUVA_COMPOSE_DIR", "")
+	t.Setenv("DUVA_SETTING_COMPOSE_DIR", "")
 
 	got, err := projectFile()
 	if err != nil {
@@ -62,7 +62,7 @@ func TestLeavingItOutDoesNotSearch(t *testing.T) {
 	old := repoDir
 	repoDir = repo
 	t.Cleanup(func() { repoDir = old })
-	t.Setenv("DUVA_COMPOSE_DIR", "")
+	t.Setenv("DUVA_SETTING_COMPOSE_DIR", "")
 
 	if got, err := projectFile(); err == nil {
 		t.Errorf("found %q by searching, when the root has no compose file", got)
@@ -90,7 +90,7 @@ func TestTheProjectIsFoundByDescendingOnly(t *testing.T) {
 	repoDir = repo
 	t.Cleanup(func() { repoDir = old })
 
-	t.Setenv("DUVA_COMPOSE_DIR", "optiplex")
+	t.Setenv("DUVA_SETTING_COMPOSE_DIR", "optiplex")
 	got, err := projectFile()
 	if err != nil {
 		t.Fatalf("projectFile: %v", err)
@@ -109,7 +109,7 @@ func TestASubdirectoryCannotEscape(t *testing.T) {
 	t.Cleanup(func() { repoDir = old })
 
 	for _, sub := range []string{"../etc", "..", "/absolute", "optiplex/../.."} {
-		t.Setenv("DUVA_COMPOSE_DIR", sub)
+		t.Setenv("DUVA_SETTING_COMPOSE_DIR", sub)
 		if got, err := projectFile(); err == nil {
 			t.Errorf("subdirectory %q was accepted, resolving to %q", sub, got)
 		}
@@ -128,7 +128,7 @@ func TestAMissingProjectIsAnError(t *testing.T) {
 	repoDir = repo
 	t.Cleanup(func() { repoDir = old })
 
-	t.Setenv("DUVA_COMPOSE_DIR", "optiplex")
+	t.Setenv("DUVA_SETTING_COMPOSE_DIR", "optiplex")
 	if got, err := projectFile(); err == nil {
 		t.Errorf("found %q by climbing out of the project it was pointed at", got)
 	}

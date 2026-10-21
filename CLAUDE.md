@@ -106,8 +106,8 @@ and `duva-v5/README.md`.
   page reads its own host's queue through `ui.LocalQueue`. The rules above
   about what watch, queue and updater may know still hold.
 - **Nothing inside a host talks over a network.** No `/v1/notify`, no updater
-  HTTP API, no internal URLs or tokens. The queue API on 8080 exists only for
-  the page on another host; the page is on 8081, apart, because the page is
+  HTTP API, no internal URLs or tokens. Hosts are peers: the API on 8080
+  exists only for the page on another host; the page is on 8081, apart, because the page is
   published and the API is not. The self-update helper still serves its
   progress over HTTP, read with `update.WatchURL`.
 - **Policy is read from the running container's labels** (`dockerapi.Labels`,
@@ -117,9 +117,9 @@ and `duva-v5/README.md`.
   image from the file; `compose up -d <service>` would deploy undeployed
   edits along with it. Held by `TestV5PolicyComesFromTheRunningContainer`.
 - **Auth is OIDC, always.** The page refuses to start without all four
-  `DUVA_UI_OIDC_*`, and refuses `DUVA_UI_AUTH_DISABLED`,
-  `DUVA_UI_LOCAL_ENABLED` and `DUVA_UI_AUTH_PUBLIC_PATHS` by name. The queue
-  refuses to start without `DUVA_QUEUE_TOKEN`. The page runs in the process
+  `ui.oidc.*` settings, and v4's `DUVA_UI_AUTH_DISABLED`,
+  `DUVA_UI_LOCAL_ENABLED` and `DUVA_UI_AUTH_PUBLIC_PATHS` are refused by name
+  (`settings.Gone`). The API refuses to start without `api_token`. The page runs in the process
   holding the docker socket; that risk was accepted (see the design note).
 - **Each component recovers from its own panic**; three in ten minutes takes
   the process down. Container events poke the queue's reconcile; the tick is
@@ -141,12 +141,14 @@ and `duva-v5/README.md`.
   after the pull, which is the only point a version change's digest is
   certain. The contract's `blocked` status is that refusal. Held by
   `TestV5ABlockedReleaseIsNeverApplied`.
-- **Settings go through configy** (`internal/settings`): `DUVA_SETTING_<KEY>`
-  wins, else the store's `settings` table, else the default; an invalid value
-  is an error. What is needed before the store opens, or would lock people
-  out if edited behind the sign-in (`DUVA_REPO`, `DUVA_HOST`, `DUVA_UI`,
-  `DUVA_UI_OIDC_*`, the queue tokens and list), stays a plain variable. An
-  old name refuses to start (`settings.CheckRenamed`). configy needs Go 1.27.
+- **Every setting goes through configy** (`internal/settings`), from the
+  environment only: `DUVA_SETTING_<KEY>`, else the default; an invalid value
+  is an error. No exceptions, the repo, OIDC and tokens included. There is no
+  stored fallback (0004 dropped the table): nothing edits settings from the
+  page, so a store would be a second, invisible source, and would put
+  secrets in the database. Peers are `peers` (`host=url,...`) with
+  `peer.<host>.token` each. An old name refuses to start
+  (`settings.CheckRenamed`). configy needs Go 1.27.
 - An image that declares `VOLUME` broke two things in `dockerapi`, both fixed:
   `containerID` must match `/containers/<id>/`, not any 64-hex string, and
   `createSpec` must not bind what compose already put in `HostConfig.Mounts`.

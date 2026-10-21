@@ -2,7 +2,8 @@ package gate
 
 import (
 	"fmt"
-	"os"
+
+	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/settings"
 )
 
 // tokenFromEnv is the bearer token a UI must present to read or approve.
@@ -13,9 +14,10 @@ import (
 // changed on every restart besides. A queue with no token configured is a
 // deployment mistake to say out loud, not one to paper over.
 func tokenFromEnv() (string, error) {
-	t := os.Getenv("DUVA_QUEUE_TOKEN")
+	t := settings.Value(settings.APIToken)
 	if t == "" {
-		return "", fmt.Errorf("DUVA_QUEUE_TOKEN is not set: it is the token a UI must present to read this queue or approve from it")
+		return "", fmt.Errorf("%s is not set: it is the token a peer's page must present to read this host's queue or approve from it",
+			settings.EnvVar(settings.APIToken))
 	}
 	return t, nil
 }
