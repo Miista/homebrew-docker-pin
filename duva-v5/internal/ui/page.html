@@ -975,11 +975,28 @@ createApp({
         for (const d of document.querySelectorAll("dialog")) {
           d.addEventListener("click", e => { if (e.target === d) this.slideClose(d) })
         }
-        // A menu closes on a press anywhere outside it.
+        // A menu closes on a press anywhere outside it, and that press does
+        // nothing else: the click it becomes is swallowed before it reaches
+        // the row, button or link under it. Closing a menu is all a tap
+        // outside one means.
+        let closing = false
         document.addEventListener("pointerdown", e => {
-          if (e.target.closest("[data-pop]")) return
+          // Inside the open menu, or on what opened it: that is the menu's.
+          // Another row's buttons are outside it, like anywhere else.
+          const pop = e.target.closest("[data-pop]")
+          if (pop && pop.querySelector(".menu, .hosts")) return
+          if (!(this.open || this.top || this.pinned)) return
           this.open = ""; this.top = false; this.pinned = false
+          closing = true
         })
+        document.addEventListener("click", e => {
+          if (!closing) return
+          closing = false
+          e.stopPropagation(); e.preventDefault()
+        }, true)
+        // A press that never became a click -- a scroll, a drag -- must not
+        // leave the next real tap swallowed.
+        document.addEventListener("pointercancel", () => { closing = false })
         // ⌘K (Ctrl K) jumps to the filter; Escape closes a menu, or clears
         // and leaves the filter.
         document.addEventListener("keydown", e => {
