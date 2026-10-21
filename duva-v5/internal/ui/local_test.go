@@ -15,6 +15,7 @@ type localQueue struct {
 	pending  []queue.Entry
 	approved []string
 	refuse   string
+	acted    []string
 }
 
 func (l *localQueue) Snapshot() queue.Snapshot {
@@ -26,6 +27,26 @@ func (l *localQueue) Approve(service, actor string) string {
 		return l.refuse
 	}
 	l.approved = append(l.approved, service)
+	return ""
+}
+
+func (l *localQueue) Discard(id int64, actor string) string {
+	l.acted = append(l.acted, fmt.Sprintf("discard %d by %s", id, actor))
+	return ""
+}
+
+func (l *localQueue) Block(id int64, reason, actor string) string {
+	l.acted = append(l.acted, fmt.Sprintf("block %d (%s) by %s", id, reason, actor))
+	return ""
+}
+
+func (l *localQueue) CheckNow(service, actor string) string {
+	l.acted = append(l.acted, "check "+service+" by "+actor)
+	return ""
+}
+
+func (l *localQueue) RescanNow(service, actor string) string {
+	l.acted = append(l.acted, "rescan "+service+" by "+actor)
 	return ""
 }
 

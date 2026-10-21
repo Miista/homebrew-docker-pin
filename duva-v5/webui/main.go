@@ -103,6 +103,7 @@ func Run(ctx context.Context, log zerolog.Logger, opts Options) error {
 		Handler: newHandler(&ui.Server{
 			Source:   collector,
 			Approver: ap,
+			Actions:  actionsFor(ap, collector),
 			Actor:    signedIn,
 			Version:  Version,
 		}, gate),
@@ -196,4 +197,14 @@ func boolEnv(key string, fallback bool) bool {
 		os.Exit(1)
 	}
 	return v
+}
+
+// actionsFor offers discard, block, check and rescan exactly when approving
+// is offered: they carry the same authority over a host, so a read-only page
+// has neither.
+func actionsFor(ap ui.Approver, c *ui.Collector) ui.Actions {
+	if ap == nil {
+		return nil
+	}
+	return c
 }

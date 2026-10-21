@@ -50,6 +50,11 @@ type LocalQueue interface {
 	// empty on success.
 	Approve(service, actor string) string
 	Stream(service string, w http.ResponseWriter, r *http.Request) error
+	// The other actions, each answering with a message, empty on success.
+	Discard(id int64, actor string) string
+	Block(id int64, reason, actor string) string
+	CheckNow(service, actor string) string
+	RescanNow(service, actor string) string
 }
 
 // Collector fans out over queues and implements what the page renders from.
@@ -501,4 +506,80 @@ func why(err error) string {
 		return s[i+3:]
 	}
 	return s
+}
+
+// Discard drops an entry on host for now.
+func (c *Collector) Discard(host string, id int64, actor string) error {
+	return c.act(host, actor,
+		func(l LocalQueue) string { return l.Discard(id, actor) },
+		fmt.Sprintf("/v1/discard/%d", id), nil)
+}
+
+// Block blocks the release an entry on host offers. The reason is required:
+// it is what the next person to see the block is told.
+func (c *Collector) Block(host string, id int64, reason, actor string) error {
+	return c.act(host, actor,
+		func(l LocalQueue) string { return l.Block(id, reason, actor) },
+		fmt.Sprintf("/v1/block/%d", id), url.Values{"reason": {reason}})
+}
+
+// Check asks host's watcher to look at a service now.
+func (c *Collector) Check(host, service, actor string) error {
+	return c.act(host, actor,
+		func(l LocalQueue) string { return l.CheckNow(service, actor) },
+		"/v1/check/"+url.PathEscape(service), nil)
+}
+
+// Rescan asks host's watcher to forget a service's cutoff and look again.
+func (c *Collector) Rescan(host, service, actor string) error {
+	return c.act(host, actor,
+		func(l LocalQueue) string { return l.RescanNow(service, actor) },
+		"/v1/rescan/"+url.PathEscape(service), nil)
+}
+
+// act routes one action to the queue that owns it: a call for the queue in
+// this process, the queue API for one on another host. Either way the answer
+// is a message for a person, and an empty one is success.
+func (c *Collector) act(host, actor string, local func(LocalQueue) string, path string, form url.Values) error {
+	for _, d := range c.Upstreams {
+		if d.Host != host {
+			continue
+		}
+		if d.Local != nil {
+			if msg := local(d.Local); msg != "" {
+				return fmt.Errorf("%s", msg)
+			}
+			return nil
+		}
+		req, err := http.NewRequest(http.MethodPost, strings.TrimSuffix(d.URL, "/")+path,
+			strings.NewReader(form.Encode()))
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		if d.Token != "" {
+			req.Header.Set("Authorization", "Bearer "+d.Token)
+		}
+		if actor != "" {
+			req.Header.Set("X-Duva-Actor", actor)
+		}
+		resp, err := c.client().Do(req)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+			return fmt.Errorf("%s: %s", resp.Status, strings.TrimSpace(string(body)))
+		}
+		var out struct {
+			Message string `json:"message"`
+		}
+		json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&out)
+		if out.Message != "" {
+			return fmt.Errorf("%s", out.Message)
+		}
+		return nil
+	}
+	return fmt.Errorf("no queue named %q", host)
 }

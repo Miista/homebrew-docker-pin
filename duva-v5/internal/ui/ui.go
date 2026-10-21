@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"html/template"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/queue"
@@ -63,6 +64,15 @@ type Approver interface {
 	Approve(key, actor string) error
 }
 
+// Actions are what a person may do to a queue besides approving. Collector
+// implements them, routing each to the host that owns it.
+type Actions interface {
+	Discard(host string, id int64, actor string) error
+	Block(host string, id int64, reason, actor string) error
+	Check(host, service, actor string) error
+	Rescan(host, service, actor string) error
+}
+
 // Server serves the queue.
 type Server struct {
 	Source Source
@@ -71,6 +81,10 @@ type Server struct {
 	// endpoint that triggers updates should not exist on a UI meant only to
 	// report.
 	Approver Approver
+	// Actions enables discard, block, check and rescan. Nil leaves them off
+	// the page and their endpoints unregistered, as for Approver: they carry
+	// the same authority over a host.
+	Actions Actions
 	// Actor names who a request is from, for the record of an approval.
 	// Nil records no one in particular.
 	Actor   func(*http.Request) string
@@ -91,6 +105,12 @@ func (s *Server) Handler() http.Handler {
 	if s.Approver != nil {
 		mux.HandleFunc("/apply", s.apply)
 		mux.HandleFunc("/api/apply/", s.applyJSON)
+	}
+	if s.Actions != nil {
+		mux.HandleFunc("/api/discard/", s.action("/api/discard/", s.discard))
+		mux.HandleFunc("/api/block/", s.action("/api/block/", s.block))
+		mux.HandleFunc("/api/check/", s.action("/api/check/", s.check))
+		mux.HandleFunc("/api/rescan/", s.action("/api/rescan/", s.rescan))
 	}
 	mux.HandleFunc("/", s.index)
 	return mux
@@ -119,7 +139,10 @@ type row struct {
 	// Key is what a click posts back: "host/service". The row carries it
 	// rather than the page rebuilding it, so there is one definition of what
 	// identifies a row.
-	Key        string `json:"key"`
+	Key string `json:"key"`
+	// Entry is the queued entry's row on its host, for the actions that act
+	// on an entry rather than a service: discard and block.
+	Entry      int64  `json:"entry"`
 	Image      string `json:"image"`
 	CurrentTag string `json:"current_tag"`
 	Candidate  string `json:"candidate"`
@@ -194,7 +217,9 @@ type state struct {
 	Unreachable []Problem `json:"unreachable"`
 	Blocked     []Blocked `json:"blocked"`
 	CanApply    bool      `json:"can_apply"`
-	Version     string    `json:"version"`
+	// Actions is whether the page offers discard, block, check and rescan.
+	Actions bool   `json:"actions"`
+	Version string `json:"version"`
 }
 
 func (s *Server) snapshot() state {
@@ -218,6 +243,7 @@ func (s *Server) snapshot() state {
 		Unreachable: unreachable,
 		Blocked:     blocked,
 		CanApply:    s.Approver != nil,
+		Actions:     s.Actions != nil,
 		Version:     s.Version,
 	}
 }
@@ -344,6 +370,7 @@ func toRow(e Hosted) row {
 		Service:    e.Service,
 		Host:       e.Host,
 		Key:        Key(e.Host, e.Service),
+		Entry:      e.ID,
 		Image:      shortImage(e.Image),
 		CurrentTag: e.From,
 		Candidate:  display(e.Entry),
@@ -402,4 +429,58 @@ func (s *Server) actor(r *http.Request) string {
 		return ""
 	}
 	return s.Actor(r)
+}
+
+// action is the shape the four action routes share: POST, a path of
+// "host/subject", and an answer that is a message for a person.
+func (s *Server) action(prefix string, do func(host, subject string, r *http.Request) error) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		host, subject, ok := SplitKey(strings.TrimPrefix(r.URL.Path, prefix))
+		if !ok || subject == "" {
+			http.Error(w, "want host/subject", http.StatusBadRequest)
+			return
+		}
+		message := ""
+		if err := do(host, subject, r); err != nil {
+			message = err.Error()
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		json.NewEncoder(w).Encode(map[string]string{"message": message})
+	}
+}
+
+func entryOf(subject string) (int64, error) {
+	id, err := strconv.ParseInt(subject, 10, 64)
+	if err != nil || id <= 0 {
+		return 0, fmt.Errorf("no such entry")
+	}
+	return id, nil
+}
+
+func (s *Server) discard(host, subject string, r *http.Request) error {
+	id, err := entryOf(subject)
+	if err != nil {
+		return err
+	}
+	return s.Actions.Discard(host, id, s.actor(r))
+}
+
+func (s *Server) block(host, subject string, r *http.Request) error {
+	id, err := entryOf(subject)
+	if err != nil {
+		return err
+	}
+	return s.Actions.Block(host, id, strings.TrimSpace(r.FormValue("reason")), s.actor(r))
+}
+
+func (s *Server) check(host, service string, r *http.Request) error {
+	return s.Actions.Check(host, service, s.actor(r))
+}
+
+func (s *Server) rescan(host, service string, r *http.Request) error {
+	return s.Actions.Rescan(host, service, s.actor(r))
 }
