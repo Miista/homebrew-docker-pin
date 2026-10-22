@@ -781,6 +781,61 @@
   </section>
 
 
+  <!-- What comes to you when its delay runs out: duva.delay holds every
+       release, and these are the ones duva.auto does not cover. Not in the
+       queue yet, and not something duva will do on its own. -->
+  <section class="pane soak" :class="tab === 'upcoming' ? '' : 'off'" v-show="view === 'queue'">
+    <div class="intro">
+      <h2 class="h">Upcoming</h2>
+      <p class="lead">Delayed, and coming to you when the delay is over</p>
+    </div>
+
+    <div class="group" v-for="g in groups(shownUpcoming())" :key="g.host">
+      <div class="group-head">{{ g.host || "this host" }}</div>
+      <ul class="rows">
+        <li v-for="r in g.rows" :key="r.key + '#' + r.entry" :class="r.stale ? 'stale' : ''" @click="tap(r, $event)">
+          <span class="svc" :title="r.image">{{ r.service }}</span>
+
+          <span class="jump mono" v-if="r.moved"><span class="to">{{ r.tag }}</span></span>
+          <span class="jump mono" v-else><span class="from">{{ r.current_tag }}</span><span class="arrow">&rarr;</span><span class="to">{{ r.candidate }}</span></span>
+
+          <span class="when" :title="r.why"><span class="in">{{ arrives(r.release_at) }}</span><span class="on">on {{ when(r.release_at) }}</span></span>
+
+          <!-- Told apart by its entry: a service can be in both tables. -->
+          <span class="acts" data-pop>
+            <button class="apply" v-if="canApply" data-arm
+                    :class="armed === armKey(r) ? 'armed' : ''"
+                    :disabled="!r.can_apply || running(r.key) || busyHost(r.host)"
+                    :title="buttonReason(r) || 'Update now, without waiting for the delay'"
+                    @click="press(r)">{{ running(r.key) ? "Updating…" : armed === armKey(r) ? "Confirm?" : "Update now" }}</button>
+            <button class="more" title="Release notes, block" aria-haspopup="menu"
+                    :aria-expanded="open === r.key + '#' + r.entry ? 'true' : 'false'"
+                    @click="toggle(r.key + '#' + r.entry)"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true"><circle cx="3" cy="7" r="1.2" fill="currentColor"/><circle cx="7" cy="7" r="1.2" fill="currentColor"/><circle cx="11" cy="7" r="1.2" fill="currentColor"/></svg></button>
+            <span class="menu" role="menu" v-if="open === r.key + '#' + r.entry">
+              <a role="menuitem" v-if="r.notes" :href="r.notes" target="_blank" rel="noopener noreferrer" @click="openNotes($event)"><span>Release notes</span><svg class="out" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M9.5 2.5h4v4M13.5 2.5L7.5 8.5M12 9.5v3a1 1 0 0 1-1 1H3.5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></a>
+              <button role="menuitem" v-else disabled title="The image doesn't say where its source lives"><span>Release notes</span><svg class="out" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M9.5 2.5h4v4M13.5 2.5L7.5 8.5M12 9.5v3a1 1 0 0 1-1 1H3.5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+              <hr v-if="actions">
+              <button role="menuitem" class="danger" v-if="actions" :disabled="r.stale || running(r.key)"
+                      title="Never apply this release, until it is unblocked"
+                      @click="startBlock(r)">Block</button>
+            </span>
+          </span>
+
+          <ul class="steps mono" v-if="steps[r.key] || finished[r.key]">
+            <li v-for="line in (steps[r.key] || [])">{{ line }}</li>
+            <li :class="finished[r.key] && finished[r.key].startsWith('failed') ? 'bad' : 'ok'"
+                v-if="finished[r.key]">{{ finished[r.key] }}</li>
+          </ul>
+        </li>
+      </ul>
+    </div>
+
+    <div class="empty quiet" v-if="!shownUpcoming().length">
+      <p>{{ upcoming.length ? "Nothing matches." : "Nothing upcoming." }}</p>
+    </div>
+  </section>
+
+
   <!-- Jobs: what each host runs on its own, when it last ran and what it did,
        when it runs next. A page of its own at #jobs, from the menu: a table
        wants the width a dialog does not have. Tapping a row shows what the
@@ -1026,6 +1081,7 @@
   <nav class="tabbar" v-show="view === 'queue'">
     <button :class="tab === 'queue' ? 'sel' : ''" @click="goTab('queue')">Queue <span class="n">{{ rows.length }}</span></button>
     <button :class="tab === 'scheduled' ? 'sel' : ''" @click="goTab('scheduled')">Scheduled <span class="n">{{ soaking.length }}</span></button>
+    <button :class="tab === 'upcoming' ? 'sel' : ''" @click="goTab('upcoming')">Upcoming <span class="n">{{ upcoming.length }}</span></button>
   </nav>
 </main>
 
@@ -1044,6 +1100,7 @@ createApp({
     return {
       rows: initial.rows || [],
       soaking: initial.soaking || [],
+      upcoming: initial.upcoming || [],
       blocks: initial.blocks || [],
       checks: initial.checks || [],
       checking: false,  // a check-all was just asked for
@@ -1176,6 +1233,7 @@ createApp({
           const s = await r.json()
           this.rows = s.rows || []
           this.soaking = s.soaking || []
+          this.upcoming = s.upcoming || []
           this.blocks = s.blocks || []
           this.checks = s.checks || []
           this.unreachable = s.unreachable || []
@@ -1211,6 +1269,10 @@ createApp({
       },
 
       // The scheduled rows the filter allows.
+      shownUpcoming() {
+        return this.upcoming.filter(r => this.matches(r))
+      },
+
       shownSoaking() {
         return this.soaking.filter(r => this.matches(r))
       },
@@ -1278,7 +1340,7 @@ createApp({
         if (!this.sheetId) return null
         const [key, entry] = this.sheetId.split("#")
         const r = entry
-          ? this.soaking.find(s => s.key === key && String(s.entry) === entry)
+          ? [...this.soaking, ...this.upcoming].find(s => s.key === key && String(s.entry) === entry)
           : this.rows.find(s => s.key === key)
         if (!r && !this.steps[key]) queueMicrotask(() => this.closeSheet())
         return r || null
@@ -1377,7 +1439,7 @@ createApp({
       // rather than dragging the page off into nothing.
       swipeTabs() {
         let x0 = 0, y0 = 0, t0 = 0, dx = 0, mode = "", pane = null, nb = null
-        const order = ["queue", "scheduled"]
+        const order = ["queue", "scheduled", "upcoming"]
         const panes = () => [...document.querySelectorAll(".pane")]
         // Shows a neighbour beside the pane, where it will sit once it is the
         // shown one and the page is back at its top -- which is where the
@@ -1768,6 +1830,11 @@ createApp({
       },
 
       // How long until then, coarsely: it is a wait of days, not seconds.
+      // When an upcoming release comes to the queue.
+      arrives(at) {
+        return this.applies(at).replace("Applies", "Arrives")
+      },
+
       applies(at) {
         if (!at) return ""
         const ms = new Date(at) - Date.now()

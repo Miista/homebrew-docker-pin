@@ -272,3 +272,27 @@ services:
 		t.Errorf("waiting = %+v, want it left for a person", got)
 	}
 }
+
+// A held release its policy does not cover comes to a person when its delay
+// is over: into the queue, announced then -- the first they hear of it --
+// and never applied. Needs nothing that applies.
+func TestADueReleaseNotCoveredComesToAPerson(t *testing.T) {
+	queue := q.NewPending()
+	queue.Put(q.Entry{Service: "app", Image: "example.com/app", From: "1.0.0", To: "1.1.0",
+		Tag: "1.1.0", Kind: ociversion.KindMinor, Auto: q.AutoPatch,
+		ReleaseAt: soakNow.Add(-time.Minute).Format(time.RFC3339)}, soakNow)
+	var told []string
+	r := &reconciler{queue: queue, log: zerolog.Nop(), now: func() time.Time { return soakNow },
+		announce: func(e q.Entry) { told = append(told, e.Service) }}
+
+	summary, _ := r.release()
+	if w := queue.Waiting(); len(w) != 1 || w[0].ReleaseAt != "" {
+		t.Errorf("waiting = %+v, want the minor, no longer held", w)
+	}
+	if len(told) != 1 {
+		t.Errorf("announced %v, want it once", told)
+	}
+	if summary != "0 applied, 1 now waiting for you" {
+		t.Errorf("summary = %q", summary)
+	}
+}

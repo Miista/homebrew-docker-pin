@@ -37,16 +37,15 @@ const defaultReconcileInterval = 10 * time.Minute
 // v7.5's deploys both found entries from before a rename or an old path
 // layout, unreconcilable and warning on every tick).
 func recheck(root string, e q.Entry) (q.Recheck, error) {
-	return recheckWith(q.Lookup{Root: root}, e, false)
+	return recheckWith(q.Lookup{Root: root}, e, false, false)
 }
 
 // recheckWith is recheck through a given Lookup, so policy is read from
 // wherever the queue reads it.
 //
-// refile also fits a kept entry to a policy changed since it was decided (see
-// q.Refile): only where something here applies, since a release time with
-// nothing to release it would take the entry from a person for good.
-func recheckWith(lookup q.Lookup, e q.Entry, refile bool) (q.Recheck, error) {
+// refile also fits a kept entry to its policy as it stands now (see
+// q.Refile); applies is whether anything here applies a covered release.
+func recheckWith(lookup q.Lookup, e q.Entry, refile, applies bool) (q.Recheck, error) {
 	svc, found, err := lookup.ByService(e.Service)
 	if err != nil {
 		return q.Recheck{}, fmt.Errorf("reading the compose project: %w", err)
@@ -67,7 +66,7 @@ func recheckWith(lookup q.Lookup, e q.Entry, refile bool) (q.Recheck, error) {
 		// RecheckEntry has already replaced with the current one.
 		was := r.Entry
 		was.Auto = e.Auto
-		r.Entry, r.Refiled = q.Refile(was, svc, time.Now())
+		r.Entry, r.Refiled = q.Refile(was, svc, time.Now(), applies)
 	}
 	return r, nil
 }
@@ -90,6 +89,9 @@ type reconciler struct {
 	// a queue with no updater never set a soak, since there was nothing to
 	// apply unattended.
 	applier q.Applier
+	// announce tells a person about a release that has come to them: one
+	// held by its delay, now over. Nil tells nobody.
+	announce func(q.Entry)
 	// applicable is asked before releasing, for the same reason the handler
 	// asks it: a container stopped while its update soaked must not be
 	// started by applying it. Nil means every service is.
@@ -195,7 +197,7 @@ func (r *reconciler) reconcile() (string, bool) {
 			if busy[e.Service] {
 				return q.Recheck{Keep: true, Entry: e}, nil
 			}
-			return recheckWith(q.Lookup{Root: r.root, Labels: r.labels}, e, r.applier != nil)
+			return recheckWith(q.Lookup{Root: r.root, Labels: r.labels}, e, true, r.applier != nil)
 		},
 		func(service string, err error) {
 			if errors.Is(err, q.ErrNoContainer) {
@@ -234,15 +236,32 @@ func (r *reconciler) reconcile() (string, bool) {
 // auto-apply, and what happens to it if the apply is deferred or fails is the
 // applier's existing answer rather than a second one here.
 func (r *reconciler) release() (string, bool) {
-	if r.applier == nil {
-		return "nothing applies here", false
-	}
-	released, failed := 0, 0
 	now := time.Now()
 	if r.now != nil {
 		now = r.now()
 	}
+	released, presented, failed := 0, 0, 0
 	for _, due := range r.queue.Due(now) {
+		// The delay says when; the policy says what. A release its policy
+		// does not cover comes to a person now, and is announced now: this
+		// is the first they hear of it.
+		if !due.Auto.Covers(due) {
+			e, ok := r.queue.Release(due, now)
+			if !ok {
+				continue
+			}
+			presented++
+			r.log.Info().Msgf("%s: delay is over, %s -> %s now waits for approval", e.Service, e.From, e.To)
+			if r.announce != nil {
+				r.announce(e)
+			}
+			continue
+		}
+		if r.applier == nil {
+			// Nothing here applies: it stays held, as a soak always has
+			// on a queue without an updater.
+			continue
+		}
 		if r.applicable != nil {
 			if ok, why := r.applicable(due.Service); !ok {
 				// Left soaking, so it is released the first tick after the
@@ -265,7 +284,7 @@ func (r *reconciler) release() (string, bool) {
 		released++
 		r.log.Info().Msgf("%s: delay is over, applying %s -> %s", e.Service, e.From, e.To)
 	}
-	summary := fmt.Sprintf("%d released", released)
+	summary := fmt.Sprintf("%d applied, %d now waiting for you", released, presented)
 	if failed > 0 {
 		summary += fmt.Sprintf(", %d could not start", failed)
 	}

@@ -40,8 +40,10 @@ func indent(s string) string {
 // CheckNow makes duva check, and returns when that check has finished.
 //
 // duva runs serve, which is what ships: up permanently, checking on a
-// schedule and once at startup. Restarting it is how a test asks for a check
-// now rather than waiting for a cron tick.
+// schedule. v4 also checks once at startup, so restarting it is how a test
+// asks for a check now. v5 does not, and is asked the way a person asks, with
+// "Check…" through the queue API -- after a restart too, which clears the
+// minute that API waits between two checks of everything.
 //
 // Which check finished is counted, not timed. duva has already checked once,
 // when the scenario came up and before the test changed anything, and a
@@ -60,16 +62,52 @@ func (s *Scenario) CheckNowIn(service string) {
 	if out, err := s.compose("restart", service); err != nil {
 		s.t.Fatalf("restarting %s: %v\n%s", service, err, out)
 	}
+	s.askForCheck(service)
 
 	s.waitFor("a check by "+service, 60*time.Second,
 		func() bool { return s.checksDone(service) > before },
 		func() string { return s.Logs(service) })
+	s.settled(service)
 }
 
-// checksDone is how many checks a duva has announced. It prints when it goes
-// back to sleep, so the count rises once per completed check.
+// checksDone is how many checks a duva has finished: each one says so, with
+// what it found, whether it ran on the schedule, at startup or was asked for.
 func (s *Scenario) checksDone(service string) int {
-	return strings.Count(s.Logs(service), "next check at")
+	return strings.Count(s.Logs(service), "check complete:")
+}
+
+// askForCheck asks a v5 duva to check every service now, as "Check…" does,
+// once its API answers. v4 checks at startup and needs nothing.
+func (s *Scenario) askForCheck(service string) {
+	s.t.Helper()
+	if !strings.HasPrefix(s.Name, "duva-v5/") {
+		return
+	}
+	s.waitFor(service+"'s queue API", 60*time.Second,
+		func() bool {
+			_, err := s.compose("exec", "-T", service, "wget", "-qO-", "http://127.0.0.1:8080/healthz")
+			return err == nil
+		},
+		func() string { return s.Logs(service) })
+	s.API("/v1/check-all", nil)
+}
+
+// settled waits, for a v5 duva, until no apply is in flight. A check hands
+// what policy allows to the updater and says it is complete; the apply runs
+// on after it, and a test reading the container before it lands reads the
+// old one.
+func (s *Scenario) settled(service string) {
+	s.t.Helper()
+	if !strings.HasPrefix(s.Name, "duva-v5/") {
+		return
+	}
+	s.waitFor(service+" to finish applying", 60*time.Second,
+		func() bool {
+			out, err := s.compose("exec", "-T", service, "wget", "-qO-",
+				"--header", "Authorization: Bearer "+v5Token, "http://127.0.0.1:8080/v1/snapshot")
+			return err == nil && !strings.Contains(out, `"applying"`)
+		},
+		func() string { return s.Logs(service) })
 }
 
 // WaitForLine returns the first log line from a service containing want,

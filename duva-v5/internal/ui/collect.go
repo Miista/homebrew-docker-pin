@@ -103,6 +103,8 @@ type snapshot struct {
 	queue []queue.Entry
 	// soaking is what that queue holds waiting out a soak.
 	soaking []queue.Entry
+	// upcoming is what it holds that comes to a person when the delay is over.
+	upcoming []queue.Entry
 	// blocks are the releases blocked on that host.
 	blocks []queue.Block
 	// lastCheck is when that host last looked for new tags, RFC 3339.
@@ -156,7 +158,7 @@ func (c *Collector) Collect() {
 			for _, svc := range snap.Applying {
 				applying[svc] = true
 			}
-			results[i] = snapshot{queue: snap.Pending, soaking: snap.Soaking, blocks: snap.Blocks,
+			results[i] = snapshot{queue: snap.Pending, soaking: snap.Soaking, upcoming: snap.Upcoming, blocks: snap.Blocks,
 				lastCheck: snap.LastCheck, services: snap.Services, canApply: snap.CanApply,
 				blocker: string(snap.Blocker), whyNot: snap.WhyNot,
 				applying: applying, jobs: snap.Jobs, err: err}
@@ -176,6 +178,7 @@ func (c *Collector) Collect() {
 			prev := c.cache[d.Host]
 			results[i].queue = prev.queue
 			results[i].soaking = prev.soaking
+			results[i].upcoming = prev.upcoming
 			results[i].blocks = prev.blocks
 			results[i].lastCheck = prev.lastCheck
 			results[i].services = prev.services
@@ -645,6 +648,16 @@ func entryQuery(entry int64) string {
 // Soaking returns what every queue holds waiting out a soak, labelled by
 // host, the soonest released first.
 func (c *Collector) Soaking() []Hosted {
+	return c.delayed(func(s snapshot) []queue.Entry { return s.soaking })
+}
+
+// Upcoming returns what every queue holds that comes to a person when its
+// delay is over, labelled by host, the soonest first.
+func (c *Collector) Upcoming() []Hosted {
+	return c.delayed(func(s snapshot) []queue.Entry { return s.upcoming })
+}
+
+func (c *Collector) delayed(of func(snapshot) []queue.Entry) []Hosted {
 	c.fresh()
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -654,7 +667,7 @@ func (c *Collector) Soaking() []Hosted {
 		if !ok {
 			continue
 		}
-		for _, e := range s.soaking {
+		for _, e := range of(s) {
 			out = append(out, Hosted{Entry: e, Host: d.Host, CanApply: s.canApply,
 				Applying: s.applying[e.Service] && s.err == nil, Stale: s.err != nil})
 		}

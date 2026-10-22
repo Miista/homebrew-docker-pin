@@ -77,6 +77,11 @@ type SoakSource interface {
 	Soaking() []Hosted
 }
 
+// UpcomingSource is a Source that also reports what is held for a person.
+type UpcomingSource interface {
+	Upcoming() []Hosted
+}
+
 // Approver acts on a click.
 type Approver interface {
 	// Approve tells the owning queue to apply one queued entry, keyed
@@ -278,6 +283,9 @@ type state struct {
 	// Soaking is what applies itself once its soak runs out: a thing of its
 	// own, shown apart from what waits for a person.
 	Soaking []row `json:"soaking"`
+	// Upcoming is what comes to a person once its delay is over: held, so not
+	// in the queue yet, and not something duva will apply.
+	Upcoming []row `json:"upcoming"`
 	// Blocks are the releases a person blocked, on every host.
 	Blocks []HostedBlock `json:"blocks"`
 	// Checks is when each host last looked for new tags.
@@ -302,6 +310,12 @@ func (s *Server) snapshot() state {
 			soaking = append(soaking, toRow(e))
 		}
 	}
+	upcoming := []row{}
+	if us, ok := s.Source.(UpcomingSource); ok {
+		for _, e := range us.Upcoming() {
+			upcoming = append(upcoming, toRow(e))
+		}
+	}
 	blocks := []HostedBlock{}
 	if bs, ok := s.Source.(BlockSource); ok {
 		blocks = bs.Blocks()
@@ -323,6 +337,7 @@ func (s *Server) snapshot() state {
 	return state{
 		Rows:        rows,
 		Soaking:     soaking,
+		Upcoming:    upcoming,
 		Blocks:      blocks,
 		Checks:      checks,
 		Unreachable: unreachable,
@@ -506,6 +521,9 @@ func (s *Server) notes(w http.ResponseWriter, r *http.Request) {
 	rows := s.Source.Pending()
 	if ss, ok := s.Source.(SoakSource); ok {
 		rows = append(rows, ss.Soaking()...)
+	}
+	if us, ok := s.Source.(UpcomingSource); ok {
+		rows = append(rows, us.Upcoming()...)
 	}
 	for _, e := range rows {
 		if e.Host != host || e.ID != entry {

@@ -547,9 +547,17 @@ func (q *Pending) Waiting() []Entry {
 	return out
 }
 
-// Soaking returns every entry waiting out a soak, the soonest released
-// first. All of them, not the newest per service: each is on its own clock.
-func (q *Pending) Soaking() []Entry {
+// Soaking returns every delayed entry its policy will apply when the delay is
+// over -- the page's Scheduled -- the soonest first. All of them, not the
+// newest per service: each is on its own clock.
+func (q *Pending) Soaking() []Entry { return q.delayed(true) }
+
+// Upcoming returns every delayed entry that comes to a person when the delay
+// is over: duva.delay holds every release, and duva.auto only decides what
+// the next action is.
+func (q *Pending) Upcoming() []Entry { return q.delayed(false) }
+
+func (q *Pending) delayed(unattended bool) []Entry {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	all, err := q.query(open + ` AND e.release_at IS NOT NULL`)
@@ -557,11 +565,14 @@ func (q *Pending) Soaking() []Entry {
 		q.fail(err)
 		return []Entry{}
 	}
-	sort.SliceStable(all, func(i, j int) bool { return all[i].ReleaseAt < all[j].ReleaseAt })
-	if all == nil {
-		all = []Entry{}
+	out := []Entry{}
+	for _, e := range all {
+		if e.Auto.Covers(e) == unattended {
+			out = append(out, e)
+		}
 	}
-	return all
+	sort.SliceStable(out, func(i, j int) bool { return out[i].ReleaseAt < out[j].ReleaseAt })
+	return out
 }
 
 // Len is how many services have something waiting.

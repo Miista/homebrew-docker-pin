@@ -149,6 +149,16 @@ and `duva-v5/README.md`.
   policy, so a failed apply is not re-armed every tick). Reconcile never
   applies: it sets or clears a release time, and the release job is the one
   unattended path. Held by `TestAPolicyChangedOutsideDuvaReachesWhatWaits`.
+- **`duva.auto` says what is applied unattended; `duva.delay` says when the
+  next action happens, whatever it is.** Every release of a delayed service
+  is held: when the delay is over, one `duva.auto` covers (`Auto.Covers`) is
+  applied, any other comes to a person and is announced then. The page
+  splits held releases into Scheduled (will apply) and Upcoming (will come to
+  you). Held by `TestADelayHoldsWhatWaitsForAPersonToo` and
+  `TestADueReleaseNotCoveredComesToAPerson`.
+- **No check at startup.** A deploy or restart used to be a full check of
+  every registry; a check now is the schedule, Check…, or Run now. The
+  integration suites ask v5 for one through `/v1/check-all`.
 - **The blocklist is by index digest, per image, never by tag**, and is
   checked twice: at enqueue where the digest is known, and by the updater
   after the pull, which is the only point a version change's digest is

@@ -127,6 +127,8 @@ type Snapshot struct {
 	Pending []Entry `json:"pending"`
 	// Soaking is what applies itself when its soak runs out, every entry.
 	Soaking []Entry `json:"soaking"`
+	// Upcoming is what comes to a person when its delay is over, every entry.
+	Upcoming []Entry `json:"upcoming"`
 	// Blocks are the releases a person blocked, still standing.
 	Blocks []Block `json:"blocks"`
 	// LastCheck is when this host last looked for new tags, RFC 3339; empty
@@ -204,6 +206,7 @@ func (s *Server) Snapshot() Snapshot {
 		Version:   s.Version,
 		Pending:   s.Queue.Waiting(),
 		Soaking:   s.Queue.Soaking(),
+		Upcoming:  s.Queue.Upcoming(),
 		Blocks:    s.Queue.Blocks(),
 		LastCheck: lastCheck,
 		Services:  services,

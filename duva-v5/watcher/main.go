@@ -117,7 +117,7 @@ func NextCheck() time.Time {
 	return next
 }
 
-// Serve checks once now and then on the schedule setting, until ctx is done.
+// Serve checks on the schedule setting, until ctx is done.
 func Serve(ctx context.Context, log zerolog.Logger, opts Options) error {
 	expr, err := scheduleFromEnv()
 	if err != nil {
@@ -131,14 +131,9 @@ func Serve(ctx context.Context, log zerolog.Logger, opts Options) error {
 	}
 	log.Info().Msgf("checking on schedule %q", expr)
 
-	// Once at startup, rather than waiting for the first tick. A daily
-	// schedule would otherwise leave a freshly deployed watcher silent for
-	// up to a day, and it is what makes restarting the container a way to
-	// ask for a check now.
-	if err := run(log, "", 0, opts); err != nil {
-		log.Error().Msgf("%v", err)
-	}
-
+	// Not at startup. Every deploy and restart used to be a full check of
+	// every registry too; asking for one now is the Jobs page's Run now, or
+	// Check…, and a restart is not a way to ask.
 	for {
 		next, err := croncal.Next(expr, time.Now())
 		if err != nil {

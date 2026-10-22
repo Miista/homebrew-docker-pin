@@ -311,7 +311,12 @@ func (g *Gate) Run(ctx context.Context) error {
 
 	reconcileDone := make(chan struct{})
 	rec := &reconciler{queue: g.queue, root: g.root, interval: cfg.ReconcileInterval, log: log,
-		applier: g.applying, labels: g.labels, poke: g.poke, containers: g.containers, st: g.st}
+		applier: g.applying, labels: g.labels, poke: g.poke, containers: g.containers, st: g.st,
+		announce: func(e q.Entry) {
+			if g.handler.Announce != nil {
+				g.handler.Announce(e)
+			}
+		}}
 	g.rec = rec
 	if g.live != nil {
 		rec.applicable = g.live.Applicable

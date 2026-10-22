@@ -66,6 +66,18 @@ func (a Auto) TakesDigestMoves() bool {
 	return a != AutoNone
 }
 
+// Covers reports whether this policy applies an entry unattended: a digest
+// move under anything but none, a version change no larger than allowed.
+//
+// What tells Scheduled from Upcoming. Both hold a delayed release; when the
+// delay is over, one is applied and the other comes to a person.
+func (a Auto) Covers(e Entry) bool {
+	if e.Kind == "" {
+		return a.TakesDigestMoves()
+	}
+	return a.rank() > 0 && a.rank() >= rank(e.Kind)
+}
+
 // rank orders the version ladder. Higher takes a larger version step.
 //
 // AutoDigest ranks 0, alongside AutoNone: it consents to no version step at

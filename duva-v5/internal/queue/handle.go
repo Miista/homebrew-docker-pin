@@ -199,6 +199,16 @@ func (h *Handler) Handle(n Notice) Result {
 	default: // Queue
 		e := EntryFrom(v, svc, digestFor(v, n))
 		e.Published = published(n)
+		// duva.delay says when the next action happens, whatever it is. Here
+		// it is showing a person, so the release is held -- Upcoming on the
+		// page -- and announced when it comes to them, not now.
+		if at := releaseAt(svc.Soak, n.Published, h.now()); !at.IsZero() {
+			e.ReleaseAt = at.UTC().Format(time.RFC3339)
+			if _, added := h.Queue.PutEntry(e, h.now()); added {
+				h.logf("%s: %s -> %s is held until %s, then waits for approval (%s)", svc.Name, v.From, v.To, e.ReleaseAt, v.Why)
+			}
+			return Result{Outcome: Queue, Service: svc.Name, Message: "held until " + e.ReleaseAt, Status: http.StatusOK}
+		}
 		if h.enqueue(e) {
 			h.logf("%s: %s -> %s is available, waiting for approval (%s)", svc.Name, v.From, v.To, v.Why)
 		}

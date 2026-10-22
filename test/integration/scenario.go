@@ -189,9 +189,11 @@ func (s *Scenario) Start(services ...string) {
 	}
 	s.composeUp(services...)
 	for _, service := range services {
+		s.askForCheck(service)
 		s.waitFor("a check by "+service, 60*time.Second,
 			func() bool { return s.checksDone(service) > 0 },
 			func() string { return s.Logs(service) })
+		s.settled(service)
 	}
 }
 

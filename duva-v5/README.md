@@ -37,10 +37,10 @@ container starts or stops.
 
 | job | when | what it is for |
 |---|---|---|
-| **check** | on `schedule` (default 03:00), at startup, and from **Check…** | Look for new releases of every service the compose file pins, and hand each to the queue. |
+| **check** | on `schedule` (default 03:00), and from **Check…** or the Jobs page's Run now. Not at startup | Look for new releases of every service the compose file pins, and hand each to the queue. |
 | **sync** | each tick | Bring changes made outside duva into its state: services added to or removed from the compose file, and the image and tag each now follows. Read from the compose file, never from docker's container list. A service is removed only when it is gone from the file *and* its container is gone. |
 | **reconcile** | each tick, after the sync | Make everything in duva fit that state. Drop an entry whose service now follows another image or tag, has already got it, or was removed. And follow a changed policy: add `duva.auto` to a service and what already waits for it is scheduled (by its `duva.delay`, from when it was published); take it away and what was scheduled goes back to you. It never applies anything itself. |
-| **release** | each tick, after reconcile | Apply delayed releases whose delay is over, if the container still runs. |
+| **release** | each tick, after reconcile | When a delay is over, take the next action: apply what `duva.auto` covers (if the container still runs), and bring the rest to you, notifying you then. |
 
 ## Deploying
 
@@ -166,13 +166,18 @@ registry refused for rate limiting is treated the same way.
 
 ### Delaying a release
 
-`duva.auto` alone applies a release on the run that finds it, before anyone
-could have heard it was broken. `duva.delay` holds it back until it is old
-enough, counted from when the release was published, not when it was found.
+`duva.auto` says **what** is applied unattended. `duva.delay` says **when**
+the next action for a release happens, whatever that action is: a release
+is held until it is old enough, counted from when it was published (or, if
+the registry does not say, from when it was found).
 
-It delays only what `duva.auto` would apply unattended. A change bigger than
-`duva.auto` allows goes to the queue for a person straight away, delay or not,
-and a service with no `duva.auto` has nothing to delay.
+| when the delay is over | next action |
+|---|---|
+| `duva.auto` covers it | applied |
+| it does not, or there is no `duva.auto` | it comes to you in the queue, and you are notified then |
+
+So `duva.delay` alone, with no `duva.auto`, still means something: every
+release waits that long before it is put in front of you.
 
 | `duva.delay` | means |
 |---|---|
@@ -184,11 +189,16 @@ Anything else -- `3 days`, `1w`, `-1d` -- is refused rather than read as no
 delay. There is no host-wide default. An early-v5 `duva.soak` label is
 refused by name: it is `duva.delay` now.
 
-A delayed release is listed on the page under **Scheduled**, with when it
-applies, and is not announced. It is released on the queue's reconcile, at
-most `DUVA_SETTING_RECONCILE_INTERVAL` late (ten minutes by default), or as
-soon as a container event prompts one. From then on it is an ordinary
-auto-apply. **Update now** applies it at once.
+A held release is listed on the page under **Scheduled** if it will be
+applied, or **Upcoming** if it will come to you, with when, and is not
+announced while held. It is released on the queue's tick, at most
+`DUVA_SETTING_RECONCILE_INTERVAL` late (ten minutes by default), or as soon as
+a container event prompts one. **Update now** applies either at once.
+
+Changing either label moves what already waits: add a delay and a release in
+the queue younger than it is held; take it away and what is held is due;
+change `duva.auto` and a held release moves between Scheduled and Upcoming,
+keeping its time.
 
 Each release is delayed on its own clock. A project that releases faster than
 its delay does not keep restarting the wait: an older release that comes due
@@ -269,7 +279,7 @@ unset. A value that does not parse refuses to start, never falls back.
 | `peer.<host>.token` | `DUVA_SETTING_PEER_<HOST>_TOKEN` | each peer's `api_token`. A `-` or `.` in the host name is `_` |
 | `commit_template` | `DUVA_SETTING_COMMIT_TEMPLATE` | the commit message; fields `.Container`, `.Image`, `.OldVersion`, `.NewVersion`, `.OldDigest`, `.NewDigest`. Unset gets a default; a template that does not render refuses to start |
 | `git.push` | `DUVA_SETTING_GIT_PUSH` | push each commit; default false |
-| `schedule` | `DUVA_SETTING_SCHEDULE` | when to look for new tags, 5-field cron; default `0 3 * * *`. Also once at startup |
+| `schedule` | `DUVA_SETTING_SCHEDULE` | when to look for new tags, 5-field cron; default `0 3 * * *`. Not at startup: Run now on the Jobs page asks for one |
 | `since` | `DUVA_SETTING_SINCE` | override how far back the next check looks (RFC 3339, or a duration such as `168h`) |
 | `reconcile_interval` | `DUVA_SETTING_RECONCILE_INTERVAL` | how often the queue rechecks what is waiting, and releases delayed ones; default `10m` |
 | `update_timeout` | `DUVA_SETTING_UPDATE_TIMEOUT` | how long an apply may run before it is called failed; default `30m` |

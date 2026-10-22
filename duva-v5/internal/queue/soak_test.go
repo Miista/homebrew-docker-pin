@@ -213,19 +213,24 @@ func TestHandleKeepsTheSoakOnANoticeArrivingAgain(t *testing.T) {
 	}
 }
 
-// A soak is a delay on what policy applies unattended. What policy sends to a
-// person is not held back from them.
-func TestASoakDoesNotDelayWhatWaitsForAPerson(t *testing.T) {
+// duva.delay says when the next action happens, whatever it is. For what
+// policy sends to a person that action is showing them, so it is held --
+// Upcoming, not the queue -- and announced only when the delay is over.
+func TestADelayHoldsWhatWaitsForAPersonToo(t *testing.T) {
 	h, q := handlerOver(t, soakingProject, &fakeApplier{})
+	announced := 0
+	h.Announce = func(Entry) { announced++ }
 	// A minor, which duva.auto: patch does not cover.
 	h.Handle(Notice{Container: "my-app", Image: "example.com/app:1.1.0", Published: now})
 
-	e, ok := q.Get("app")
-	if !ok {
-		t.Fatal("nothing was queued")
+	if up := q.Upcoming(); len(up) != 1 || up[0].ReleaseAt == "" {
+		t.Fatalf("upcoming = %+v, want the minor, held", up)
 	}
-	if e.ReleaseAt != "" {
-		t.Errorf("an entry waiting for a person has a release time: %q", e.ReleaseAt)
+	if len(q.Waiting()) != 0 || len(q.Soaking()) != 0 {
+		t.Errorf("waiting %+v, scheduled %+v: want it in neither", q.Waiting(), q.Soaking())
+	}
+	if announced != 0 {
+		t.Errorf("announced %d times while held", announced)
 	}
 }
 
