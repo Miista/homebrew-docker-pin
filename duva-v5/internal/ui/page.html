@@ -37,7 +37,12 @@
     font: 14px/1.5 Geist, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
     -webkit-font-smoothing: antialiased; -webkit-text-size-adjust: 100%;
   }
-  main { max-width: 1120px; margin: 0 auto; padding: 16px 32px 40px; min-height: 100vh;
+  /* The small viewport, svh: on iOS 100vh is the height with the toolbars
+     collapsed, so with them shown a short tab overflowed by about a header's
+     height. It picked up a stray scroll as the toolbars came and went, a swipe
+     saved that as the tab's scroll, and the next visit restored it with the
+     title under the header. */
+  main { max-width: 1120px; margin: 0 auto; padding: 16px 32px 40px; min-height: 100vh; min-height: 100svh;
          display: flex; flex-direction: column;
          --cols: minmax(160px, 1fr) minmax(264px, 1fr) 150px 146px; }
   code, .mono { font-family: var(--mono); }
@@ -85,8 +90,13 @@
      the header's: the header is only as wide as the page's column. */
   .top { position: sticky; top: 0; z-index: 30; display: flex; align-items: center;
          gap: 16px; flex-wrap: wrap; padding: 12px 0; }
+  /* The blur fades with the rest. Not transitioned, it snapped off while the
+     background was still fading, and going to a tab at the top -- where the
+     frost comes off -- flickered. */
   .top::before { content: ""; position: absolute; inset: 0 calc(50% - 50vw); z-index: -1;
-                 transition: background .2s ease, box-shadow .2s ease; }
+                 -webkit-backdrop-filter: blur(0); backdrop-filter: blur(0);
+                 transition: background .2s ease, box-shadow .2s ease,
+                             -webkit-backdrop-filter .2s ease, backdrop-filter .2s ease; }
   .scrolled .top::before { background: color-mix(in oklch, var(--bg) 55%, transparent);
                            -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
                            box-shadow: 0 1px 0 var(--divider); }
@@ -1114,6 +1124,7 @@ createApp({
       hover: false,     // the pointer is over "Last checked"
       pinned: false,    // "Last checked" was clicked open
       tab: "queue",     // the phone's tab
+      switching: false, // a tab change is restoring its scroll; see goTab
       view: location.hash === "#jobs" ? "jobs" : "queue", // the page: the queue, or #jobs
       scrolls: {},      // how far down each tab was when left
       sheetId: "",      // the phone's open row: its key, then #entry
@@ -1171,7 +1182,10 @@ createApp({
         setInterval(() => { if (!document.hidden) this.poll() }, 15000)
         this.swipeTabs()
         // The header frosts over once the page has scrolled under it.
-        const frost = () => document.documentElement.classList.toggle("scrolled", scrollY > 4)
+        const frost = () => {
+          if (this.switching) return // goTab has set it for where it is going
+          document.documentElement.classList.toggle("scrolled", scrollY > 4)
+        }
         addEventListener("scroll", frost, { passive: true })
         frost()
         document.addEventListener("visibilitychange", () => {
@@ -1429,9 +1443,27 @@ createApp({
       goTab(name) {
         if (name === this.tab) return
         this.scrolls[this.tab] = scrollY
-        this.tab = name
         const to = this.scrolls[name] || 0
-        requestAnimationFrame(() => scrollTo(0, to))
+        // The header's frost is set once, for where this tab will be. The
+        // new tab first renders at the old scroll -- clamped, if it is
+        // shorter -- and the scroll events of that and of the restore below
+        // turned the frost off and on again, which flickered.
+        this.switching = true
+        this.tab = name
+        // Scrolled to where this tab was as soon as it has rendered -- the
+        // render is a microtask, so this is the one after it -- before
+        // anything is painted at the old scroll. Once more on the frame, and
+        // then the frost follows where the page actually is: set from where
+        // it was meant to be, it showed the header clear over a page that
+        // had not got there.
+        queueMicrotask(() => queueMicrotask(() => scrollTo(0, to)))
+        requestAnimationFrame(() => {
+          scrollTo(0, to)
+          requestAnimationFrame(() => {
+            this.switching = false
+            document.documentElement.classList.toggle("scrolled", scrollY > 4)
+          })
+        })
       },
 
       // The other tab is there beside it while dragging -- just off the
