@@ -68,11 +68,11 @@ func (w *world) docker() Docker {
 func (w *world) git() Git {
 	return Git{
 		Add:         func(dir, file string) error { w.added = append(w.added, file); return nil },
-		Commit:      func(dir, msg string) error { w.committed = append(w.committed, msg); return nil },
+		Commit:      func(dir, file, msg string) error { w.committed = append(w.committed, msg); return nil },
 		PullRebase:  func(dir string) error { return nil },
 		RebaseAbort: func(dir string) error { return nil },
 		Push:        func(dir string) error { w.pushed++; return nil },
-		IsClean:     func(dir string) (bool, error) { return w.clean, w.cleanErr },
+		IsClean:     func(dir, file string) (bool, error) { return w.clean, w.cleanErr },
 	}
 }
 
@@ -354,7 +354,7 @@ func TestABusyRepositoryIsToldToTryAgain(t *testing.T) {
 func TestAFailedCommitStillCompletes(t *testing.T) {
 	w := newWorld(t, versionPin)
 	g := w.git()
-	g.Commit = func(dir, msg string) error { return errors.New("no identity") }
+	g.Commit = func(dir, file, msg string) error { return errors.New("no identity") }
 	req := versionRequest()
 	step, lines := steps()
 
@@ -488,7 +488,7 @@ func TestGitFailuresAreNeverSilent(t *testing.T) {
 			g.Add = func(string, string) error { return boom }
 		}, "could not be staged"},
 		{"committing fails", func(g *Git) {
-			g.Commit = func(string, string) error { return boom }
+			g.Commit = func(string, string, string) error { return boom }
 		}, "could not be committed"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -546,7 +546,7 @@ func TestARefusedCommitSaysTheHostIsBlocked(t *testing.T) {
 	step, _ := steps()
 
 	g := w.git()
-	g.Commit = func(string, string) error { return errors.New("the hook said no") }
+	g.Commit = func(string, string, string) error { return errors.New("the hook said no") }
 
 	status, reason := transaction(req, step, w.docker(), g, false, "")
 

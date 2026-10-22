@@ -9,6 +9,7 @@ import (
 
 	"github.com/Miista/homebrew-docker-pin/compose"
 	"github.com/Miista/homebrew-docker-pin/dockerapi"
+	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/settings"
 	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/update"
 	"github.com/Miista/homebrew-docker-pin/internal/pin"
 )
@@ -59,11 +60,14 @@ type Docker struct {
 // Git is the git access applying needs.
 type Git struct {
 	Add         func(dir, file string) error
-	Commit      func(dir, message string) error
+	Commit      func(dir, file, message string) error
 	PullRebase  func(dir string) error
 	RebaseAbort func(dir string) error
 	Push        func(dir string) error
-	IsClean     func(dir string) (bool, error)
+	// IsClean reports whether one file has no uncommitted change. Only the
+	// file being rewritten: an edit somewhere else in the repository is
+	// somebody's, and is neither committed with this nor in its way.
+	IsClean func(dir, file string) (bool, error)
 }
 
 var realDocker = Docker{
@@ -76,7 +80,7 @@ var realDocker = Docker{
 
 var realGit = Git{
 	Add: func(dir, file string) error { return runGit(gitCmd(dir, "add", file)) },
-	Commit: func(dir, message string) error {
+	Commit: func(dir, file, message string) error {
 		// No -c identity. The repository being committed to is bind-mounted
 		// in, and its .git/config comes with it -- so whatever identity the
 		// repository already uses is the one it gets, which is the right
@@ -85,13 +89,16 @@ var realGit = Git{
 		// A repository with no identity configured anywhere will fail the
 		// commit and say so, which is a better outcome than every commit
 		// being authored by a name nobody recognises.
-		return runGit(gitCmd(dir, "commit", "-m", message))
+		//
+		// Only the file: `-- <file>` commits that path whatever else a person
+		// has staged, so their half-finished work is not swept into this.
+		return runGit(gitCmd(dir, "commit", "-m", message, "--", file))
 	},
-	PullRebase:  func(dir string) error { return runGit(gitCmd(dir, "pull", "--rebase")) },
+	PullRebase:  pullRebase,
 	RebaseAbort: func(dir string) error { return runGit(gitCmd(dir, "rebase", "--abort")) },
 	Push:        func(dir string) error { return runGit(gitCmd(dir, "push")) },
-	IsClean: func(dir string) (bool, error) {
-		cmd := gitCmd(dir, "status", "--porcelain")
+	IsClean: func(dir, file string) (bool, error) {
+		cmd := gitCmd(dir, "status", "--porcelain", "--", file)
 		var stderr strings.Builder
 		cmd.Stderr = &stderr
 		out, err := cmd.Output()
@@ -119,6 +126,65 @@ func gitCmd(dir string, args ...string) *exec.Cmd {
 	// whoever owns them on the host rather than to the user this runs as.
 	full := append([]string{"-C", dir, "-c", "safe.directory=" + dir}, args...)
 	return exec.Command("git", full...)
+}
+
+// pullRebase brings the repository level with origin before a push, around
+// whatever a person has left uncommitted. hemma's deploy does the same.
+//
+// Edits are carried across with --autostash only when origin's new commits
+// change none of the same files: then putting them back cannot conflict. When
+// one does, nothing is touched and the files are named, because merging
+// someone's unfinished edit is not this process's to do.
+func pullRebase(dir string) error {
+	if err := runGit(gitCmd(dir, "fetch")); err != nil {
+		return err
+	}
+	status, err := gitCmd(dir, "status", "--porcelain").Output()
+	if err != nil {
+		return err
+	}
+	args := []string{"pull", "--rebase"}
+	if dirty := porcelainPaths(string(status)); len(dirty) > 0 {
+		incoming, err := gitCmd(dir, "diff", "--name-only", "HEAD...@{u}").Output()
+		if err != nil {
+			return err
+		}
+		if overlap := intersect(dirty, strings.Fields(string(incoming))); len(overlap) > 0 {
+			return fmt.Errorf("uncommitted edits to %s, which origin's new commits also change; nothing was pulled",
+				strings.Join(overlap, ", "))
+		}
+		args = append(args, "--autostash")
+	}
+	return runGit(gitCmd(dir, args...))
+}
+
+// porcelainPaths is the paths `git status --porcelain` names, both sides of a
+// rename included.
+func porcelainPaths(status string) []string {
+	var paths []string
+	for _, line := range strings.Split(status, "\n") {
+		if len(line) < 4 {
+			continue
+		}
+		for _, p := range strings.Split(line[3:], " -> ") {
+			paths = append(paths, strings.Trim(p, `"`))
+		}
+	}
+	return paths
+}
+
+func intersect(a, b []string) []string {
+	in := map[string]bool{}
+	for _, x := range b {
+		in[x] = true
+	}
+	var both []string
+	for _, x := range a {
+		if in[x] {
+			both = append(both, x)
+		}
+	}
+	return both
 }
 
 func runGit(cmd *exec.Cmd) error {
@@ -186,10 +252,11 @@ func transaction(req update.Request, step func(string, ...any), d Docker, g Git,
 
 	dir := dirOf(file)
 
-	// A clean repository is a precondition, not a setting: this commits, and
-	// committing on top of someone's half-finished edit is never wanted.
+	// A clean file is a precondition, not a setting: this rewrites and commits
+	// it, and doing that on top of someone's half-finished edit is never
+	// wanted. Only this file: an edit to another one is not in the way.
 	if g.IsClean != nil {
-		clean, err := g.IsClean(dir)
+		clean, err := g.IsClean(dir, file)
 		if errors.Is(err, errRepoBusy) {
 			// Not a failure. The queue will be told again and the next
 			// attempt finds the repository quiet.
@@ -199,7 +266,7 @@ func transaction(req update.Request, step func(string, ...any), d Docker, g Git,
 			return update.Failed, fmt.Sprintf("checking the repository: %v", err)
 		}
 		if !clean {
-			return update.Deferred, "the repository has uncommitted changes; will try again once they are committed"
+			return update.Deferred, fmt.Sprintf("%s has uncommitted changes; will try again once they are committed", filepath.Base(file))
 		}
 	}
 
@@ -298,6 +365,7 @@ func transaction(req update.Request, step func(string, ...any), d Docker, g Git,
 	// without the digest fields lying about it, and so a digest move reads as
 	// the same tag rather than as a version that did not change.
 	fields := commitFields{
+		Host:       settings.HostName(),
 		Container:  req.Service,
 		Image:      req.Image,
 		OldVersion: req.Tag,
@@ -321,16 +389,16 @@ func transaction(req update.Request, step func(string, ...any), d Docker, g Git,
 	if err := g.Add(dir, file); err != nil {
 		return done(step, "the change is live but could not be staged: %v", err)
 	}
-	if err := g.Commit(dir, msg); err != nil {
+	if err := g.Commit(dir, file, msg); err != nil {
 		// Not undone, and deliberately not tidied either.
 		//
 		// The container is running the new image, so a rollback would tear
 		// down a healthy service over a commit message. But unstaging does not
 		// help either, and an earlier version of this did it: `git restore
 		// --staged` turns "M " into " M", which `git status --porcelain` still
-		// reports, so IsClean still refuses and the next apply is blocked
-		// exactly as before. It moved the problem from the index to the
-		// worktree and read like a safeguard.
+		// reports, so IsClean still refuses and the next apply of this
+		// service is blocked exactly as before. It moved the problem from the
+		// index to the worktree and read like a safeguard.
 		//
 		// The repository *is* dirty, and correctly so: the compose file records
 		// an update nobody committed. The next apply refusing is right. What

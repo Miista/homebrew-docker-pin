@@ -149,6 +149,12 @@ and `duva-v5/README.md`.
   secrets in the database. Peers are `peers` (`host=url,...`) with
   `peer.<host>.token` each. An old name refuses to start
   (`settings.CheckRenamed`). configy needs Go 1.27.
+- **An uncommitted edit blocks only its own file.** v4's whole-repo `IsClean`
+  stopped every apply on a host while one compose file was being edited. v5
+  asks about the file it would rewrite, commits with `-- <file>` so staged
+  work is never swept in, and pulls with `--autostash` unless origin changes
+  an edited file (hemma's rule). A failed recreate still blocks that service.
+  Held by `TestV5AnEditElsewhereDoesNotBlockAnApply`.
 - An image that declares `VOLUME` broke two things in `dockerapi`, both fixed:
   `containerID` must match `/containers/<id>/`, not any 64-hex string, and
   `createSpec` must not bind what compose already put in `HostConfig.Mounts`.

@@ -5,6 +5,15 @@ allows. One process per host: the same watcher, queue, updater and UI as v4,
 connected by calls instead of HTTP. See `../docs/duva-v5-one-binary.md` for
 why.
 
+*Duva*. The dove from the Noah story: it's sent out, comes back with the olive
+branch, and you decide from what it brought.
+
+duva flies out to every registry your services come from and brings back what
+is new. You decide what comes aboard: let the patches in on their own, hold a
+release until it has proven itself, approve the big ones with a tap. Whatever
+lands is pinned by digest and committed, so your repository always says
+exactly what runs.
+
     watch  ->  queue  ->  update
                  ^
                  |
@@ -124,18 +133,23 @@ come from the file, since that is what duva rewrites.
 
 ## Operating
 
-### A dirty repository, or a rate-limited registry
+### An uncommitted edit, or a rate-limited registry
 
-Applying commits, so duva will not start an apply on a repository with
-uncommitted changes, or while git holds its index lock. That is not a failure:
+Applying rewrites and commits one compose file, so duva will not start an
+apply while *that file* has uncommitted changes, or while git holds its index
+lock. Edits to other files are left alone: an apply to a service elsewhere goes
+ahead, and its commit holds only its own file, never anything you staged. With
+`git.push` on, the pull before the push carries your edits across with
+`--autostash`, unless origin's new commits change one of the same files; then
+nothing is pulled and the files are named. The refusal is not a failure:
 nothing was touched, the entry stays queued, and nobody is notified. A pull the
 registry refused for rate limiting is treated the same way.
 
 - **An update duva applied on its own** (`duva.auto`) is offered again with
   exponential backoff: after 1 minute, then 2, 4, 8, 16, and every 30 minutes
   from there. Commit or stash and it goes through on the next attempt.
-- **A click on the page** is tried once. The reason is shown, the entry stays
-  queued, and the page greys Update while the repository is dirty.
+- **A click on the page** is tried once. The reason, naming the file, is
+  shown and the entry stays queued.
 
 ### Delaying a release
 

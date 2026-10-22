@@ -80,6 +80,45 @@ func TestV5AppliesWhatPolicyAllows(t *testing.T) {
 	})
 }
 
+// An uncommitted edit blocks only the file it is in. Someone mid-edit in one
+// compose file used to stop every apply on the host; here the edit is in
+// another file, and one more is staged, and the apply goes through without
+// committing either of them.
+func TestV5AnEditElsewhereDoesNotBlockAnApply(t *testing.T) {
+	s := Up(t, "duva-v5/within-policy")
+	s.PushUpdates()
+	s.Pin("app")
+	s.writeFile(filepath.Join(s.Dir, "notes.md"), "notes\n")
+	s.writeFile(filepath.Join(s.Dir, "staged.md"), "staged\n")
+	s.Commit("notes")
+	s.writeFile(filepath.Join(s.Dir, "notes.md"), "notes, half written\n")
+	s.writeFile(filepath.Join(s.Dir, "staged.md"), "staged, not committed\n")
+	s.git("add", "staged.md")
+	s.Start()
+
+	t.Run("the update is applied", func(t *testing.T) {
+		if got := s.RunningImage("app"); !strings.Contains(got, "1.0.1") {
+			t.Errorf("1.0.0 -> 1.0.1 was not applied:\n  got %s", got)
+		}
+	})
+
+	t.Run("the commit holds only the compose file", func(t *testing.T) {
+		if got := s.Log(); !strings.Contains(got, "pin app to 1.0.1") {
+			t.Fatalf("the change was not committed:\n  got %s", got)
+		}
+		if got := s.git("show", "--name-only", "--format=", "HEAD"); got != "docker-compose.yml" {
+			t.Errorf("the commit swept in more than its file:\n  got %s", got)
+		}
+	})
+
+	t.Run("the edits are still there, uncommitted", func(t *testing.T) {
+		// Status trims, so the first line loses its leading space.
+		if got := "\n" + s.Status(); !strings.Contains(got, "M notes.md") || !strings.Contains(got, "\nM  staged.md") {
+			t.Errorf("want notes.md modified and staged.md staged, got:\n%s", got)
+		}
+	})
+}
+
 // A soak holds back what policy allows until the release is old enough, and
 // the queue's own clock -- not another notice -- lets it go.
 //

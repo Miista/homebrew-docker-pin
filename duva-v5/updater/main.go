@@ -177,7 +177,7 @@ func setup() (push bool, tmpl string, err error) {
 		return false, "", fmt.Errorf("the commit template: %w", err)
 	}
 	commitTemplate = tmpl
-	if _, err := commitSubject(tmpl, commitFields{Container: "probe", NewVersion: "1"}); err != nil {
+	if _, err := commitSubject(tmpl, commitFields{Host: settings.HostName(), Container: "probe", NewVersion: "1"}); err != nil {
 		return false, "", fmt.Errorf("the commit template: %w", err)
 	}
 	return push, tmpl, nil
@@ -211,29 +211,20 @@ func writable(dir string) error {
 
 // readiness reports whether this updater would take work right now.
 //
-// It asks the same realGit.IsClean the transaction asks, so the answer a UI
-// greys a button on and the answer that refuses the work cannot disagree.
-// Anything else would be a second implementation of the precondition, which
-// is the way a button ends up enabled for work that is then refused.
+// Uncommitted edits are not asked about: they block only an apply to the file
+// they are in, which is per service, so the transaction refuses that one with
+// the file named. Greying every row for one edited file is what stopped a
+// whole host while one compose file was being worked on.
 //
 // A busy repository reads as ready: someone is mid-commit, it will be quiet
 // in a moment, and greying every button for that would be noise. The
 // transaction retries it by design.
 func readiness() update.Readiness {
-	clean, err := realGit.IsClean(repoDir)
-	switch {
-	case errors.Is(err, errRepoBusy):
-		return update.Readiness{Ready: true}
-	case err != nil:
+	_, err := realGit.IsClean(repoDir, repoDir)
+	if err != nil && !errors.Is(err, errRepoBusy) {
 		return update.Readiness{
 			Ready:  false,
 			Reason: fmt.Sprintf("the repository at %s cannot be read: %v", repoDir, err),
-		}
-	case !clean:
-		return update.Readiness{
-			Ready: false,
-			Reason: "the repository has uncommitted changes, and applying commits — " +
-				"commit or stash them and this clears on its own",
 		}
 	}
 
