@@ -47,6 +47,12 @@ func serve() error {
 	if err := settings.CheckRenamed(os.Environ()); err != nil {
 		return err
 	}
+	// Checked before anything starts: a host meant to be the hub, started as
+	// an agent, would run without its page and say nothing about it.
+	mode, err := settings.ModeOf()
+	if err != nil {
+		return err
+	}
 	st, err := store.Open(dataFile)
 	if err != nil {
 		return err
@@ -137,9 +143,7 @@ func serve() error {
 		return nil
 	})
 
-	if withUI, err := settings.Bool(settings.UI, false); err != nil {
-		return err
-	} else if withUI {
+	if mode == settings.ModeHub {
 		local := &ui.Upstream{Host: queue.Host(), Local: queue.API}
 		run("ui", func(ctx context.Context) error {
 			return webui.Run(ctx, component(log, "ui"), webui.Options{Local: local, Addr: uiAddr})

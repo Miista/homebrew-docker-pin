@@ -17,7 +17,7 @@ import (
 // in a log line, a `docker inspect`, or a compose file in git, which is where
 // the rest of it belongs. Each peer's token is its own setting instead, so
 // rotating one is a one-line change rather than a rewrite of the list.
-func parsePeers(raw string, token func(host string) string) ([]ui.Upstream, error) {
+func parseAgents(raw string, token func(host string) string) ([]ui.Upstream, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return nil, nil
@@ -47,15 +47,15 @@ func parsePeers(raw string, token func(host string) string) ([]ui.Upstream, erro
 	return out, nil
 }
 
-// peerToken is a peer's API token: peer.<host>.token, which is what that host
-// reads as its api_token.
+// agentToken is an agent's API token: agent.<host>.token, which is what that
+// host reads as its api_token.
 //
-// Per peer, with no shared fallback. v4 had one, for the operator with a
+// Per agent, with no shared fallback. v4 had one, for the operator with a
 // single token set on every queue -- but in practice every host has a
 // different one, and the "shared" variable ended up holding whichever host
 // was configured first. A default that is really one host's secret is worse
 // than no default: the others fail with a token mismatch rather than with "no
 // token for that host".
-func peerToken(host string) string {
-	return settings.Value(settings.PeerToken(host))
+func agentToken(host string) string {
+	return settings.Value(settings.AgentToken(host))
 }

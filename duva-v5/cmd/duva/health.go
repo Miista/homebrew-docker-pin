@@ -18,7 +18,7 @@ import (
 // what a health check would have reported.
 func health() int {
 	addrs := []string{"127.0.0.1:8080"}
-	if on, _ := settings.Bool(settings.UI, false); on {
+	if mode, _ := settings.ModeOf(); mode == settings.ModeHub {
 		addrs = append(addrs, "127.0.0.1"+uiAddr)
 	}
 	return healthOf(addrs)

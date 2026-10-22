@@ -56,9 +56,9 @@ func Run(ctx context.Context, log zerolog.Logger, opts Options) error {
 	if listen == "" {
 		listen = addr
 	}
-	queues, err := parsePeers(settings.Value(settings.Peers), peerToken)
+	queues, err := parseAgents(settings.Value(settings.Agents), agentToken)
 	if err != nil {
-		return fmt.Errorf("%s: %w", settings.EnvVar(settings.Peers), err)
+		return fmt.Errorf("%s: %w", settings.EnvVar(settings.Agents), err)
 	}
 	if opts.Local != nil {
 		queues = append([]ui.Upstream{*opts.Local}, queues...)
@@ -68,7 +68,7 @@ func Run(ctx context.Context, log zerolog.Logger, opts Options) error {
 	// most misleading thing this program can display. It is also the exact
 	// sentence it shows when everything is genuinely fine.
 	if len(queues) == 0 {
-		return fmt.Errorf("no queues: set %s to host=url[,host=url]", settings.EnvVar(settings.Peers))
+		return fmt.Errorf("no queues: set %s to host=url[,host=url]", settings.EnvVar(settings.Agents))
 	}
 
 	collector := ui.NewCollector(queues)
@@ -113,7 +113,7 @@ func Run(ctx context.Context, log zerolog.Logger, opts Options) error {
 				// Worth a line each: a peer answers nothing without it, and
 				// the symptom is a host that is simply always unreachable.
 				log.Warn().Msgf("no token for %s — set %s to that host's %s",
-					d.Host, settings.EnvVar(settings.PeerToken(d.Host)), settings.EnvVar(settings.APIToken))
+					d.Host, settings.EnvVar(settings.AgentToken(d.Host)), settings.EnvVar(settings.APIToken))
 			}
 			log.Info().Msgf("serving the queue on %s at %s", d.Host, d.URL)
 		}

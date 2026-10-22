@@ -7,7 +7,7 @@ import (
 func noToken(string) string { return "" }
 
 func TestParsePeers(t *testing.T) {
-	got, err := parsePeers("optiplex=http://a:8080, pi=http://b:8080 ", noToken)
+	got, err := parseAgents("optiplex=http://a:8080, pi=http://b:8080 ", noToken)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -33,8 +33,8 @@ func TestParsePeersRejects(t *testing.T) {
 		{"duplicate host", "optiplex=http://a:8080,optiplex=http://b:8080"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := parsePeers(tc.raw, noToken); err == nil {
-				t.Errorf("parsePeers(%q) was accepted", tc.raw)
+			if _, err := parseAgents(tc.raw, noToken); err == nil {
+				t.Errorf("parseAgents(%q) was accepted", tc.raw)
 			}
 		})
 	}
@@ -43,7 +43,7 @@ func TestParsePeersRejects(t *testing.T) {
 // Empty is not an error here -- Run decides what no queues means, and does
 // refuse. Parsing and policy are separate so the refusal has one home.
 func TestParsePeersEmpty(t *testing.T) {
-	got, err := parsePeers("  ", noToken)
+	got, err := parseAgents("  ", noToken)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -60,10 +60,10 @@ func TestParsePeersEmpty(t *testing.T) {
 // the harder failure to read.
 func TestATokenIsPerPeer(t *testing.T) {
 	t.Setenv("DUVA_SETTING_API_TOKEN", "not-a-fallback")
-	t.Setenv("DUVA_SETTING_PEER_PI_TOKEN", "just-the-pi")
-	t.Setenv("DUVA_SETTING_PEER_OPTIPLEX_TOKEN", "just-optiplex")
+	t.Setenv("DUVA_SETTING_AGENT_PI_TOKEN", "just-the-pi")
+	t.Setenv("DUVA_SETTING_AGENT_OPTIPLEX_TOKEN", "just-optiplex")
 
-	got, err := parsePeers("optiplex=http://a:8080,pi=http://b:8080", peerToken)
+	got, err := parseAgents("optiplex=http://a:8080,pi=http://b:8080", agentToken)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -80,9 +80,9 @@ func TestATokenIsPerPeer(t *testing.T) {
 // the honest answer.
 func TestAPeerWithoutATokenGetsNone(t *testing.T) {
 	t.Setenv("DUVA_SETTING_API_TOKEN", "not-a-fallback")
-	t.Setenv("DUVA_SETTING_PEER_PI_TOKEN", "just-the-pi")
+	t.Setenv("DUVA_SETTING_AGENT_PI_TOKEN", "just-the-pi")
 
-	got, err := parsePeers("optiplex=http://a:8080,pi=http://b:8080", peerToken)
+	got, err := parseAgents("optiplex=http://a:8080,pi=http://b:8080", agentToken)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}

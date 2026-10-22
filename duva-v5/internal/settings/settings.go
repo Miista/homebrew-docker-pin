@@ -29,9 +29,9 @@ const (
 	Repo       = "repo"        // required: the repository, at its path on the host
 	ComposeDir = "compose_dir" // where in Repo the compose file is; default its root
 	Host       = "host"        // this host's name; default the hostname
-	UI         = "ui"          // serve the page too; default false
-	APIToken   = "api_token"   // required: what a peer, or the CLI, presents to the API
-	Peers      = "peers"       // the other hosts, "host=url,host=url"
+	Mode       = "mode"        // hub or agent; default agent
+	APIToken   = "api_token"   // required: what the hub, or the CLI, presents to the API
+	Agents     = "agents"      // a hub's agents, "host=url,host=url"
 
 	OIDCIssuer       = "ui.oidc.issuer"
 	OIDCClientID     = "ui.oidc.client_id"
@@ -52,13 +52,51 @@ const (
 	ReadOnly          = "read_only" // default false
 )
 
-// PeerToken is the setting holding a peer's API token: peer.<host>.token,
-// DUVA_SETTING_PEER_<HOST>_TOKEN. Per peer, never in the Peers list, so the
-// list is not a secret and can sit in a compose file in git.
+// The modes. A hub serves the page, over its own queue and its agents'; an
+// agent serves only its queue's API, for the hub to reach. Agents never reach
+// the hub, or each other.
+const (
+	ModeHub   = "hub"
+	ModeAgent = "agent"
+)
+
+// HubOnly is the settings an agent refuses: set on one, they would be read
+// by nothing, and a host meant to be the hub would run without its page.
+var HubOnly = []string{Agents, OIDCIssuer, OIDCClientID, OIDCClientSecret, OIDCBaseURL}
+
+// ModeOf is this host's mode, checked: an unknown mode is an error, and so
+// is a hub-only setting on an agent.
+func ModeOf() (string, error) {
+	mode := Value(Mode)
+	switch mode {
+	case "":
+		mode = ModeAgent
+	case ModeHub, ModeAgent:
+	default:
+		return "", fmt.Errorf("%s: unknown mode %q (want hub or agent)", EnvVar(Mode), mode)
+	}
+	if mode == ModeAgent {
+		var set []string
+		for _, key := range HubOnly {
+			if Value(key) != "" {
+				set = append(set, EnvVar(key))
+			}
+		}
+		if len(set) > 0 {
+			return "", fmt.Errorf("this host is an agent (%s), and %s are a hub's: set %s=hub, or remove them",
+				EnvVar(Mode), strings.Join(set, ", "), EnvVar(Mode))
+		}
+	}
+	return mode, nil
+}
+
+// AgentToken is the setting holding an agent's API token: agent.<host>.token,
+// DUVA_SETTING_AGENT_<HOST>_TOKEN. Per agent, never in the Agents list, so
+// the list is not a secret and can sit in a compose file in git.
 //
 // A host name may hold "-" or ".", which cannot appear in a variable's name,
 // so anything but a letter, digit or "_" is written as "_".
-func PeerToken(host string) string {
+func AgentToken(host string) string {
 	var b strings.Builder
 	for _, r := range strings.ToLower(host) {
 		switch {
@@ -68,7 +106,7 @@ func PeerToken(host string) string {
 			b.WriteByte('_')
 		}
 	}
-	return "peer." + b.String() + ".token"
+	return "agent." + b.String() + ".token"
 }
 
 // none is configy's lookup: there is no store, so nothing is ever found.
@@ -143,9 +181,11 @@ var Renamed = map[string]string{
 	"DUVA_REPO":                  Repo,
 	"DUVA_COMPOSE_DIR":           ComposeDir,
 	"DUVA_HOST":                  Host,
-	"DUVA_UI":                    UI,
+	"DUVA_UI":                    Mode,
 	"DUVA_QUEUE_TOKEN":           APIToken,
-	"DUVA_QUEUES":                Peers,
+	"DUVA_QUEUES":                Agents,
+	"DUVA_SETTING_UI":            Mode,
+	"DUVA_SETTING_PEERS":         Agents,
 	"DUVA_UI_OIDC_ISSUER":        OIDCIssuer,
 	"DUVA_UI_OIDC_CLIENT_ID":     OIDCClientID,
 	"DUVA_UI_OIDC_CLIENT_SECRET": OIDCClientSecret,
@@ -164,8 +204,12 @@ var Renamed = map[string]string{
 	"DUVA_READ_ONLY":             ReadOnly,
 }
 
-// oldPeerToken is v4's per-host token variable, DUVA_QUEUE_TOKEN_<HOST>.
-const oldPeerToken = "DUVA_QUEUE_TOKEN_"
+// oldAgentTokens are the per-host token variables before agent.<host>.token:
+// v4's DUVA_QUEUE_TOKEN_<HOST>, and early v5's DUVA_SETTING_PEER_<HOST>_TOKEN.
+var oldAgentTokens = []struct{ prefix, suffix string }{
+	{"DUVA_QUEUE_TOKEN_", ""},
+	{"DUVA_SETTING_PEER_", "_TOKEN"},
+}
 
 // Gone is each variable that weakened the sign-in gate, which v5 does not
 // have under any name: sign-in is OIDC, always.
@@ -185,8 +229,13 @@ func CheckRenamed(environ []string) error {
 		}
 		if key, ok := Renamed[name]; ok {
 			found = append(found, name+" is now "+EnvVar(key))
-		} else if host, ok := strings.CutPrefix(name, oldPeerToken); ok && host != "" {
-			found = append(found, name+" is now "+EnvVar(PeerToken(host)))
+		} else {
+			for _, old := range oldAgentTokens {
+				host, ok := strings.CutPrefix(name, old.prefix)
+				if host, ok2 := strings.CutSuffix(host, old.suffix); ok && ok2 && host != "" {
+					found = append(found, name+" is now "+EnvVar(AgentToken(host)))
+				}
+			}
 		}
 		for _, gone := range Gone {
 			if name == gone {

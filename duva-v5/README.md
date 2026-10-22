@@ -24,10 +24,12 @@ exactly what runs.
 | **watch** | what tags exist, and when they were published |
 | **queue** | is this an update, how big, may it be applied, and when |
 | **update** | pull, write the pin, recreate, commit |
-| **ui** | the approval page, over every host's queue; on one host, with `DUVA_SETTING_UI` |
+| **ui** | the approval page, over every host's queue; on the hub only |
 
-Every host runs `duva serve`, and they are peers. One of them also serves the
-page, and reaches the others' queues over their API.
+Every host runs `duva serve`, in one of two modes (`DUVA_SETTING_MODE`). One
+host is the **hub**: it also serves the page, and reaches the others' queues
+over their API. The others are **agents** (the default): they serve only
+that API, for the hub. Agents never reach the hub, or each other.
 
 ### Jobs
 
@@ -75,17 +77,16 @@ duva:
     # image's ownership (uid 1000).
     - duva-data:/data
   ports:
-    # The API, for the page on a peer. Bind it to the LAN address, not
-    # 0.0.0.0, and firewall it to the page's host. Not needed at all on the
-    # host that serves the page.
+    # The API, for the hub's page. Bind it to the LAN address, not 0.0.0.0,
+    # and firewall it to the hub. Not needed at all on the hub.
     - "192.168.1.10:8080:8080"
 ```
 
-On the host that serves the page, add:
+On the hub, add:
 
 ```yaml
   environment:
-    DUVA_SETTING_UI: "true"
+    DUVA_SETTING_MODE: hub
     DUVA_SETTING_UI_OIDC_ISSUER: https://auth.example.com
     DUVA_SETTING_UI_OIDC_CLIENT_ID: duva
     DUVA_SETTING_UI_OIDC_CLIENT_SECRET: ${DUVA_UI_OIDC_CLIENT_SECRET}
@@ -272,11 +273,11 @@ unset. A value that does not parse refuses to start, never falls back.
 | `repo` | `DUVA_SETTING_REPO` | the repository, mounted at the path it has on the host. Required |
 | `compose_dir` | `DUVA_SETTING_COMPOSE_DIR` | the compose project, relative to `repo`; default its root |
 | `host` | `DUVA_SETTING_HOST` | what this host is called on the page; default the hostname |
-| `api_token` | `DUVA_SETTING_API_TOKEN` | the token a peer's page, or the CLI, must present to this host's API. Required |
-| `ui` | `DUVA_SETTING_UI` | serve the page on 8081 |
+| `api_token` | `DUVA_SETTING_API_TOKEN` | the token the hub's page, or the CLI, must present to this host's API. Required |
+| `mode` | `DUVA_SETTING_MODE` | `hub` (serves the page on 8081, over every host) or `agent` (only the API, for the hub). Default `agent`; an agent refuses the hub's settings |
 | `ui.oidc.issuer`, `.client_id`, `.client_secret`, `.base_url` | `DUVA_SETTING_UI_OIDC_ISSUER`, ... | sign-in; all four required with `ui` |
-| `peers` | `DUVA_SETTING_PEERS` | the other hosts, `host=url,host=url` |
-| `peer.<host>.token` | `DUVA_SETTING_PEER_<HOST>_TOKEN` | each peer's `api_token`. A `-` or `.` in the host name is `_` |
+| `agents` | `DUVA_SETTING_AGENTS` | on the hub: the agents, `host=url,host=url` |
+| `agent.<host>.token` | `DUVA_SETTING_AGENT_<HOST>_TOKEN` | on the hub: each agent's `api_token`. A `-` or `.` in the host name is `_` |
 | `commit_template` | `DUVA_SETTING_COMMIT_TEMPLATE` | the commit message; fields `.Container`, `.Image`, `.OldVersion`, `.NewVersion`, `.OldDigest`, `.NewDigest`. Unset gets a default; a template that does not render refuses to start |
 | `git.push` | `DUVA_SETTING_GIT_PUSH` | push each commit; default false |
 | `schedule` | `DUVA_SETTING_SCHEDULE` | when to look for new tags, 5-field cron; default `0 3 * * *`. Not at startup: Run now on the Jobs page asks for one |
@@ -319,8 +320,8 @@ v5 replaces the four v4 containers on each host with one.
    any more. The page's local account and `DUVA_UI_AUTH_DISABLED` are gone.
 3. **Set `DUVA_SETTING_API_TOKEN` on every host.** v4 minted a queue token
    when it was unset; v5 refuses to start.
-4. **Move the page** from v4's UI container to `DUVA_SETTING_UI` on one
-   host's duva, and point the reverse proxy at port 8081.
+4. **Move the page** from v4's UI container to the hub, `DUVA_SETTING_MODE=hub`
+   on one host's duva, and point the reverse proxy at port 8081.
 5. **Remove the v4 containers** and their volumes once v5 has checked once.
 
 v4's updater cannot hand itself to v5 (they are different images), so the

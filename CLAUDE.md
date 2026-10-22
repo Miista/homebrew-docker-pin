@@ -106,8 +106,9 @@ and `duva-v5/README.md`.
   page reads its own host's queue through `ui.LocalQueue`. The rules above
   about what watch, queue and updater may know still hold.
 - **Nothing inside a host talks over a network.** No `/v1/notify`, no updater
-  HTTP API, no internal URLs or tokens. Hosts are peers: the API on 8080
-  exists only for the page on another host; the page is on 8081, apart, because the page is
+  HTTP API, no internal URLs or tokens. One host is the hub
+  (`mode: hub`), the rest agents (the default): the API on 8080 exists only
+  for the hub's page; the page is on 8081, apart, because the page is
   published and the API is not. The self-update helper still serves its
   progress over HTTP, read with `update.WatchURL`.
 - **Policy is read from the running container's labels** (`dockerapi.Labels`,
@@ -169,8 +170,9 @@ and `duva-v5/README.md`.
   is an error. No exceptions, the repo, OIDC and tokens included. There is no
   stored fallback (0004 dropped the table): nothing edits settings from the
   page, so a store would be a second, invisible source, and would put
-  secrets in the database. Peers are `peers` (`host=url,...`) with
-  `peer.<host>.token` each. An old name refuses to start
+  secrets in the database. A hub's agents are `agents` (`host=url,...`)
+  with `agent.<host>.token` each; an agent refuses the hub's settings
+  (`settings.ModeOf`). An old name refuses to start
   (`settings.CheckRenamed`). configy needs Go 1.27.
 - **An uncommitted edit blocks only its own file.** v4's whole-repo `IsClean`
   stopped every apply on a host while one compose file was being edited. v5
