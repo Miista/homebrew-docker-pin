@@ -61,6 +61,11 @@ func (l *localQueue) Unblock(image, digest, actor string) string {
 	return ""
 }
 
+func (l *localQueue) RunJob(job, actor string) string {
+	l.acted = append(l.acted, "run "+job+" by "+actor)
+	return ""
+}
+
 func (l *localQueue) Stream(service string, w http.ResponseWriter, r *http.Request) error {
 	fmt.Fprintln(w, "applying "+service)
 	return nil
@@ -93,6 +98,28 @@ func TestALocalQueueIsAskedDirectly(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "applying app") {
 		t.Errorf("stream = %q", rec.Body.String())
+	}
+}
+
+// The page asks for the queue the moment an apply's stream ends. That answer
+// must be the queue after the apply, not one cached while it ran, or the
+// applied row stays on screen until the next poll.
+func TestAnEndedStreamIsFollowedByAFreshQueue(t *testing.T) {
+	local := &localQueue{pending: []queue.Entry{{Service: "app", From: "1.0.0", To: "1.0.1"}}}
+	c := NewCollector([]Upstream{{Host: "optiplex", Local: local}})
+	c.MaxAge = time.Hour
+	if got := c.Pending(); len(got) != 1 {
+		t.Fatalf("pending = %+v", got)
+	}
+
+	local.pending = nil // the apply completes, and the stream ends
+	rec := httptest.NewRecorder()
+	if err := c.Stream(Key("optiplex", "app"), rec, httptest.NewRequest(http.MethodGet, "/", nil)); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+
+	if got := c.Pending(); len(got) != 0 {
+		t.Errorf("the applied row is still served from the cache: %+v", got)
 	}
 }
 

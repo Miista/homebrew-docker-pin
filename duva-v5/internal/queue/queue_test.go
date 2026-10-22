@@ -394,7 +394,7 @@ func TestReconcileDropsAnEntryTheWorldAlreadySatisfies(t *testing.T) {
 	q := NewPending()
 	q.Put(entry("app", "1.0.0", "1.1.0"), now)
 
-	dropped := q.Reconcile(func(e Entry) (Recheck, error) {
+	dropped, _ := q.Reconcile(func(e Entry) (Recheck, error) {
 		return Recheck{Why: "already matches the compose file"}, nil
 	}, nil)
 
@@ -417,18 +417,18 @@ func TestReconcileDropsAnEntryTheWorldAlreadySatisfies(t *testing.T) {
 // removed, still has a container, and is still a question.
 func TestReconcileDropsTheUpdatesOfADecommissionedService(t *testing.T) {
 	q := NewPending()
-	q.SyncServices([]Container{
-		{Name: "gone", Service: "gone", Image: "example.com/gone:1"},
-		{Name: "renamed", Service: "renamed", Image: "example.com/renamed:1"},
-	}, now)
+	q.SyncServices([]Declared{
+		{Container: "gone", Service: "gone", Image: "example.com/gone", Tag: "1"},
+		{Container: "renamed", Service: "renamed", Image: "example.com/renamed", Tag: "1"},
+	}, []Container{{Name: "gone", Service: "gone"}, {Name: "renamed", Service: "renamed"}}, now)
 	q.Put(entry("gone", "1.0.0", "1.1.0"), now)
 	q.Put(entry("renamed", "1.0.0", "1.1.0"), now)
 	// gone's container goes; renamed's still runs. Neither is in the
 	// compose file any more.
-	q.SyncServices([]Container{{Name: "renamed", Service: "renamed", Image: "example.com/renamed:1"}}, now)
+	q.SyncServices(nil, []Container{{Name: "renamed", Service: "renamed"}}, now)
 
 	var warned []string
-	dropped := q.Reconcile(func(e Entry) (Recheck, error) {
+	dropped, _ := q.Reconcile(func(e Entry) (Recheck, error) {
 		return Recheck{}, fmt.Errorf("%w: no service %q", ErrNotDeclared, e.Service)
 	}, func(service string, err error) { warned = append(warned, service) })
 
@@ -448,7 +448,7 @@ func TestReconcileDropsTheUpdatesOfADecommissionedService(t *testing.T) {
 func TestReconcileKeepsAnEntryTheSyncHasNotJudged(t *testing.T) {
 	q := NewPending()
 	q.Put(entry("app", "1.0.0", "1.1.0"), now)
-	dropped := q.Reconcile(func(e Entry) (Recheck, error) {
+	dropped, _ := q.Reconcile(func(e Entry) (Recheck, error) {
 		return Recheck{}, fmt.Errorf("%w: no service %q", ErrNotDeclared, e.Service)
 	}, nil)
 	if len(dropped) != 0 {
@@ -461,7 +461,7 @@ func TestReconcileKeepsAnEntryStillWanted(t *testing.T) {
 	q := NewPending()
 	q.Put(entry("app", "1.0.0", "1.1.0"), now)
 
-	dropped := q.Reconcile(func(e Entry) (Recheck, error) {
+	dropped, _ := q.Reconcile(func(e Entry) (Recheck, error) {
 		return Recheck{Keep: true, Entry: e}, nil
 	}, nil)
 
@@ -503,7 +503,7 @@ func TestReconcileKeepsAnEntryOnReadError(t *testing.T) {
 	q.Put(entry("app", "1.0.0", "1.1.0"), now)
 
 	var reported string
-	dropped := q.Reconcile(func(e Entry) (Recheck, error) {
+	dropped, _ := q.Reconcile(func(e Entry) (Recheck, error) {
 		return Recheck{}, errors.New("boom")
 	}, func(service string, err error) { reported = service })
 
@@ -524,7 +524,7 @@ func TestReconcileIsPerEntry(t *testing.T) {
 	q.Put(entry("app", "1.0.0", "1.1.0"), now)
 	q.Put(entry("other", "2.0.0", "2.1.0"), now)
 
-	dropped := q.Reconcile(func(e Entry) (Recheck, error) {
+	dropped, _ := q.Reconcile(func(e Entry) (Recheck, error) {
 		return Recheck{Keep: e.Service != "app", Entry: e}, nil // only "app" is satisfied
 	}, nil)
 

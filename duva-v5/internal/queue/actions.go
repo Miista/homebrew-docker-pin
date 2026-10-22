@@ -94,15 +94,15 @@ func (q *Pending) Block(entryID int64, digest, reason, actor string, now time.Ti
 	}
 	e := found[0]
 	return q.st.Tx(func(tx *sql.Tx) error {
-		var imageID int64
-		if err := tx.QueryRow(`SELECT id FROM images WHERE repo = ?`, e.Image).Scan(&imageID); err != nil {
+		imageID, err := ensureImage(tx, e.Image)
+		if err != nil {
 			return err
 		}
 		release := e.To
 		if e.Kind == "" {
 			release = e.Tag // a digest move: the tag it moved on
 		}
-		_, err := tx.Exec(`INSERT INTO blocked_releases (image_id, digest, release, entry_id, reason, blocked_by, blocked_at)
+		_, err = tx.Exec(`INSERT INTO blocked_releases (image_id, digest, release, entry_id, reason, blocked_by, blocked_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?)`, imageID, digest, release, entryID, reason, actor, now.UTC().Format(time.RFC3339))
 		if err != nil {
 			var exists int
@@ -114,7 +114,8 @@ func (q *Pending) Block(entryID int64, digest, reason, actor string, now time.Ti
 		}
 		rows, err := tx.Query(`SELECT e.id, e.service_id FROM queue_entries e
 			JOIN services s ON s.id = e.service_id
-			WHERE `+open+` AND s.image_id = ? AND (e.id = ? OR e.digest = ?)`, imageID, entryID, digest)
+			JOIN images i ON i.id = s.image_id
+			WHERE `+open+` AND COALESCE(e.image, i.repo) = ? AND (e.id = ? OR e.digest = ?)`, e.Image, entryID, digest)
 		if err != nil {
 			return err
 		}
@@ -172,8 +173,9 @@ func (q *Pending) Unblock(image, digest, actor string, now time.Time) error {
 		}
 		rows, err := tx.Query(`SELECT e.id, e.service_id FROM queue_entries e
 			JOIN services s ON s.id = e.service_id
-			WHERE e.status = 'blocked' AND s.image_id = ? AND (e.id = ? OR e.digest = ?)`,
-			imageID, entryID.Int64, digest)
+			JOIN images i ON i.id = s.image_id
+			WHERE e.status = 'blocked' AND COALESCE(e.image, i.repo) = ? AND (e.id = ? OR e.digest = ?)`,
+			image, entryID.Int64, digest)
 		if err != nil {
 			return err
 		}

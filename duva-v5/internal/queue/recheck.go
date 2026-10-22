@@ -21,6 +21,9 @@ type Recheck struct {
 	Entry Entry
 	// Why says, for a dropped entry, why it no longer applies.
 	Why string
+	// Refiled says, for a kept entry Refile moved between a person and the
+	// release job, what changed. Empty when it stayed where it was.
+	Refiled string
 }
 
 // RecheckEntry asks whether a waiting entry still applies to the service as
@@ -51,6 +54,11 @@ func RecheckEntry(e Entry, svc Service) Recheck {
 	// an entry queued before it was recorded gains it, and one whose image
 	// changed its say follows.
 	e.Source = svc.Source
+	// A release is of one image. A service that now follows another has no
+	// use for it: its tag and digest mean nothing there.
+	if svc.Image != "" && e.Image != "" && svc.Image != e.Image {
+		return Recheck{Why: fmt.Sprintf("the compose file now follows %s, not %s", svc.Image, e.Image)}
+	}
 	if svc.Digest != "" && svc.Digest == e.Digest {
 		return Recheck{Why: "already matches the compose file"}
 	}

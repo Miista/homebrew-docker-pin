@@ -133,9 +133,22 @@ and `duva-v5/README.md`.
   its own clock, a release for a
   person supersedes older ones for a person, and applying supersedes
   everything older. The watcher's cutoffs and held findings are its own
-  tables, which nothing references. `services` mirrors the host's
-  containers, disabled never deleted, gone only when missing twice running
-  (a recreate is not a removal).
+  tables, which nothing references.
+- **The sync brings the outside world into `services`; reconcile fits the
+  entries to it.** The sync takes each service's image and tag from the
+  compose file, never from docker's container list, which reports a
+  container by image ID once its tag has moved on (grafana's image was
+  recorded as `sha256`). A service is removed only when gone from the file
+  *and* its container missing twice running; disabled, never deleted; a
+  removed service's findings are refused with a 5xx, so the watcher holds
+  them. An entry carries its own image, as found: a finding never rewrites
+  its service. Reconcile makes everything in duva fit what the sync brought
+  in: it drops an entry whose image or tag the file no longer follows, and
+  `q.Refile` moves a waiting entry between a person and the release job when
+  its policy changed since it was decided (the entry's `auto` is that
+  policy, so a failed apply is not re-armed every tick). Reconcile never
+  applies: it sets or clears a release time, and the release job is the one
+  unattended path. Held by `TestAPolicyChangedOutsideDuvaReachesWhatWaits`.
 - **The blocklist is by index digest, per image, never by tag**, and is
   checked twice: at enqueue where the digest is known, and by the updater
   after the pull, which is the only point a version change's digest is

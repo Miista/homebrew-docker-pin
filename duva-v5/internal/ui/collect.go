@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/jobs"
 	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/queue"
 	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/watch"
 )
@@ -58,6 +59,9 @@ type LocalQueue interface {
 	CheckNow(service, actor string, back time.Duration) string
 	Unblock(image, digest, actor string) string
 	CheckAll(actor string, back time.Duration) string
+	// RunJob runs one of the host's jobs now; the answer is a message,
+	// empty on success.
+	RunJob(job, actor string) string
 }
 
 // Collector fans out over queues and implements what the page renders from.
@@ -114,6 +118,8 @@ type snapshot struct {
 	whyNot  string
 	// applying is the services this queue is applying right now.
 	applying map[string]bool
+	// jobs is what that host runs on its own, with each one's last run.
+	jobs []jobs.Status
 	// err is the transport failure, when the queue could not be asked.
 	//
 	// Kept rather than dropped because an unreachable queue must render as
@@ -153,7 +159,7 @@ func (c *Collector) Collect() {
 			results[i] = snapshot{queue: snap.Pending, soaking: snap.Soaking, blocks: snap.Blocks,
 				lastCheck: snap.LastCheck, services: snap.Services, canApply: snap.CanApply,
 				blocker: string(snap.Blocker), whyNot: snap.WhyNot,
-				applying: applying, err: err}
+				applying: applying, jobs: snap.Jobs, err: err}
 		}(i, d)
 	}
 	wg.Wait()
@@ -173,6 +179,7 @@ func (c *Collector) Collect() {
 			results[i].blocks = prev.blocks
 			results[i].lastCheck = prev.lastCheck
 			results[i].services = prev.services
+			results[i].jobs = prev.jobs
 			// Never applyable while unreachable, whatever the last answer
 			// said: the route to the updater is through the queue.
 			results[i].canApply = false
@@ -237,6 +244,13 @@ func (c *Collector) fresh() {
 	if empty || age > max {
 		c.Collect()
 	}
+}
+
+// stale makes the next read collect, whatever the cache's age.
+func (c *Collector) stale() {
+	c.mu.Lock()
+	c.collected = time.Time{}
+	c.mu.Unlock()
 }
 
 // Hosted is one entry, labelled with the host whose queue it came from.
@@ -444,6 +458,10 @@ func (c *Collector) Stream(key string, w http.ResponseWriter, r *http.Request) e
 	if !ok {
 		return fmt.Errorf("%q is not a host/service key", key)
 	}
+	// A stream ends when the apply has settled its entry, and the page asks
+	// again the moment it does. Served from a cache taken mid-apply, that
+	// answer still had the row, which then sat there until the next poll.
+	defer c.stale()
 	for _, d := range c.Upstreams {
 		if d.Host != host {
 			continue
@@ -551,6 +569,13 @@ func (c *Collector) Check(host, service, actor string, back time.Duration) error
 	return c.act(host, actor,
 		func(l LocalQueue) string { return l.CheckNow(service, actor, back) },
 		"/v1/check/"+url.PathEscape(service), sinceForm(back))
+}
+
+// RunJob runs one of host's jobs now.
+func (c *Collector) RunJob(host, job, actor string) error {
+	return c.act(host, actor,
+		func(l LocalQueue) string { return l.RunJob(job, actor) },
+		"/v1/run/"+url.PathEscape(job), nil)
 }
 
 // sinceForm is a look-back as the queue API takes it: nothing for "since the
@@ -674,6 +699,8 @@ type HostCheck struct {
 	// Services is every service that host watches, by compose name, for
 	// "Check…" to offer: what is waiting or not.
 	Services []string `json:"services"`
+	// Jobs is what that host runs on its own, with each one's last run.
+	Jobs []jobs.Status `json:"jobs"`
 }
 
 // LastChecks is each host's last check, and what it watches, in the
@@ -689,7 +716,11 @@ func (c *Collector) LastChecks() []HostCheck {
 		if services == nil {
 			services = []string{}
 		}
-		out = append(out, HostCheck{Host: d.Host, At: s.lastCheck, Services: services})
+		js := s.jobs
+		if js == nil {
+			js = []jobs.Status{}
+		}
+		out = append(out, HostCheck{Host: d.Host, At: s.lastCheck, Services: services, Jobs: js})
 	}
 	return out
 }

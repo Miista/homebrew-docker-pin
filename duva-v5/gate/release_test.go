@@ -159,14 +159,16 @@ type errString string
 
 func (e errString) Error() string { return string(e) }
 
-// A soaking entry the file still agrees with survives the reconcile, clock
-// and all, and is released in the same tick.
+// A soaking entry the file still agrees with -- its tag and its policy --
+// survives the reconcile, clock and all, and is released in the same tick.
 func TestATickReleasesWhatIsStillWanted(t *testing.T) {
 	file := composeFile(t, `
 services:
   app:
     image: example.com/app:1.0.0@sha256:aaaa
     container_name: app
+    labels:
+      duva.auto: patch
 `)
 	queue, app := q.NewPending(), &startRecorder{}
 	soaking(queue, soakNow.Add(-time.Minute))
@@ -213,8 +215,8 @@ func TestAPokeReconcilesNow(t *testing.T) {
 // A container missing for one sync is in a recreate; missing for two, gone.
 func TestAContainerIsGoneOnlyWhenMissingTwice(t *testing.T) {
 	r := &reconciler{}
-	app := q.Container{Name: "app", Service: "app", Image: "example.com/app:1"}
-	db := q.Container{Name: "db", Service: "db", Image: "postgres:17"}
+	app := q.Container{Name: "app", Service: "app"}
+	db := q.Container{Name: "db", Service: "db"}
 
 	r.graced([]q.Container{app, db})
 	if got := r.graced([]q.Container{db}); len(got) != 2 {
@@ -228,5 +230,45 @@ func TestAContainerIsGoneOnlyWhenMissingTwice(t *testing.T) {
 	r.graced([]q.Container{db})
 	if got := r.graced([]q.Container{app, db}); len(got) != 2 {
 		t.Errorf("a returning container was not present: %+v", got)
+	}
+}
+
+// A label added outside duva reaches what already waits: reconcile fits the
+// entry to the new policy, and the release job -- the one unattended path --
+// applies it in the same tick. Before, only releases found afterwards were
+// judged under it, and the waiting one sat for a person who had said they
+// need not be asked.
+func TestAPolicyChangedOutsideDuvaReachesWhatWaits(t *testing.T) {
+	file := composeFile(t, `
+services:
+  app:
+    image: example.com/app:latest@sha256:aaaa
+    container_name: app
+    labels:
+      duva.auto: digest
+`)
+	waiting := func(queue *q.Pending) {
+		queue.Put(q.Entry{Service: "app", Container: "app", Image: "example.com/app", Tag: "latest",
+			From: "sha256:aaaa", To: "sha256:bbbb", Digest: "sha256:bbbb", Auto: q.AutoNone}, soakNow)
+	}
+
+	queue, app := q.NewPending(), &startRecorder{}
+	waiting(queue)
+	r := releaserOver(queue, app)
+	r.root = file
+	r.now = time.Now
+	r.tick()
+	if len(app.started) != 1 {
+		t.Errorf("started = %+v, want the waiting release applied under its new policy", app.started)
+	}
+
+	// With nothing here to apply it, a release time would take the entry
+	// from a person for good: it stays waiting.
+	queue = q.NewPending()
+	waiting(queue)
+	r = &reconciler{queue: queue, root: file, log: zerolog.Nop()}
+	r.tick()
+	if got := queue.Waiting(); len(got) != 1 || got[0].ReleaseAt != "" {
+		t.Errorf("waiting = %+v, want it left for a person", got)
 	}
 }

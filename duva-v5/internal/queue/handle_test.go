@@ -1,6 +1,7 @@
 package queue
 
 import (
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -153,6 +154,31 @@ func TestHandleQueuesWhenPolicySaysAsk(t *testing.T) {
 	}
 	if e.To != "1.1.0" || e.Kind != version.KindMinor {
 		t.Errorf("entry = %+v", e)
+	}
+}
+
+// A service the sync recorded as removed takes no releases, and the refusal
+// is a 5xx: the watcher holds the finding and offers it again, so a service
+// back in the file before the sync has seen it loses nothing.
+func TestHandleRefusesARemovedService(t *testing.T) {
+	h, q := handlerOver(t, pinnedProject, &fakeApplier{})
+	q.SyncServices([]Declared{{Container: "my-app", Service: "app", Image: "example.com/app", Tag: "1.0.0"}},
+		[]Container{{Name: "my-app", Service: "app"}}, now)
+	q.SyncServices(nil, nil, now)
+
+	res := h.Handle(Notice{Container: "my-app", Image: "example.com/app:1.1.0", Digest: "sha256:new"})
+	if res.Status < http.StatusInternalServerError {
+		t.Errorf("status = %d (%s), want a 5xx so the finding is held", res.Status, res.Message)
+	}
+	if q.Len() != 0 {
+		t.Errorf("a removed service was queued: %+v", q.List())
+	}
+
+	// Back, by the sync: the same finding is taken.
+	q.SyncServices([]Declared{{Container: "my-app", Service: "app", Image: "example.com/app", Tag: "1.0.0"}},
+		[]Container{{Name: "my-app", Service: "app"}}, now)
+	if res := h.Handle(Notice{Container: "my-app", Image: "example.com/app:1.1.0", Digest: "sha256:new"}); res.Outcome != Queue {
+		t.Errorf("outcome = %q after the service came back, want queue (%s)", res.Outcome, res.Message)
 	}
 }
 

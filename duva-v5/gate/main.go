@@ -40,6 +40,7 @@ import (
 	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/update"
 	// Aliased: this binary lives in queue/, so the bare name would be
 	// ambiguous with the package it is the command for.
+	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/jobs"
 	q "github.com/Miista/homebrew-docker-pin/duva-v5/internal/queue"
 	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/settings"
 	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/store"
@@ -113,6 +114,9 @@ type Options struct {
 	// Watched is every service the watcher checks, for the page's "Check…".
 	// Nil: not reported.
 	Watched func() []string
+	// NextCheck is when the watcher's scheduled check runs next, for the
+	// page's Jobs list. Nil: not reported.
+	NextCheck func() time.Time
 	// Store is where the queue is kept. Nil opens /data/duva.db.
 	Store *store.Store
 	// Labels reads a service's policy from its container. Nil reads it from
@@ -139,6 +143,10 @@ type Gate struct {
 	containers func() ([]q.Container, error)
 	// poke holds at most one request for a reconcile; see Poke.
 	poke chan struct{}
+	// st is where the queue is kept, and where its jobs record their runs.
+	st *store.Store
+	// rec is the reconciler, once Run has started it.
+	rec *reconciler
 }
 
 // New assembles a queue: it reads the compose project, restores what was
@@ -223,7 +231,7 @@ func New(log zerolog.Logger, opts Options) (*Gate, error) {
 	}
 	notify(notifier, cfg.Host, handler, live)
 
-	return &Gate{
+	g := &Gate{
 		log:     log,
 		cfg:     cfg,
 		root:    root,
@@ -246,7 +254,17 @@ func New(log zerolog.Logger, opts Options) (*Gate, error) {
 		labels:     opts.Labels,
 		containers: opts.Containers,
 		poke:       make(chan struct{}, 1),
-	}, nil
+		st:         st,
+	}
+	g.API.Tick = g.Poke
+	g.API.Jobs = func() []jobs.Status {
+		var nextCheck time.Time
+		if opts.NextCheck != nil {
+			nextCheck = opts.NextCheck()
+		}
+		return jobs.Statuses(st, nextCheck, g.NextTick())
+	}
+	return g, nil
 }
 
 // Host is what this queue calls itself.
@@ -264,6 +282,16 @@ func (g *Gate) Poke() {
 	case g.poke <- struct{}{}:
 	default:
 	}
+}
+
+// NextTick is when the sync, reconcile and release run next: the last tick
+// plus the interval. Zero before the first. A container event or a person can
+// bring it sooner.
+func (g *Gate) NextTick() time.Time {
+	if g.rec == nil {
+		return time.Time{}
+	}
+	return g.rec.next()
 }
 
 // IsBlocked reports whether a release is on the blocklist, and why.
@@ -287,7 +315,8 @@ func (g *Gate) Run(ctx context.Context) error {
 
 	reconcileDone := make(chan struct{})
 	rec := &reconciler{queue: g.queue, root: g.root, interval: cfg.ReconcileInterval, log: log,
-		applier: g.applying, labels: g.labels, poke: g.poke, containers: g.containers}
+		applier: g.applying, labels: g.labels, poke: g.poke, containers: g.containers, st: g.st}
+	g.rec = rec
 	if g.live != nil {
 		rec.applicable = g.live.Applicable
 	}

@@ -78,6 +78,10 @@ type Pending struct {
 	// cannot write still answers from what it could read, which is better
 	// than a queue that stops.
 	onError func(error)
+	// running is the compose name of every service the last sync found a
+	// container for. Not a column: whether a container exists is the
+	// daemon's to say, and is only as true as the last time it was asked.
+	running map[string]bool
 }
 
 // NewPending returns an empty queue in a database of its own, in memory.
@@ -101,7 +105,7 @@ func (q *Pending) fail(err error) {
 }
 
 // columns is every entry column, in the order scan reads them.
-const columns = `e.id, s.name, s.container, e.file, i.repo, e.from_ref, e.to_ref, e.tag,
+const columns = `e.id, s.name, s.container, e.file, COALESCE(e.image, i.repo), e.from_ref, e.to_ref, e.tag,
 	COALESCE(e.digest, ''), COALESCE(e.kind, ''), e.auto, e.why, e.found_at,
 	COALESCE(e.published_at, ''), COALESCE(e.release_at, ''), COALESCE(e.source, '')`
 
@@ -220,10 +224,10 @@ func (q *Pending) put(e Entry, now time.Time) (Entry, bool) {
 			return err
 		}
 		res, err := tx.Exec(`INSERT INTO queue_entries
-			(service_id, file, from_ref, to_ref, tag, digest, kind, auto, why,
+			(service_id, file, image, from_ref, to_ref, tag, digest, kind, auto, why,
 			 published_at, found_at, release_at, source, status)
-			VALUES (?, ?, ?, ?, ?, NULLIF(?, ''), NULLIF(?, ''), ?, ?, NULLIF(?, ''), ?, NULLIF(?, ''), NULLIF(?, ''), 'waiting')`,
-			serviceID, e.File, e.From, e.To, e.Tag, e.Digest, string(e.Kind), string(e.Auto), e.Why,
+			VALUES (?, ?, ?, ?, ?, ?, NULLIF(?, ''), NULLIF(?, ''), ?, ?, NULLIF(?, ''), ?, NULLIF(?, ''), NULLIF(?, ''), 'waiting')`,
+			serviceID, e.File, e.Image, e.From, e.To, e.Tag, e.Digest, string(e.Kind), string(e.Auto), e.Why,
 			e.Published, e.FirstSeen, e.ReleaseAt, e.Source)
 		if err != nil {
 			return err
@@ -258,26 +262,33 @@ func (q *Pending) put(e Entry, now time.Time) (Entry, bool) {
 	return e, isNewest
 }
 
-// ensureService finds or creates a service, enabling it if it was disabled.
-//
-// Created on demand as well as by the sync, so the first finding for a
-// service needs nothing to have run first. A service that comes back is the
-// same row, so the same history.
-func ensureService(tx *sql.Tx, container, name, image string) (int64, error) {
+// ensureImage finds or creates an image row.
+func ensureImage(tx *sql.Tx, image string) (int64, error) {
 	if _, err := tx.Exec(`INSERT INTO images (repo) VALUES (?) ON CONFLICT (repo) DO NOTHING`, image); err != nil {
 		return 0, err
 	}
-	var imageID int64
-	if err := tx.QueryRow(`SELECT id FROM images WHERE repo = ?`, image).Scan(&imageID); err != nil {
+	var id int64
+	err := tx.QueryRow(`SELECT id FROM images WHERE repo = ?`, image).Scan(&id)
+	return id, err
+}
+
+// ensureService finds a service, or creates it for a finding that arrives
+// before the service sync has seen it.
+//
+// An existing row is left as it is: what a service runs and whether it is
+// removed are the sync's to say, from the compose file and the containers. A
+// finding is a release, and says nothing about either.
+func ensureService(tx *sql.Tx, container, name, image string) (int64, error) {
+	imageID, err := ensureImage(tx, image)
+	if err != nil {
 		return 0, err
 	}
 	if _, err := tx.Exec(`INSERT INTO services (container, name, image_id) VALUES (?, ?, ?)
-		ON CONFLICT (container) DO UPDATE SET name = excluded.name, image_id = excluded.image_id, removed_at = NULL`,
-		container, name, imageID); err != nil {
+		ON CONFLICT (container) DO NOTHING`, container, name, imageID); err != nil {
 		return 0, err
 	}
 	var id int64
-	err := tx.QueryRow(`SELECT id FROM services WHERE container = ?`, container).Scan(&id)
+	err = tx.QueryRow(`SELECT id FROM services WHERE container = ?`, container).Scan(&id)
 	return id, err
 }
 
@@ -409,13 +420,13 @@ func (q *Pending) Remove(service string) bool {
 // evidence an entry is satisfied. An entry it keeps is stored as check
 // returned it, which is how a From the file has moved past is brought up to
 // date; it keeps its place and its clock.
-func (q *Pending) Reconcile(check func(e Entry) (Recheck, error), onError func(service string, err error)) (dropped []Recheck) {
+func (q *Pending) Reconcile(check func(e Entry) (Recheck, error), onError func(service string, err error)) (dropped, refiled []Recheck) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	current, err := q.query(open)
 	if err != nil {
 		q.fail(err)
-		return nil
+		return nil, nil
 	}
 	now := time.Now()
 	for _, e := range current {
@@ -433,12 +444,32 @@ func (q *Pending) Reconcile(check func(e Entry) (Recheck, error), onError func(s
 		}
 		if r.Keep {
 			kept := r.Entry
-			if kept.From == e.From && kept.Why == e.Why && kept.To == e.To && kept.Source == e.Source {
+			if kept.From == e.From && kept.Why == e.Why && kept.To == e.To && kept.Source == e.Source &&
+				kept.ReleaseAt == e.ReleaseAt && kept.Auto == e.Auto {
 				continue
 			}
-			_, err := q.st.DB().Exec(`UPDATE queue_entries SET from_ref = ?, to_ref = ?, why = ?, source = NULLIF(?, '') WHERE id = ?`,
-				kept.From, kept.To, kept.Why, kept.Source, e.ID)
-			q.fail(err)
+			q.fail(q.st.Tx(func(tx *sql.Tx) error {
+				if _, err := tx.Exec(`UPDATE queue_entries SET from_ref = ?, to_ref = ?, why = ?, source = NULLIF(?, ''),
+					release_at = NULLIF(?, ''), auto = ? WHERE id = ?`,
+					kept.From, kept.To, kept.Why, kept.Source, kept.ReleaseAt, string(kept.Auto), e.ID); err != nil {
+					return err
+				}
+				if r.Refiled == "" {
+					return nil
+				}
+				serviceID, err := serviceOf(tx, e.ID)
+				if err != nil {
+					return err
+				}
+				kind := "scheduled"
+				if kept.ReleaseAt == "" {
+					kind = "unscheduled"
+				}
+				return event(tx, e.ID, serviceID, now, kind, r.Refiled)
+			}))
+			if r.Refiled != "" {
+				refiled = append(refiled, r)
+			}
 			continue
 		}
 		r.Entry = e
@@ -456,7 +487,7 @@ func (q *Pending) Reconcile(check func(e Entry) (Recheck, error), onError func(s
 		dropped = append(dropped, r)
 	}
 	sort.SliceStable(dropped, func(i, j int) bool { return dropped[i].Entry.Service < dropped[j].Entry.Service })
-	return dropped
+	return dropped, refiled
 }
 
 // decommissioned is whether a service by this compose name was known here and

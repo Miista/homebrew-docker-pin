@@ -25,6 +25,7 @@ package watcher
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"regexp"
 	"sort"
@@ -42,6 +43,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/Miista/homebrew-docker-pin/compose"
+	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/jobs"
 	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/settings"
 	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/store"
 	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/watch"
@@ -100,6 +102,20 @@ type Options struct {
 	Labels func(container string) (map[string]string, bool, error)
 	// Store is where the cutoffs and held findings are kept.
 	Store *store.Store
+}
+
+// NextCheck is when the scheduled check runs next. Zero when the schedule
+// cannot be read, which Serve refuses to start on anyway.
+func NextCheck() time.Time {
+	expr, err := scheduleFromEnv()
+	if err != nil {
+		return time.Time{}
+	}
+	next, err := croncal.Next(expr, time.Now())
+	if err != nil {
+		return time.Time{}
+	}
+	return next
 }
 
 // Serve checks once now and then on the schedule setting, until ctx is done.
@@ -222,9 +238,27 @@ func LastChecked(st *store.Store) time.Time {
 	return at
 }
 
-func run(log zerolog.Logger, only string, back time.Duration, opts Options) error {
+func run(log zerolog.Logger, only string, back time.Duration, opts Options) (err error) {
 	runMu.Lock()
 	defer runMu.Unlock()
+
+	// Every check is a run of the check job, scheduled or asked for, and what
+	// it logs is that run's output.
+	started := time.Now()
+	out := &jobs.Log{}
+	log = log.Hook(out)
+	summary := ""
+	defer func() {
+		if err != nil {
+			summary = err.Error()
+		}
+		st := opts.Store
+		if st == nil {
+			st = memStore
+		}
+		jobs.Record(st, jobs.Run{Job: jobs.Check, Started: started, Took: time.Since(started),
+			Summary: summary, Output: out.Lines(), Failed: err != nil})
+	}()
 
 	root := opts.Root
 	if root == "" {
@@ -300,6 +334,10 @@ func run(log zerolog.Logger, only string, back time.Duration, opts Options) erro
 
 	log.Info().Msgf("check complete: %d new tag(s) across %d service(s), %d could not be checked",
 		found, len(services), failed)
+	summary = fmt.Sprintf("%d service(s), %d new tag(s), %d could not be checked", len(services), found, failed)
+	if only != "" {
+		summary = only + ": " + summary
+	}
 
 	// Saved whatever happened. Each service's cutoff moved only if that
 	// service was checked, and anything that could not be handed on is held --
@@ -363,6 +401,11 @@ func readServices(root string, log zerolog.Logger, labels func(string) (map[stri
 			include, exclude, err = tagRules(ref.File, ref.Service)
 		} else {
 			include, exclude, err = containerRules(labels, container)
+		}
+		if errors.Is(err, errNoContainer) {
+			// Declared but not running: nothing to update, and not a fault.
+			log.Info().Msgf("%s: not checked, it has no container", ref.Service)
+			continue
 		}
 		if err != nil {
 			log.Warn().Msgf("%s: %v", ref.Service, err)
@@ -431,6 +474,9 @@ func justOne(services []watch.Service, name string) []watch.Service {
 	return nil
 }
 
+// errNoContainer is a service with no container to read rules from.
+var errNoContainer = errors.New("no container")
+
 // containerRules reads a service's tag rules from its container.
 //
 // A service with no container is not watched: there is nothing running to
@@ -441,7 +487,7 @@ func containerRules(labels func(string) (map[string]string, bool, error), contai
 		return nil, nil, fmt.Errorf("reading its container's labels: %w", err)
 	}
 	if !found {
-		return nil, nil, fmt.Errorf("no container named %s, so nothing to update", container)
+		return nil, nil, fmt.Errorf("%w: no container named %s, so nothing to update", errNoContainer, container)
 	}
 	return rulesFrom(set)
 }

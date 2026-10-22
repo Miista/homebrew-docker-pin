@@ -95,6 +95,7 @@ type Actions interface {
 	Check(host, service, actor string, back time.Duration) error
 	Unblock(host, image, digest, actor string) error
 	CheckAll(actor string, back time.Duration) error
+	RunJob(host, job, actor string) error
 }
 
 // BlockSource is a Source that also reports what is blocked.
@@ -149,6 +150,9 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("/api/check/", s.action("/api/check/", s.check))
 		mux.HandleFunc("/api/unblock/", s.unblock)
 		mux.HandleFunc("/api/check-all", s.checkAll)
+		mux.HandleFunc("/api/run/", s.action("/api/run/", func(host, job string, r *http.Request) error {
+			return s.Actions.RunJob(host, job, s.actor(r))
+		}))
 	}
 	mux.HandleFunc("/", s.index)
 	return mux

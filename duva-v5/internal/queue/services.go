@@ -3,7 +3,6 @@ package queue
 import (
 	"database/sql"
 	"sort"
-	"strings"
 	"time"
 )
 
@@ -13,8 +12,22 @@ type Container struct {
 	Name string
 	// Service is the compose service it belongs to.
 	Service string
-	// Image is the reference it runs, tag and digest included or not.
+}
+
+// Declared is one service as the compose file declares it.
+//
+// The image and tag come from here and never from the container: docker's
+// container list reports a container by image ID once the tag it was created
+// from has moved on, and recording that took grafana's image to be "sha256".
+type Declared struct {
+	// Container is its container_name.
+	Container string
+	// Service is the compose service name.
+	Service string
+	// Image is the base reference, without tag or digest.
 	Image string
+	// Tag is the tag the file follows.
+	Tag string
 }
 
 // Running is the compose name of every service with a container on this host
@@ -22,53 +35,80 @@ type Container struct {
 func (q *Pending) Running() map[string]bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	out := map[string]bool{}
-	rows, err := q.st.DB().Query(`SELECT name FROM services WHERE removed_at IS NULL`)
-	if err != nil {
-		q.fail(err)
-		return out
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var name string
-		if rows.Scan(&name) == nil {
-			out[name] = true
-		}
+	out := make(map[string]bool, len(q.running))
+	for name := range q.running {
+		out[name] = true
 	}
 	return out
 }
 
-// SyncServices makes the services table a mirror of the containers on this
-// host: a container not seen before is added, one that is gone is disabled,
-// and one that comes back is enabled again -- the same row, so the same
-// history. Nothing is ever deleted.
+// Removed is whether the sync recorded a service as removed. A service it has
+// never seen is not: nothing says it went.
+func (q *Pending) Removed(container string) bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	var removed sql.NullString
+	err := q.st.DB().QueryRow(`SELECT removed_at FROM services WHERE container = ?`, container).Scan(&removed)
+	return err == nil && removed.Valid
+}
+
+// SyncServices brings the services table up to date with the world outside
+// duva: the compose file says which services exist and what image and tag
+// each follows, and the containers say which are still there.
+//
+// A service declared in the file is added, or brought back on its old row --
+// the same history -- and has its image and tag recorded. One that is neither
+// declared nor has a container is removed: both, because a service briefly
+// gone from the file (an edit mid-rebase) still runs, and one whose container
+// is gone for a recreate is still declared. Nothing is ever deleted.
 //
 // It reports what changed, by container name.
-func (q *Pending) SyncServices(containers []Container, now time.Time) (added, removed []string, err error) {
+func (q *Pending) SyncServices(declared []Declared, containers []Container, now time.Time) (added, removed []string, err error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	present := map[string]bool{}
+	running := map[string]bool{}
+	for _, c := range containers {
+		if c.Name == "" {
+			continue
+		}
+		present[c.Name] = true
+		if c.Service != "" {
+			running[c.Service] = true
+		}
+	}
+	inFile := map[string]bool{}
 	err = q.st.Tx(func(tx *sql.Tx) error {
-		for _, c := range containers {
-			if c.Name == "" || c.Service == "" {
+		for _, d := range declared {
+			if d.Container == "" || d.Service == "" || d.Image == "" {
 				continue
 			}
-			present[c.Name] = true
+			inFile[d.Container] = true
+			imageID, err := ensureImage(tx, d.Image)
+			if err != nil {
+				return err
+			}
 			var id int64
 			var was sql.NullString
-			existed := tx.QueryRow(`SELECT id, removed_at FROM services WHERE container = ?`, c.Name).Scan(&id, &was) == nil
-			if id, err = ensureService(tx, c.Name, c.Service, repoOf(c.Image)); err != nil {
+			existed := tx.QueryRow(`SELECT id, removed_at FROM services WHERE container = ?`, d.Container).Scan(&id, &was) == nil
+			if _, err := tx.Exec(`INSERT INTO services (container, name, image_id, tag) VALUES (?, ?, ?, NULLIF(?, ''))
+				ON CONFLICT (container) DO UPDATE SET name = excluded.name, image_id = excluded.image_id,
+					tag = excluded.tag, removed_at = NULL`,
+				d.Container, d.Service, imageID, d.Tag); err != nil {
+				return err
+			}
+			if err := tx.QueryRow(`SELECT id FROM services WHERE container = ?`, d.Container).Scan(&id); err != nil {
 				return err
 			}
 			switch {
 			case !existed:
-				added = append(added, c.Name)
-				if err := serviceEvent(tx, id, now, "service-added", c.Service); err != nil {
+				added = append(added, d.Container)
+				if err := serviceEvent(tx, id, now, "service-added", d.Service); err != nil {
 					return err
 				}
 			case was.Valid:
-				added = append(added, c.Name)
-				if err := serviceEvent(tx, id, now, "service-back", c.Service); err != nil {
+				added = append(added, d.Container)
+				if err := serviceEvent(tx, id, now, "service-back", d.Service); err != nil {
 					return err
 				}
 			}
@@ -89,7 +129,7 @@ func (q *Pending) SyncServices(containers []Container, now time.Time) (added, re
 				rows.Close()
 				return err
 			}
-			if !present[g.container] {
+			if !inFile[g.container] && !present[g.container] {
 				missing = append(missing, g)
 			}
 		}
@@ -106,6 +146,9 @@ func (q *Pending) SyncServices(containers []Container, now time.Time) (added, re
 		}
 		return nil
 	})
+	if err == nil {
+		q.running = running
+	}
 	sort.Strings(added)
 	sort.Strings(removed)
 	return added, removed, err
@@ -115,18 +158,4 @@ func serviceEvent(tx *sql.Tx, serviceID int64, at time.Time, kind, detail string
 	_, err := tx.Exec(`INSERT INTO queue_events (service_id, at, kind, actor, detail)
 		VALUES (?, ?, ?, 'duva', ?)`, serviceID, at.UTC().Format(time.RFC3339), kind, detail)
 	return err
-}
-
-// repoOf is an image reference without its tag or digest.
-func repoOf(ref string) string {
-	if i := strings.IndexByte(ref, '@'); i >= 0 {
-		ref = ref[:i]
-	}
-	// The last colon after the last slash is the tag; one before a slash is
-	// a registry port.
-	slash := strings.LastIndexByte(ref, '/')
-	if i := strings.LastIndexByte(ref, ':'); i > slash {
-		ref = ref[:i]
-	}
-	return ref
 }

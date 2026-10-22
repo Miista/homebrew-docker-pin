@@ -393,6 +393,31 @@
   .blist .rel { font-size: 12.5px; font-weight: 500; color: var(--soft); margin-left: 8px; }
   .blist .by { font-size: 11.5px; color: var(--faint); }
   .blist .act { min-width: 96px; flex-shrink: 0; }
+  /* ---------- jobs ---------- */
+  .jobspage { display: flex; flex-direction: column; }
+  .jobspage .back { color: var(--link); font-size: 13px; text-decoration: none; margin-bottom: 6px; }
+  .jobspage .back:hover { color: var(--link-hi); }
+  .jobspage .lead { max-width: 70ch; line-height: 1.5; }
+  .jobspage .group { --cols: minmax(0, 2.4fr) minmax(0, .9fr) minmax(0, 2fr) minmax(0, .7fr) auto; }
+  .jobhead { display: grid; grid-template-columns: var(--cols); gap: 0 16px; padding: 10px 20px;
+             border-bottom: 1px solid var(--divider); font-size: 11.5px; font-weight: 600;
+             letter-spacing: .1em; text-transform: uppercase; color: var(--faint); }
+  .jobrows > li { cursor: pointer; align-items: start; }
+  .jobrows > li.open { background: var(--row-hover); }
+  .jname { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .jname .n { font-size: 14.5px; font-weight: 600; }
+  .jname .why { font-size: 13px; color: var(--muted); line-height: 1.45; }
+  .jlast { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--soft); }
+  .jlast .took { font-size: 12px; color: var(--faint); }
+  .jres { font-size: 13.5px; color: var(--soft); line-height: 1.45; min-width: 0; overflow-wrap: anywhere; }
+  .jres.bad { color: var(--danger); }
+  .jnext { font-size: 13px; color: var(--soft); }
+  .jact .act { min-width: 104px; }
+  .jobout { grid-column: 1 / -1; margin: 14px 0 0; padding: 12px 14px; font-size: 12px; line-height: 1.55;
+            white-space: pre-wrap; overflow-wrap: anywhere; color: var(--soft);
+            background: var(--field); border: 1px solid var(--divider); border-radius: 10px;
+            max-height: 50vh; overflow: auto; cursor: text; }
+  .jobrows .none { display: block; padding: 22px 20px; color: var(--faint); cursor: default; }
   .blist .none { justify-content: center; padding: 28px 12px; color: var(--faint); border: 0; }
   .dlg .note { padding: 14px 22px 18px; }
 
@@ -461,6 +486,17 @@
     .menu .checks .hostline { height: auto; padding: 4px 12px 0 36px; font-size: 12px; }
     /* One tab at a time: the bar at the bottom picks it. */
     .pane.off { display: none; }
+    /* Jobs: no column heads; the name beside Run now, the rest under it. */
+    .jobhead { display: none; }
+    .jobspage .group { --cols: minmax(0, 1fr) auto; }
+    .jobrows > li { grid-template-columns: var(--cols); gap: 6px 12px; padding: 14px 16px; }
+    .jobrows .jname { grid-column: 1; grid-row: 1; }
+    .jobrows .jact { grid-column: 2; grid-row: 1; }
+    .jobrows .jlast { grid-column: 1 / -1; flex-direction: row; gap: 8px; }
+    .jobrows .jlast::after { content: "· next " attr(data-next); color: var(--faint); }
+    .jobrows .jres { grid-column: 1 / -1; }
+    .jobrows .jnext { display: none; }
+    .jact .act { min-width: 0; height: 36px; padding: 0 14px; }
     .intro, .soak .intro { margin: 8px 0 0; padding: 0 4px 4px; gap: 4px; }
     h1, h2.h { font-size: 24px; }
     .lead { font-size: 13px; line-height: 1.45; }
@@ -622,6 +658,7 @@
           </div>
           <hr v-if="actions">
           <button role="menuitem" v-if="actions" @click="openBlocks()">Blocked releases <span class="n">{{ blocks.length }}</span></button>
+          <a role="menuitem" href="#jobs" @click="top = false">Jobs</a>
           <a role="menuitem" class="quiet only-with-gate" href="/auth/logout">Sign out</a>
           <!-- Which duva this is: worth finding, not worth a footer. -->
           <span class="version mono">duva {{ version }}</span>
@@ -631,7 +668,7 @@
   </header>
 
 
-  <section class="pane" :class="tab === 'queue' ? '' : 'off'">
+  <section class="pane" :class="tab === 'queue' ? '' : 'off'" v-show="view === 'queue'">
     <div class="intro">
       <h1>Queue</h1>
       <p class="lead">Pending image updates across your hosts.</p>
@@ -692,7 +729,7 @@
 
   <!-- What applies itself when its delay runs out. Not in the queue above:
        nobody needs to do anything, so it is told apart rather than mixed in. -->
-  <section class="pane soak" :class="tab === 'scheduled' ? '' : 'off'">
+  <section class="pane soak" :class="tab === 'scheduled' ? '' : 'off'" v-show="view === 'queue'">
     <div class="intro">
       <h2 class="h">Scheduled</h2>
       <p class="lead">Allowed by policy and delayed</p>
@@ -743,6 +780,39 @@
     </div>
   </section>
 
+
+  <!-- Jobs: what each host runs on its own, when it last ran and what it did,
+       when it runs next. A page of its own at #jobs, from the menu: a table
+       wants the width a dialog does not have. Tapping a row shows what the
+       run said. -->
+  <section class="jobspage" v-if="view === 'jobs'">
+    <div class="intro">
+      <a class="back" href="#">&larr; Queue</a>
+      <h1>Jobs</h1>
+      <p class="lead">duva runs these on its own; running one by hand does not change its schedule.
+        Sync, reconcile and release run together, in that order, so running one runs all three.</p>
+    </div>
+
+    <div class="group" v-for="c in checks" :key="c.host">
+      <div class="group-head">{{ c.host }}</div>
+      <div class="jobhead"><span>Job</span><span>Last run</span><span>Result</span><span>Next</span><span></span></div>
+      <ul class="rows jobrows">
+        <li v-for="j in c.jobs" :key="c.host + j.job" :class="openJob === c.host + '/' + j.job ? 'open' : ''"
+            @click="toggleJob(c.host, j)">
+          <span class="jname"><span class="n">{{ jobName(j.job) }}</span><span class="why">{{ jobWhy(j.job) }}</span></span>
+          <span class="jlast mono" :data-next="until(j.next)">{{ j.last ? ago(j.last.started) : "not yet" }}<span class="took" v-if="j.last">{{ took(j.last.took) }}</span></span>
+          <span class="jres" :class="j.last && j.last.failed ? 'bad' : ''">{{ j.last ? j.last.summary : "" }}</span>
+          <span class="jnext mono">{{ until(j.next) }}</span>
+          <span class="jact">
+            <button class="act" type="button" v-if="actions" :disabled="runningJob === c.host + '/' + j.job"
+                    @click.stop="runJob(c.host, j.job)">{{ runningJob === c.host + '/' + j.job ? "Running…" : "Run now" }}</button>
+          </span>
+          <pre class="jobout mono" v-if="openJob === c.host + '/' + j.job">{{ j.last && j.last.output && j.last.output.length ? j.last.output.join("\n") : "Nothing was said." }}</pre>
+        </li>
+        <li class="none" v-if="!c.jobs.length">{{ c.host }} does not report its jobs: it runs an older duva.</li>
+      </ul>
+    </div>
+  </section>
 
   <!-- The phone's way in: a row opens this, with everything the desktop
        spreads across a row's cells and menu. It reads the row from the queue
@@ -953,7 +1023,7 @@
     </div>
   </div>
 
-  <nav class="tabbar">
+  <nav class="tabbar" v-show="view === 'queue'">
     <button :class="tab === 'queue' ? 'sel' : ''" @click="goTab('queue')">Queue <span class="n">{{ rows.length }}</span></button>
     <button :class="tab === 'scheduled' ? 'sel' : ''" @click="goTab('scheduled')">Scheduled <span class="n">{{ soaking.length }}</span></button>
   </nav>
@@ -987,12 +1057,15 @@ createApp({
       hover: false,     // the pointer is over "Last checked"
       pinned: false,    // "Last checked" was clicked open
       tab: "queue",     // the phone's tab
+      view: location.hash === "#jobs" ? "jobs" : "queue", // the page: the queue, or #jobs
       scrolls: {},      // how far down each tab was when left
       sheetId: "",      // the phone's open row: its key, then #entry
       blockRow: null,   // the row the block dialog is about
       blockFrom: "",    // the sheet it was asked from, to go back to on Cancel
       blocking: false,  // it closed because Block was pressed
       dismissed: {},    // standing toasts swiped away, by what they said
+      openJob: "",      // "host/job" whose output is shown in Jobs
+      runningJob: "",   // "host/job" being asked to run
       armed: "",        // the Update pressed once, waiting for its Confirm?
       since: "",        // how far back the check dialog will look; "" is since the last check
       checkOpts: false, // the check dialog's options are unfolded
@@ -1029,6 +1102,12 @@ createApp({
 
       start() {
         this.resume()
+        // #jobs is the Jobs page; anything else is the queue. A hash, so the
+        // back button and a reload both land where they were.
+        addEventListener("hashchange", () => {
+          this.view = location.hash === "#jobs" ? "jobs" : "queue"
+          scrollTo(0, 0)
+        })
         // A hidden tab does not poll: this page is left open for days, and a
         // decider answering for nobody every 15s is the sort of thing noticed
         // in a log months later. Nor does it animate.
@@ -1328,6 +1407,7 @@ createApp({
           if (t.clientX < 24 || t.clientX > innerWidth - 24) return
           if (e.target.closest(".toast, dialog, .tabbar, .top")) return
           if (document.querySelector("dialog[open]")) return
+          if (location.hash === "#jobs") return // one page, nothing to swipe to
           x0 = t.clientX; y0 = t.clientY; t0 = Date.now(); mode = "maybe"
         }, { passive: true })
         document.addEventListener("touchmove", e => {
@@ -1605,6 +1685,60 @@ createApp({
       openBlocks() {
         this.top = false
         document.getElementById("blocks").showModal()
+      },
+
+      jobName(job) {
+        return { check: "Check for releases", sync: "Sync services",
+                 reconcile: "Reconcile the queue", release: "Release delayed" }[job] || job
+      },
+
+      // What each job is for, as the README's Jobs table says.
+      jobWhy(job) {
+        return {
+          check: "Looks for new releases of every service the compose file pins.",
+          sync: "Brings in changes made outside duva: services added or removed, and the image and tag each follows.",
+          reconcile: "Drops what is waiting that no longer applies to what the compose file says.",
+          release: "Applies delayed releases whose delay is over.",
+        }[job] || ""
+      },
+
+      toggleJob(host, j) {
+        const key = host + "/" + j.job
+        this.openJob = this.openJob === key ? "" : key
+      },
+
+      async runJob(host, job) {
+        this.runningJob = host + "/" + job
+        try {
+          const res = await fetch("/api/run/" + encodeURIComponent(host) + "/" + encodeURIComponent(job), { method: "POST" })
+          if (res.status === 401) { location.reload(); return }
+          const { message } = await res.json()
+          this.result = message
+            ? { service: this.jobName(job), level: "error", message }
+            : { service: this.jobName(job), level: "ok", message: "started on " + host }
+          // A tick takes a moment and a check minutes; the list follows on
+          // the polls after this one.
+          setTimeout(() => this.poll(), 1500)
+        } finally {
+          this.runningJob = ""
+        }
+      },
+
+      // How long a run took: a Go duration, in nanoseconds.
+      took(ns) {
+        const ms = ns / 1e6
+        return ms < 1000 ? Math.round(ms) + " ms" : (ms / 1000).toFixed(ms < 10000 ? 1 : 0) + " s"
+      },
+
+      // How long until a time, for "next". Go's zero time is "not known".
+      until(at) {
+        if (!at || at.startsWith("0001-")) return "—"
+        const m = Math.round((new Date(at) - Date.now()) / 60000)
+        if (m < 1) return "any moment"
+        if (m < 60) return "in " + m + "m"
+        const h = Math.round(m / 60)
+        if (h < 24) return "in " + h + "h"
+        return "in " + Math.round(h / 24) + "d"
       },
 
       async unblock(b) {

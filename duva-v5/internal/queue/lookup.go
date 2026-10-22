@@ -1,6 +1,7 @@
 package queue
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/Miista/homebrew-docker-pin/compose"
@@ -116,6 +117,11 @@ func (l Lookup) declared(container string, ref compose.ServiceRef) (Service, boo
 	}, true, nil
 }
 
+// ErrNoContainer is a service declared in the compose file with no container
+// on this host. Not a fault: nothing runs, so nothing can be updated, and the
+// service is asked about again once its container is back.
+var ErrNoContainer = errors.New("no container")
+
 // labels is a service's policy, from wherever this Lookup reads it.
 func (l Lookup) labels(container string, ref compose.ServiceRef) (map[string]string, error) {
 	if l.Labels == nil {
@@ -133,7 +139,7 @@ func (l Lookup) labels(container string, ref compose.ServiceRef) (map[string]str
 		// Not the file's labels instead: those describe a container that
 		// does not exist, and acting on them would be acting on a policy
 		// nothing is running under.
-		return nil, fmt.Errorf("%s has no container named %s, so there is no policy to read", ref.Service, container)
+		return nil, fmt.Errorf("%w: %s has no container named %s, so there is no policy to read", ErrNoContainer, ref.Service, container)
 	}
 	return labels, nil
 }

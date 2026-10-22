@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/jobs"
 	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/watch"
 )
 
@@ -64,6 +66,12 @@ type Server struct {
 	// person may pick in "Check…". Narrowed to those still running here, as
 	// a retired one keeps its cutoff. Nil: not reported.
 	Watched func() []string
+	// Jobs is this host's jobs, each with its last run, for the page. Nil:
+	// not reported.
+	Jobs func() []jobs.Status
+	// Tick runs the sync, reconcile and release now. Nil: they cannot be run
+	// by hand.
+	Tick func()
 
 	cooldownMu sync.Mutex
 	lastAsked  map[string]time.Time
@@ -92,6 +100,9 @@ func (s *Server) Handler() http.Handler {
 			return "since: " + err.Error()
 		}
 		return s.CheckAll(actorOf(r), back)
+	})))
+	mux.HandleFunc("/v1/run/", s.guard(s.post("/v1/run/", func(job string, r *http.Request) string {
+		return s.RunJob(job, actorOf(r))
 	})))
 	return mux
 }
@@ -158,6 +169,8 @@ type Snapshot struct {
 	// that happened to start it; without this a fresh page offers the same
 	// update again, and the second click is refused.
 	Applying []string `json:"applying,omitempty"`
+	// Jobs is what this host runs on its own, with the last run of each.
+	Jobs []jobs.Status `json:"jobs,omitempty"`
 }
 
 // Blocker is which kind of thing stops an approval landing.
@@ -210,7 +223,15 @@ func (s *Server) Snapshot() Snapshot {
 		Blocker:   blocker,
 		WhyNot:    whyNot,
 		Applying:  s.applying(),
+		Jobs:      s.jobs(),
 	}
+}
+
+func (s *Server) jobs() []jobs.Status {
+	if s.Jobs == nil {
+		return nil
+	}
+	return s.Jobs()
 }
 
 // ApplyingReporter is an Applier that can say what it is working on.
@@ -483,6 +504,30 @@ func (s *Server) CheckNow(service, actor string, back time.Duration) string {
 // cannot be fired again and again.
 func (s *Server) CheckAll(actor string, back time.Duration) string {
 	return s.ask("", actor, back)
+}
+
+// RunJob runs one of this host's jobs now, as the page's Jobs list asks.
+// Running one by hand does not move its schedule.
+//
+// The check is "Check…" of every service. The sync, reconcile and release
+// are one tick, so any of them runs all three, in order. Once a minute at
+// most, like a check.
+func (s *Server) RunJob(job, actor string) string {
+	if job == jobs.Check {
+		return s.CheckAll(actor, 0)
+	}
+	if !slices.Contains(jobs.Tick, job) {
+		return fmt.Sprintf("there is no job %q", job)
+	}
+	if s.Tick == nil {
+		return "nothing here can run it"
+	}
+	if !s.cooled("tick") {
+		return "it was run a moment ago; try again in a minute"
+	}
+	s.Queue.Asked("", "run "+job, actor, time.Now())
+	s.Tick()
+	return ""
 }
 
 // ask starts a check in the background: it is minutes of registry calls, and

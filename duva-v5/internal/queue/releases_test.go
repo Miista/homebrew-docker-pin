@@ -125,12 +125,19 @@ func TestTheHistoryRecordsWhatHappened(t *testing.T) {
 }
 
 // A service that leaves and comes back is the same row, so the same history.
+// Back is the sync's to say, from the compose file and the containers; a
+// finding does not bring a removed service back.
 func TestAServiceThatComesBackKeepsItsRow(t *testing.T) {
 	q := NewPending()
+	app := []Declared{{Container: "my-app", Service: "app", Image: "example.com/app", Tag: "1"}}
+	mine := []Container{{Name: "my-app", Service: "app"}}
+	q.SyncServices(app, mine, now)
 	q.Put(Entry{Service: "app", Container: "my-app", Image: "example.com/app", From: "1.0.0", To: "1.1.0"}, now)
-	q.st.DB().Exec(`UPDATE services SET removed_at = '2026-10-01T00:00:00Z'`)
-	q.Remove("app")
-	q.Put(Entry{Service: "app", Container: "my-app", Image: "example.com/app", From: "1.0.0", To: "1.2.0"}, now)
+	q.SyncServices(nil, nil, now)
+	if !q.Removed("my-app") {
+		t.Fatal("gone from the file with no container, and not removed")
+	}
+	q.SyncServices(app, mine, now)
 
 	var services int
 	var removed *string

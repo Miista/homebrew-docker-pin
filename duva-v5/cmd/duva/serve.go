@@ -97,14 +97,15 @@ func serve() error {
 		// For the page's "last checked".
 		LastChecked: func() time.Time { return watcher.LastChecked(st) },
 		// For the page's "Check…": what may be picked.
-		Watched: func() []string { return watcher.Watched(st) },
+		Watched:   func() []string { return watcher.Watched(st) },
+		NextCheck: watcher.NextCheck,
 		// The service sync's view of this host. Translated here: the queue
 		// knows nothing about docker.
 		Containers: func() ([]q.Container, error) {
 			found, err := dockerapi.ProjectContainers()
 			out := make([]q.Container, 0, len(found))
 			for _, c := range found {
-				out = append(out, q.Container{Name: c.Name, Service: c.Service, Image: c.Image})
+				out = append(out, q.Container{Name: c.Name, Service: c.Service})
 			}
 			return out, err
 		},

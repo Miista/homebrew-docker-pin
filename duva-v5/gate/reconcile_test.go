@@ -5,6 +5,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/rs/zerolog"
 
 	q "github.com/Miista/homebrew-docker-pin/duva-v5/internal/queue"
 	ociversion "github.com/Miista/homebrew-docker-pin/oci/version"
@@ -120,5 +123,28 @@ func TestRecheckFindsAServiceWhoseFileMoved(t *testing.T) {
 	}
 	if r.Keep {
 		t.Error("kept a digest the (renamed) file already pins")
+	}
+}
+
+// A service declared with no container is not a fault: nothing runs, so
+// nothing can be applied. Its entry is kept, quietly, and the run is not
+// marked failed -- the Jobs page showed pi's reconcile red every tick for a
+// laundry-planner that was simply not running.
+func TestReconcileKeepsAnEntryWaitingOnItsContainer(t *testing.T) {
+	queue := q.NewPending()
+	queue.Put(q.Entry{Service: "app", Container: "app", Image: "example.com/app",
+		From: "sha256:aaaa", To: "sha256:bbbb", Tag: "latest", Digest: "sha256:bbbb"}, time.Now())
+	r := &reconciler{queue: queue, root: composeFile(t, appService), log: zerolog.Nop(),
+		labels: func(string) (map[string]string, bool, error) { return nil, false, nil }}
+
+	summary, failed := r.reconcile()
+	if failed {
+		t.Errorf("a service with no container failed the run: %q", summary)
+	}
+	if !strings.Contains(summary, "1 waiting on a container") {
+		t.Errorf("summary = %q", summary)
+	}
+	if queue.Len() != 1 {
+		t.Errorf("the entry was not kept: %+v", queue.List())
 	}
 }

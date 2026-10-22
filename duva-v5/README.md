@@ -29,6 +29,19 @@ exactly what runs.
 Every host runs `duva serve`, and they are peers. One of them also serves the
 page, and reaches the others' queues over their API.
 
+### Jobs
+
+What runs on its own, on each host. The last three run in that order, as one
+tick: every `reconcile_interval` (default 10 minutes), and at once whenever a
+container starts or stops.
+
+| job | when | what it is for |
+|---|---|---|
+| **check** | on `schedule` (default 03:00), at startup, and from **Check…** | Look for new releases of every service the compose file pins, and hand each to the queue. |
+| **sync** | each tick | Bring changes made outside duva into its state: services added to or removed from the compose file, and the image and tag each now follows. Read from the compose file, never from docker's container list. A service is removed only when it is gone from the file *and* its container is gone. |
+| **reconcile** | each tick, after the sync | Make everything in duva fit that state. Drop an entry whose service now follows another image or tag, has already got it, or was removed. And follow a changed policy: add `duva.auto` to a service and what already waits for it is scheduled (by its `duva.delay`, from when it was published); take it away and what was scheduled goes back to you. It never applies anything itself. |
+| **release** | each tick, after reconcile | Apply delayed releases whose delay is over, if the container still runs. |
+
 ## Deploying
 
 ```yaml

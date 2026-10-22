@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 type fakeApplier struct {
@@ -334,5 +335,28 @@ func TestSnapshotReportsWhatIsBeingApplied(t *testing.T) {
 
 	if len(snap.Applying) != 1 || snap.Applying[0] != "app" {
 		t.Errorf("applying = %v, want [app]", snap.Applying)
+	}
+}
+
+// Run now: the check is a check of every service; any of the tick's jobs
+// runs the tick; a name that is no job is said so, and nothing runs.
+func TestRunJobRoutesToTheJob(t *testing.T) {
+	var checked []string
+	ticks := 0
+	s := &Server{Queue: NewPending(),
+		Check: func(service string, back time.Duration) error { checked = append(checked, "*"+service); return nil },
+		Tick:  func() { ticks++ }}
+
+	if msg := s.RunJob("reconcile", "soren"); msg != "" || ticks != 1 {
+		t.Errorf("reconcile: %q, %d ticks", msg, ticks)
+	}
+	if msg := s.RunJob("sync", "soren"); msg == "" || ticks != 1 {
+		t.Errorf("a second run within the minute: %q, %d ticks, want refused", msg, ticks)
+	}
+	if msg := s.RunJob("nonsense", "soren"); msg == "" {
+		t.Error("an unknown job was not refused")
+	}
+	if msg := s.RunJob("check", "soren"); msg != "" {
+		t.Errorf("check: %q", msg)
 	}
 }

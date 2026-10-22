@@ -29,8 +29,16 @@ func digestEntry(from, to string) Entry {
 	}
 }
 
+// declares names no image, so a case is about the tag and digest alone. The
+// image's own cases set it.
 func declares(tag, digest string) Service {
-	return Service{Name: "svc", Image: "example", Tag: tag, Digest: digest, Auto: AutoNone}
+	return Service{Name: "svc", Tag: tag, Digest: digest, Auto: AutoNone}
+}
+
+func declaresImage(image, tag, digest string) Service {
+	svc := declares(tag, digest)
+	svc.Image = image
+	return svc
 }
 
 // The question used to be only "has it been done". These are the cases where
@@ -44,6 +52,23 @@ func TestRecheckEntry(t *testing.T) {
 		from   string // the From a kept entry should carry
 		whyHas string // part of the reason a dropped entry gives
 	}{
+		// --- the image ---
+		{
+			name:  "the same image",
+			entry: versionEntry("v7.8", "v7.9"), svc: declaresImage("ghcr.io/miista/duva-watch", "v7.8", d1),
+			keep: true, from: "v7.8",
+		},
+		{
+			// A release is of one image; its tag means nothing on another.
+			name:  "the service now follows another image",
+			entry: versionEntry("v7.8", "v7.9"), svc: declaresImage("ghcr.io/miista/duva", "v7.8", d1),
+			whyHas: "now follows ghcr.io/miista/duva",
+		},
+		{
+			name:  "a digest move on another image",
+			entry: digestEntry(d1, d2), svc: declaresImage("ghcr.io/linuxserver/bazarr", "latest", d1),
+			whyHas: "not lscr.io/linuxserver/bazarr",
+		},
 		// --- version changes ---
 		{
 			name:  "still where it started",

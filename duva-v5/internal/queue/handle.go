@@ -89,6 +89,17 @@ func (h *Handler) Handle(n Notice) Result {
 		}
 	}
 
+	// A service the sync recorded as removed -- gone from the compose file and
+	// its container gone -- takes no releases. Answered from the store, which
+	// only the sync writes. Refused with a 5xx so the watcher holds the
+	// finding: a service back in the file is back by the next sync, and the
+	// finding is offered again then rather than lost.
+	if found && h.Queue.Removed(svc.Container) {
+		why := "the service was removed: gone from the compose file and its container gone"
+		h.logf("%s: not taken — %s", svc.Name, why)
+		return Result{Outcome: Reject, Service: svc.Name, Message: why, Status: http.StatusServiceUnavailable}
+	}
+
 	v := Decide(n, svc, found)
 
 	// A release a person blocked is not offered, however policy sizes it.

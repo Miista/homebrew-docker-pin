@@ -176,9 +176,9 @@ func TestAnUnreadableLookBackIsRefused(t *testing.T) {
 // from the compose file, whose cutoff the watcher still remembers.
 func TestTheSnapshotOffersTheWatchedServicesThatStillRun(t *testing.T) {
 	q := NewPending()
-	if _, _, err := q.SyncServices([]Container{
-		{Name: "app", Service: "app", Image: "example.com/app:1"},
-		{Name: "db", Service: "db", Image: "example.com/db:1"},
+	if _, _, err := q.SyncServices(nil, []Container{
+		{Name: "app", Service: "app"},
+		{Name: "db", Service: "db"},
 	}, now); err != nil {
 		t.Fatal(err)
 	}
