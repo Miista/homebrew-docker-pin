@@ -2,6 +2,7 @@ package queue
 
 import (
 	"database/sql"
+	"strings"
 	"testing"
 	"time"
 )
@@ -49,40 +50,51 @@ func running(names ...string) []Container {
 	return out
 }
 
+// of is the containers a sync's changes name for one kind.
+func of(changes []Change, kind ChangeKind) []string {
+	var out []string
+	for _, c := range changes {
+		if c.Kind == kind {
+			out = append(out, c.Container)
+		}
+	}
+	return out
+}
+
 // Removed takes both: gone from the compose file, and its container gone.
 // Either alone is something else -- an edit mid-rebase, a recreate, a service
 // someone stopped -- and the service is still here.
 func TestAServiceIsRemovedOnlyWhenGoneFromTheFileAndItsContainerGone(t *testing.T) {
 	q := NewPending()
 	app, db := declared("app", "example.com/app", "1"), declared("db", "postgres", "17")
-	added, removed, err := q.SyncServices([]Declared{app, db}, running("app", "db"), now)
+	changes, err := q.SyncServices([]Declared{app, db}, running("app", "db"), now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(added) != 2 || len(removed) != 0 {
-		t.Errorf("added %v, removed %v", added, removed)
+	if added := of(changes, ChangeAdded); len(added) != 2 || len(of(changes, ChangeRemoved)) != 0 {
+		t.Errorf("changes %v", changes)
 	}
 
 	// db is gone from the file but still runs.
-	if _, removed, _ = q.SyncServices([]Declared{app}, running("app", "db"), now); len(removed) != 0 {
-		t.Errorf("removed %v while db's container still runs", removed)
+	if changes, _ = q.SyncServices([]Declared{app}, running("app", "db"), now); len(of(changes, ChangeRemoved)) != 0 {
+		t.Errorf("removed %v while db's container still runs", changes)
 	}
 	// db is back in the file, its container gone.
-	if _, removed, _ = q.SyncServices([]Declared{app, db}, running("app"), now); len(removed) != 0 {
-		t.Errorf("removed %v while db is still declared", removed)
+	if changes, _ = q.SyncServices([]Declared{app, db}, running("app"), now); len(of(changes, ChangeRemoved)) != 0 {
+		t.Errorf("removed %v while db is still declared", changes)
 	}
 	// Both: db is gone.
-	if _, removed, _ = q.SyncServices([]Declared{app}, running("app"), now); len(removed) != 1 || removed[0] != "db" {
-		t.Errorf("removed %v, want db", removed)
+	if changes, _ = q.SyncServices([]Declared{app}, running("app"), now); strings.Join(of(changes, ChangeRemoved), ",") != "db" {
+		t.Errorf("changes %v, want db removed", changes)
 	}
 	if got := serviceRows(t, q); !got["app"] || got["db"] {
 		t.Errorf("services = %v, want app enabled and db disabled but kept", got)
 	}
 
 	// db comes back: the same row.
-	added, _, _ = q.SyncServices([]Declared{app, db}, running("app", "db"), now.Add(time.Hour))
-	if len(added) != 1 || added[0] != "db" {
-		t.Errorf("added %v, want db back", added)
+	changes, _ = q.SyncServices([]Declared{app, db}, running("app", "db"), now.Add(time.Hour))
+	if strings.Join(of(changes, ChangeBack), ",") != "db" {
+		t.Errorf("changes %v, want db back", changes)
 	}
 	var n int
 	q.st.DB().QueryRow(`SELECT COUNT(*) FROM services`).Scan(&n)
@@ -96,9 +108,37 @@ func TestASteadySyncIsQuiet(t *testing.T) {
 	q := NewPending()
 	d := []Declared{declared("app", "example.com/app", "1")}
 	q.SyncServices(d, running("app"), now)
-	added, removed, _ := q.SyncServices(d, running("app"), now)
-	if len(added) != 0 || len(removed) != 0 {
-		t.Errorf("added %v, removed %v on a sync that changed nothing", added, removed)
+	if changes, _ := q.SyncServices(d, running("app"), now); len(changes) != 0 {
+		t.Errorf("changes %v on a sync that changed nothing", changes)
+	}
+}
+
+// Every change the sync makes is reported. Pinning autobrr changed its row and
+// the sync said nothing, so it looked as if the pin had not taken.
+func TestEveryChangeTheSyncMakesIsReported(t *testing.T) {
+	q := NewPending()
+	autobrr := declared("autobrr", "ghcr.io/autobrr/autobrr", "latest")
+	q.SyncServices([]Declared{autobrr}, running("autobrr"), now)
+
+	autobrr.Pinned = true
+	changes, _ := q.SyncServices([]Declared{autobrr}, running("autobrr"), now)
+	if len(changes) != 1 || changes[0].Kind != ChangeTracked || changes[0].String() != "autobrr: now tracked (pinned in the compose file)" {
+		t.Errorf("pinning: %v", changes)
+	}
+
+	autobrr.Tag, autobrr.Image = "v1.60.0", "ghcr.io/autobrr/autobrr-next"
+	changes, _ = q.SyncServices([]Declared{autobrr}, running("autobrr"), now)
+	got := []string{}
+	for _, c := range changes {
+		got = append(got, c.String())
+	}
+	if strings.Join(got, "; ") != "autobrr: image (ghcr.io/autobrr/autobrr → ghcr.io/autobrr/autobrr-next); autobrr: tag (latest → v1.60.0)" {
+		t.Errorf("image and tag: %v", got)
+	}
+
+	autobrr.Pinned = false
+	if changes, _ = q.SyncServices([]Declared{autobrr}, running("autobrr"), now); len(of(changes, ChangeUntracked)) != 1 {
+		t.Errorf("unpinning: %v", changes)
 	}
 }
 

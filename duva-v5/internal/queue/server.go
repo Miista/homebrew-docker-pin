@@ -62,10 +62,6 @@ type Server struct {
 	// LastChecked is when this host last looked for new tags. Nil: not
 	// reported.
 	LastChecked func() time.Time
-	// Watched is every service the watcher checks, by compose name: what a
-	// person may pick in "Check…". Narrowed to those still running here, as
-	// a retired one keeps its cutoff. Nil: not reported.
-	Watched func() []string
 	// Jobs is this host's jobs, each with its last run, for the page. Nil:
 	// not reported.
 	Jobs func() []jobs.Status
@@ -202,15 +198,7 @@ func (s *Server) Snapshot() Snapshot {
 			lastCheck = at.UTC().Format(time.RFC3339)
 		}
 	}
-	var services []string
-	if s.Watched != nil {
-		running := s.Queue.Running()
-		for _, name := range s.Watched() {
-			if running[name] {
-				services = append(services, name)
-			}
-		}
-	}
+	services := s.Queue.Tracked()
 	return Snapshot{
 		Host:      s.Host,
 		Version:   s.Version,

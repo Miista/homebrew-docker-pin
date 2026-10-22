@@ -1715,7 +1715,9 @@ createApp({
           const { message } = await res.json()
           this.result = message
             ? { service: this.jobName(job), level: "error", message }
-            : { service: this.jobName(job), level: "ok", message: "started on " + host }
+            : { service: host, level: "ok", message: job === "check"
+                ? "checking for releases"
+                : "syncing, reconciling and releasing" }
           // A tick takes a moment and a check minutes; the list follows on
           // the polls after this one.
           setTimeout(() => this.poll(), 1500)

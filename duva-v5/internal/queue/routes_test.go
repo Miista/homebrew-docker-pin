@@ -171,20 +171,33 @@ func TestAnUnreadableLookBackIsRefused(t *testing.T) {
 	}
 }
 
-// The snapshot offers what "Check…" may pick: every service the watcher
-// checks that still runs here, whatever is waiting -- and not one retired
-// from the compose file, whose cutoff the watcher still remembers.
-func TestTheSnapshotOffersTheWatchedServicesThatStillRun(t *testing.T) {
+// The snapshot offers what "Check…" may pick: every service duva tracks --
+// pinned in the compose file -- that has a container, as the last sync saw
+// both. A service pinned a moment ago is there at once; an unpinned one, a
+// stopped one, or one gone from the file is not.
+func TestTheSnapshotOffersTheTrackedServicesThatRun(t *testing.T) {
 	q := NewPending()
-	if _, _, err := q.SyncServices(nil, []Container{
-		{Name: "app", Service: "app"},
-		{Name: "db", Service: "db"},
-	}, now); err != nil {
+	if _, err := q.SyncServices([]Declared{
+		{Container: "app", Service: "app", Image: "example.com/app", Tag: "1", Pinned: true},
+		{Container: "db", Service: "db", Image: "example.com/db", Tag: "1", Pinned: true},
+		{Container: "mealie", Service: "mealie", Image: "example.com/mealie", Tag: "latest"},
+		{Container: "stopped", Service: "stopped", Image: "example.com/stopped", Tag: "1", Pinned: true},
+	}, []Container{{Name: "app", Service: "app"}, {Name: "db", Service: "db"}, {Name: "mealie", Service: "mealie"}}, now); err != nil {
 		t.Fatal(err)
 	}
-	s := &Server{Queue: q, Watched: func() []string { return []string{"app", "db", "retired"} }}
+	s := &Server{Queue: q}
 	if got := strings.Join(s.Snapshot().Services, ","); got != "app,db" {
 		t.Errorf("services = %q, want app,db", got)
+	}
+
+	// mealie is pinned: offered on the next sync, no check needed first.
+	q.SyncServices([]Declared{
+		{Container: "app", Service: "app", Image: "example.com/app", Tag: "1", Pinned: true},
+		{Container: "db", Service: "db", Image: "example.com/db", Tag: "1", Pinned: true},
+		{Container: "mealie", Service: "mealie", Image: "example.com/mealie", Tag: "latest", Pinned: true},
+	}, []Container{{Name: "app", Service: "app"}, {Name: "db", Service: "db"}, {Name: "mealie", Service: "mealie"}}, now)
+	if got := strings.Join(s.Snapshot().Services, ","); got != "app,db,mealie" {
+		t.Errorf("after pinning mealie, services = %q", got)
 	}
 }
 

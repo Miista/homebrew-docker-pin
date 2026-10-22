@@ -3,6 +3,7 @@ package gate
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -291,18 +292,49 @@ func (r *reconciler) syncServices() (string, bool) {
 		return "could not list this host's containers", true
 	}
 	cs = r.graced(cs)
-	added, removed, err := r.queue.SyncServices(declared, cs, time.Now())
+	changes, err := r.queue.SyncServices(declared, cs, time.Now())
 	if err != nil {
 		r.log.Error().Msgf("could not record this host's services: %v", err)
 		return "could not record this host's services", true
 	}
-	for _, c := range added {
-		r.log.Debug().Msgf("%s: a service duva knows", c)
+	// Every change, a line each: the job's output is what it logs.
+	for _, c := range changes {
+		r.log.Info().Msg(c.String())
 	}
-	for _, c := range removed {
-		r.log.Info().Msgf("%s: gone from the compose file and its container gone; the service is disabled, its history kept", c)
+	tracked := 0
+	for _, d := range declared {
+		if d.Pinned {
+			tracked++
+		}
 	}
-	return fmt.Sprintf("%d services; %d added, %d removed", len(declared), len(added), len(removed)), false
+	return syncSummary(len(declared), tracked, changes), false
+}
+
+// syncSummary is the sync's one line: what it looked at, and each kind of
+// change it made, counted.
+func syncSummary(services, tracked int, changes []q.Change) string {
+	s := fmt.Sprintf("%d services, %d tracked", services, tracked)
+	if len(changes) == 0 {
+		return s + "; no changes"
+	}
+	count := map[q.ChangeKind]int{}
+	for _, c := range changes {
+		count[c.Kind]++
+	}
+	var parts []string
+	for _, k := range []struct {
+		kind q.ChangeKind
+		says string
+	}{
+		{q.ChangeAdded, "added"}, {q.ChangeBack, "back"}, {q.ChangeRemoved, "removed"},
+		{q.ChangeTracked, "now tracked"}, {q.ChangeUntracked, "no longer tracked"},
+		{q.ChangeImage, "image changed"}, {q.ChangeTag, "tag changed"},
+	} {
+		if n := count[k.kind]; n > 0 {
+			parts = append(parts, fmt.Sprintf("%d %s", n, k.says))
+		}
+	}
+	return s + "; " + strings.Join(parts, ", ")
 }
 
 // declaredServices is every service in the compose project with a
@@ -326,7 +358,10 @@ func declaredServices(root string) ([]q.Declared, error) {
 		if err != nil {
 			continue
 		}
-		out = append(out, q.Declared{Container: container, Service: ref.Service, Image: base, Tag: tag})
+		// The watcher's own test of what it watches, so what "Check…" offers
+		// is what a check covers.
+		out = append(out, q.Declared{Container: container, Service: ref.Service, Image: base, Tag: tag,
+			Pinned: strings.Contains(raw, "@sha256:")})
 	}
 	return out, nil
 }

@@ -111,9 +111,6 @@ type Options struct {
 	// LastChecked is when the watcher last looked for new tags, for the
 	// page. Nil: not reported.
 	LastChecked func() time.Time
-	// Watched is every service the watcher checks, for the page's "Check…".
-	// Nil: not reported.
-	Watched func() []string
 	// NextCheck is when the watcher's scheduled check runs next, for the
 	// page's Jobs list. Nil: not reported.
 	NextCheck func() time.Time
@@ -247,7 +244,6 @@ func New(log zerolog.Logger, opts Options) (*Gate, error) {
 			Resolve: opts.Resolve,
 
 			LastChecked: opts.LastChecked,
-			Watched:     opts.Watched,
 		},
 		applying:   applying,
 		live:       live,
