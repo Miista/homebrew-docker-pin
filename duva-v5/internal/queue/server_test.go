@@ -303,6 +303,24 @@ func (f *fakeApplier) Ready() (bool, string) {
 // Applying makes fakeApplier an ApplyingReporter.
 func (f *fakeApplier) Applying() []string { return f.applying }
 
+// Mid-apply the repository is dirty with the apply's own rewrite, which its
+// commit takes away. That is not the host being unable to update: the page
+// said "optiplex can't update right now" during every apply. Once the apply
+// is over, an unclean repository is reported as before.
+func TestAnApplyInFlightIsNotAHostThatCannotUpdate(t *testing.T) {
+	notReady := false
+	app := &fakeApplier{ready: &notReady, reason: "the repository has uncommitted changes",
+		applying: []string{"app"}}
+	s := &Server{Queue: NewPending(), Applier: app}
+	if snap := s.Snapshot(); !snap.CanApply || snap.Blocker != "" {
+		t.Errorf("mid-apply: can_apply %v, blocker %q, want ready", snap.CanApply, snap.Blocker)
+	}
+	app.applying = nil
+	if snap := s.Snapshot(); snap.CanApply || snap.Blocker != ActorNotReady {
+		t.Errorf("after: can_apply %v, blocker %q, want not ready", snap.CanApply, snap.Blocker)
+	}
+}
+
 // A page reloaded mid-apply must be able to learn that the apply is running,
 // or it offers the same update again and the second click is refused.
 func TestSnapshotReportsWhatIsBeingApplied(t *testing.T) {

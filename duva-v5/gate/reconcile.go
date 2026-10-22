@@ -42,11 +42,14 @@ func recheckWith(lookup q.Lookup, e q.Entry) (q.Recheck, error) {
 		return q.Recheck{}, fmt.Errorf("reading the compose project: %w", err)
 	}
 	if !found {
-		// Renamed, removed, or lost its container_name. Any of those is a
-		// real question for a person, not evidence the update already
-		// happened, so this must not read as "no longer applies" (which
-		// Reconcile would then drop). An error keeps it queued instead.
-		return q.Recheck{}, fmt.Errorf("no service %q (with a container_name) in the compose project any more", e.Service)
+		// Renamed, removed, or lost its container_name. Not by itself
+		// evidence the update happened, so not "no longer applies": the
+		// queue drops it only once the service's container is gone too.
+		// v4 kept such an entry for a person to discard; with the container
+		// gone the service is decommissioned, and if it comes back it is
+		// watched again from scratch, so there is nothing left to ask.
+		return q.Recheck{}, fmt.Errorf("%w: no service %q (with a container_name) in the compose project any more",
+			q.ErrNotDeclared, e.Service)
 	}
 	return q.RecheckEntry(e, svc), nil
 }
@@ -118,8 +121,21 @@ func (r *reconciler) tick() {
 }
 
 func (r *reconciler) reconcile() {
+	// An entry being applied is the apply's until it ends: midway its compose
+	// file is already rewritten, so a recheck would find the service "already
+	// matching" and drop it -- recording a completed update as dropped, and
+	// taking its row off the page before it reports how it went.
+	busy := map[string]bool{}
+	if ar, ok := r.applier.(q.ApplyingReporter); ok {
+		for _, s := range ar.Applying() {
+			busy[s] = true
+		}
+	}
 	dropped := r.queue.Reconcile(
 		func(e q.Entry) (q.Recheck, error) {
+			if busy[e.Service] {
+				return q.Recheck{Keep: true, Entry: e}, nil
+			}
 			return recheckWith(q.Lookup{Root: r.root, Labels: r.labels}, e)
 		},
 		func(service string, err error) {

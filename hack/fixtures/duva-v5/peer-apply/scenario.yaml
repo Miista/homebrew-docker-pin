@@ -1,0 +1,4 @@
+# The newer versions the watcher should find in this scenario.
+updates:
+  app:
+    - 1.0.1

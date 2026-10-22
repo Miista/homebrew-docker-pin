@@ -342,6 +342,12 @@ func (s *Server) actorReadiness() (bool, Blocker, string) {
 	if s.Applier == nil {
 		return false, NoActor, "no actor is configured, so nothing can be applied from here"
 	}
+	// Mid-apply the repository is dirty with this apply's own rewrite, which
+	// the commit at its end takes away: not a reason to say the host cannot
+	// update. One at a time per host is the page's to show, row by row.
+	if len(s.applying()) > 0 {
+		return true, "", ""
+	}
 	if rr, ok := s.Applier.(ReadinessReporter); ok {
 		ready, reason := rr.Ready()
 		if ready {
