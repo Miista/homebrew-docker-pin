@@ -4,6 +4,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/settings"
 )
 
 // A commit convention belongs to the repository, not to duva. The default is
@@ -36,17 +38,34 @@ func TestCommitSubject_CustomTemplate(t *testing.T) {
 // Every field a template may refer to has to resolve, or the placeholder
 // itself ends up in the history of every host duva runs on.
 func TestCommitSubject_AllFieldsResolve(t *testing.T) {
-	tmpl := "{{.Container}} {{.Image}} {{.OldVersion}} {{.NewVersion}} " +
+	tmpl := "{{.Host}} {{.Container}} {{.Image}} {{.OldVersion}} {{.NewVersion}} " +
 		"{{.OldDigest}} {{.NewDigest}}"
 	got, err := commitSubject(tmpl, commitFields{
-		Container: "c", Image: "i",
+		Host: "h", Container: "c", Image: "i",
 		OldVersion: "1", NewVersion: "2", OldDigest: "d1", NewDigest: "d2",
 	})
 	if err != nil {
 		t.Fatalf("unexpected failure: %v", err)
 	}
-	if want := "c i 1 2 d1 d2"; got != want {
+	if want := "h c i 1 2 d1 d2"; got != want {
 		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// One template for every host: {{.Host}} is the host setting, so the same
+// line commits as optiplex/... on optiplex and pi/... on pi, as this
+// repository's commit-msg hook requires.
+func TestCommitSubject_OneTemplateServesEveryHost(t *testing.T) {
+	const shared = "{{.Host}}/{{.Container}}: update to {{.NewVersion}}"
+	for host, want := range map[string]string{
+		"optiplex": "optiplex/paperless: update to 2.14.1",
+		"pi":       "pi/paperless: update to 2.14.1",
+	} {
+		t.Setenv("DUVA_SETTING_HOST", host)
+		got, err := commitSubject(shared, commitFields{Host: settings.HostName(), Container: "paperless", NewVersion: "2.14.1"})
+		if err != nil || got != want {
+			t.Errorf("on %s: %q %v, want %q", host, got, err, want)
+		}
 	}
 }
 

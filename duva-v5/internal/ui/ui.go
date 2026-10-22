@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"html/template"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -137,6 +138,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/geist-mono.woff2", serveFont(geistMono))
 	mux.HandleFunc("/api/state", s.stateJSON)
 	mux.HandleFunc("/api/stream/", s.stream)
+	mux.HandleFunc("/notes/", s.notes)
 	if s.Approver != nil {
 		mux.HandleFunc("/apply", s.apply)
 		mux.HandleFunc("/api/apply/", s.applyJSON)
@@ -209,10 +211,16 @@ type row struct {
 	Kind      string `json:"kind"`
 	Why       string `json:"why"`
 	FirstSeen string `json:"first_seen"`
+	// Published is when the release appeared upstream, RFC 3339; empty when
+	// the registry does not say.
+	Published string `json:"published,omitempty"`
 	Auto      string `json:"auto"`
 	// ReleaseAt is when a soaking entry applies itself, RFC 3339; empty for
 	// one waiting for a person.
 	ReleaseAt string `json:"release_at,omitempty"`
+	// Notes is where to read what the release changes, from the repository
+	// its image names; empty when it names none.
+	Notes string `json:"notes,omitempty"`
 }
 
 func (s *Server) index(w http.ResponseWriter, r *http.Request) {
@@ -456,8 +464,71 @@ func toRow(e Hosted) row {
 		Kind:       kindLabel(e.Entry),
 		Why:        e.Why,
 		FirstSeen:  e.FirstSeen,
+		Published:  e.Published,
 		Auto:       string(e.Auto),
+		Notes:      notesLink(e),
 	}
+}
+
+// notesLink is a row's release notes link: through this page, which finds
+// the release when it is followed. Empty when the image names no source.
+func notesLink(e Hosted) string {
+	if len(queue.ReleaseNotes(e.Source, e.To, isDigestMove(e.Entry))) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("/notes/%s/%d", url.PathEscape(e.Host), e.ID)
+}
+
+// notesClient asks whether a release page exists. One for the page, as the
+// registry client is one for duva: a client per request is a connection and
+// a DNS lookup each.
+var notesClient = &http.Client{Timeout: 5 * time.Second}
+
+// notes sends a person to a release's notes: GET /notes/<host>/<entry>.
+//
+// Found when followed rather than when the page is drawn: which tag form a
+// repository uses -- 3.3.3 or v3.3.3 -- cannot be told from the image, and
+// asking GitHub for every row on every poll would be two requests a row each
+// fifteen seconds to answer a click that mostly never comes. So: the first of
+// queue.ReleaseNotes' places that answers, else the last, which is the
+// repository's newest releases and always there.
+func (s *Server) notes(w http.ResponseWriter, r *http.Request) {
+	host, id, ok := strings.Cut(strings.TrimPrefix(r.URL.Path, "/notes/"), "/")
+	entry, err := strconv.ParseInt(id, 10, 64)
+	if !ok || err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	rows := s.Source.Pending()
+	if ss, ok := s.Source.(SoakSource); ok {
+		rows = append(rows, ss.Soaking()...)
+	}
+	for _, e := range rows {
+		if e.Host != host || e.ID != entry {
+			continue
+		}
+		places := queue.ReleaseNotes(e.Source, e.To, isDigestMove(e.Entry))
+		if len(places) == 0 {
+			break
+		}
+		to := places[len(places)-1]
+		for _, p := range places[:len(places)-1] {
+			req, err := http.NewRequestWithContext(r.Context(), http.MethodHead, p, nil)
+			if err != nil {
+				continue
+			}
+			if resp, err := notesClient.Do(req); err == nil {
+				resp.Body.Close()
+				if resp.StatusCode == http.StatusOK {
+					to = p
+					break
+				}
+			}
+		}
+		http.Redirect(w, r, to, http.StatusFound)
+		return
+	}
+	http.NotFound(w, r)
 }
 
 // serveJS returns a handler for the vendored script.

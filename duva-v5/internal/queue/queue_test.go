@@ -2,6 +2,7 @@ package queue
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -405,6 +406,53 @@ func TestReconcileDropsAnEntryTheWorldAlreadySatisfies(t *testing.T) {
 	}
 	if q.Len() != 0 {
 		t.Errorf("entry survived reconcile: %+v", q.List())
+	}
+}
+
+// A service taken out -- gone from the compose file and its container gone
+// too -- takes its waiting updates with it. v4 kept them for a person to
+// discard, warning on every reconcile; with nothing left to apply them to
+// there is nothing to ask, and a service that comes back is watched again.
+// Gone from the file alone is not enough: a rename, or a container_name
+// removed, still has a container, and is still a question.
+func TestReconcileDropsTheUpdatesOfADecommissionedService(t *testing.T) {
+	q := NewPending()
+	q.SyncServices([]Container{
+		{Name: "gone", Service: "gone", Image: "example.com/gone:1"},
+		{Name: "renamed", Service: "renamed", Image: "example.com/renamed:1"},
+	}, now)
+	q.Put(entry("gone", "1.0.0", "1.1.0"), now)
+	q.Put(entry("renamed", "1.0.0", "1.1.0"), now)
+	// gone's container goes; renamed's still runs. Neither is in the
+	// compose file any more.
+	q.SyncServices([]Container{{Name: "renamed", Service: "renamed", Image: "example.com/renamed:1"}}, now)
+
+	var warned []string
+	dropped := q.Reconcile(func(e Entry) (Recheck, error) {
+		return Recheck{}, fmt.Errorf("%w: no service %q", ErrNotDeclared, e.Service)
+	}, func(service string, err error) { warned = append(warned, service) })
+
+	if len(dropped) != 1 || dropped[0].Entry.Service != "gone" || !strings.Contains(dropped[0].Why, "service removed") {
+		t.Errorf("dropped = %+v, want only gone, as removed", dropped)
+	}
+	if _, ok := q.Get("renamed"); !ok {
+		t.Error("renamed was dropped while its container still runs")
+	}
+	if strings.Join(warned, ",") != "renamed" {
+		t.Errorf("warned about %v, want renamed still", warned)
+	}
+}
+
+// Before the service sync has said anything about a service, nothing says it
+// went: an entry for it is kept, however its compose file reads.
+func TestReconcileKeepsAnEntryTheSyncHasNotJudged(t *testing.T) {
+	q := NewPending()
+	q.Put(entry("app", "1.0.0", "1.1.0"), now)
+	dropped := q.Reconcile(func(e Entry) (Recheck, error) {
+		return Recheck{}, fmt.Errorf("%w: no service %q", ErrNotDeclared, e.Service)
+	}, nil)
+	if len(dropped) != 0 {
+		t.Errorf("dropped %+v with no sync having run", dropped)
 	}
 }
 

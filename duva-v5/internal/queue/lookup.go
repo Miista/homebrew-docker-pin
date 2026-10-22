@@ -112,6 +112,7 @@ func (l Lookup) declared(container string, ref compose.ServiceRef) (Service, boo
 		Digest:    compose.DigestOf(raw),
 		Auto:      auto,
 		Soak:      soak,
+		Source:    SourceOf(labels["org.opencontainers.image.source"]),
 	}, true, nil
 }
 

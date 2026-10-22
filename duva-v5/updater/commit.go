@@ -19,15 +19,15 @@ import (
 // that prefixes with a ticket, or writes conventional commits, should not have
 // to accept anyone else's shape.
 //
-// There is deliberately no Host field and no DUVA_HOST. The updater needs the
-// host for nothing else -- it pulls, writes a pin, recreates and commits, none
-// of which care which box they are on -- and the template is already mounted
-// per host, so the host belongs *in* it:
+// {{.Host}} is the host setting -- what the page calls this box -- so one
+// template serves every host and can be shared between them:
 //
-//	optiplex/{{.Container}}: update to {{.NewVersion}}
+//	{{.Host}}/{{.Container}}: update to {{.NewVersion}}
 //
-// An env var would be a second place to say the same thing, and two places to
-// get it wrong.
+// v4 had no such field: there the updater was a process of its own that knew
+// no host, and each host's template spelled its name out. In v5 the host is
+// already a setting of the same process, and spelling it out again was a
+// second place to say it.
 //
 // DUVA_COMMIT_TEMPLATE rather than a mounted file: it is one line, it is not
 // a secret, and it does not change without a restart, so it belongs beside
@@ -54,6 +54,7 @@ const defaultCommitTemplate = `{{.Container}}: ` +
 // project prefix and a replica suffix that mean nothing there. It is called
 // Container because that is what people call it.
 type commitFields struct {
+	Host       string // this host, as the host setting names it
 	Container  string // the compose service
 	Image      string // the image, without tag or digest
 	OldVersion string // the tag before
@@ -144,6 +145,7 @@ func loadCommitTemplate() (string, error) {
 // inventing a requirement.
 func checkMessageAccepted(dir, tmpl string) error {
 	subject, err := commitSubject(tmpl, commitFields{
+		Host:       settings.HostName(),
 		Container:  "example",
 		Image:      "example.com/example",
 		OldVersion: "1.0.0",

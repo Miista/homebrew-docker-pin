@@ -141,6 +141,9 @@
            border-radius: 8px; border: 1px solid transparent; background: var(--go);
            color: #fff; font-size: 13px; font-weight: 600; }
   .apply:hover:not(:disabled) { background: var(--go-hi); }
+  /* Pressed once: the next press applies. Amber, the page's "wait, look"
+     colour, and not red -- this is not destructive, only not undoable. */
+  .apply.armed, .apply.armed:hover:not(:disabled) { background: var(--wait); color: #1a1405; }
   .apply:active:not(:disabled) { transform: translateY(1px); }
   /* Greyed rather than hidden: the row still has a decision waiting, and
      removing the button would make it look like one that does not. */
@@ -194,8 +197,10 @@
   /* Same reason as .banner: a refusal can carry a digest with nowhere to
      break. touch-action none, so a sideways swipe moves the toast and not
      the page. */
-  .toast { position: fixed; left: 50%; bottom: 24px; z-index: 60; translate: -50% 0;
-           width: min(480px, calc(100% - 24px)); padding: 14px 16px; font-size: 14px;
+  .toasts { position: fixed; left: 50%; bottom: 24px; z-index: 60; translate: -50% 0;
+            width: min(480px, calc(100% - 24px)); display: flex; flex-direction: column; gap: 8px;
+            pointer-events: none; }
+  .toast { pointer-events: auto; padding: 14px 16px; font-size: 14px;
            color: var(--fg); background: var(--raised); border: 1px solid var(--raised-line);
            border-radius: 14px; box-shadow: 0 12px 32px rgba(0, 0, 0, .5);
            overflow-wrap: anywhere; touch-action: none; cursor: grab; user-select: none;
@@ -204,6 +209,13 @@
   .toast-error { border-color: color-mix(in oklch, var(--danger) 55%, transparent);
                  background: color-mix(in oklch, var(--danger) 14%, var(--raised)); }
   .toast-error .who { color: var(--danger); }
+  /* Standing: what is true of a host for now. Amber for "wait", muted for a
+     settled fact, red for a host not answering -- as the banners were. */
+  .toast-standing .who { display: block; }
+  .toast-standing .why { display: block; margin-top: 3px; color: var(--muted); font-size: 13px; }
+  .toast-wait { border-color: color-mix(in oklch, var(--wait) 45%, transparent); }
+  .toast-wait .who { color: var(--wait); }
+  .toast-note .who { color: var(--soft); }
   @keyframes toast-in { from { opacity: 0; transform: translateY(12px); } }
 
   /* ---------- sections ---------- */
@@ -402,6 +414,14 @@
   .sheet .choices button { height: 48px; border-radius: 12px; font-size: 15px; }
   .sheet .choices .apply { width: 100%; }
   .sheet .choices .act { border-color: var(--raised-line); color: var(--fg); }
+  .sheet .choices a.act { display: flex; align-items: center; justify-content: center;
+                          height: 48px; border-radius: 12px; font-size: 15px; }
+  /* "Release notes" and the leave-the-page icon, side by side. */
+  .sheet .choices .notes { display: flex; align-items: center; justify-content: center; gap: 8px; }
+  .out { flex-shrink: 0; opacity: .85; }
+  .sheet .notes-off { display: flex; flex-direction: column; gap: 6px; }
+  .sheet .notes-off .act { width: 100%; opacity: .55; }
+  .sheet .notes-off .hint { text-align: center; font-size: 12.5px; color: var(--faint); }
   /* Filled red, as the confirmation's Block is: on a phone it is the one
      choice here that reaches beyond this service. */
   .sheet .choices .danger { background: var(--danger-fill); border-color: transparent;
@@ -412,15 +432,18 @@
   /* ---------- tabs: the phone's only ---------- */
   .tabbar { display: none; }
 
-  /* ---------- footer ---------- */
-  footer { margin-top: auto; padding-top: 36px; }
-  footer div { padding-top: 18px; border-top: 1px solid #141a2d; display: flex;
-               justify-content: space-between; gap: 16px; flex-wrap: wrap;
-               color: var(--fainter); font-size: 12px; }
+  /* The version, last in the menu, under a rule. */
+  .menu .version { padding: 8px 10px 4px; margin-top: 4px; border-top: 1px solid var(--edge);
+                   font-size: 11px; color: var(--fainter); }
 
   /* ---------- phones ---------- */
   @media (max-width: 45rem) {
-    main { padding: 0 12px calc(72px + env(safe-area-inset-bottom)); }
+    /* clip: a pane dragged sideways must not give the page a sideways
+       scroll of its own. */
+    main { padding: 0 12px calc(72px + env(safe-area-inset-bottom)); overflow-x: clip; position: relative; }
+    /* The other tab, shown beside the dragged one while a swipe is under
+       way, placed by the script. */
+    .pane.peek { display: flex !important; position: absolute; }
     .top { height: 56px; margin: 0 -12px; padding: 0 8px 0 16px; flex-wrap: nowrap; gap: 10px; }
     .brand { gap: 10px; }
     .brand img { width: 22px; height: 22px; }
@@ -443,8 +466,10 @@
     .lead { font-size: 13px; line-height: 1.45; }
     .group { margin-top: 16px; border-radius: 14px; }
     .group-head { padding: 10px 16px; border-radius: 13px 13px 0 0; font-size: 12px; }
-    /* A row is one thing to tap; what it can do is in the sheet it opens. */
-    .rows > li { grid-template-columns: minmax(0, 1fr) auto; gap: 6px 12px; padding: 13px 16px;
+    /* A row keeps its Update, one tap from done; everything else it can do
+       -- Block, why it waits -- is in the sheet a tap anywhere else opens.
+       So no ⋯ here. */
+    .rows > li { grid-template-columns: minmax(0, 1fr) auto auto; gap: 6px 12px; padding: 13px 16px;
                  cursor: pointer; }
     .rows > li:last-child { border-radius: 0 0 13px 13px; }
     .svc { grid-column: 1; grid-row: 1; font-size: 15px; }
@@ -453,10 +478,19 @@
     .kind { height: 20px; padding: 0 8px; font-size: 10px; gap: 5px; }
     .when { align-items: flex-end; }
     .when .on { font-size: 11.5px; }
-    .acts { display: none; }
+    .acts { grid-column: 3; grid-row: 1 / span 2; }
+    .acts .more, .acts .menu { display: none; }
+    /* As wide as its Confirm?, so pressing it does not move the row. */
+    .acts .apply { min-width: 88px; height: 34px; padding: 0 14px; border-radius: 9px; }
+    /* Scheduled has no pill but two lines of when, and Update now is wider:
+       the when goes under the change, one line, so the change keeps its
+       room. */
+    .soak .jump { grid-column: 1 / span 2; }
+    .soak .when { grid-column: 1 / span 2; grid-row: 3; justify-self: start;
+                  flex-direction: row; align-items: baseline; gap: 8px; }
+    .soak .acts { grid-row: 1 / span 3; }
     .empty { margin-top: 16px; padding: 40px 16px; border-radius: 14px; }
-    footer { padding-top: 28px; }
-    footer div { justify-content: center; }
+    .top .menu .version { padding: 10px 12px 6px; font-size: 12px; }
     /* The row sheet and the blocked list rise from the bottom. */
     .dlg.rise { width: 100%; max-width: none; margin: auto 0 0; border: 0;
             border-top: 1px solid var(--card-line); border-radius: 20px 20px 0 0;
@@ -489,7 +523,7 @@
     .rise .blist .act { height: 40px; border-radius: 10px; color: var(--fg); }
     .rise .note { padding: 14px 20px 28px; }
     /* Above the tab bar: its 50px of tabs and the home indicator's room. */
-    .toast { bottom: calc(62px + env(safe-area-inset-bottom)); }
+    .toasts { bottom: calc(62px + env(safe-area-inset-bottom)); }
     /* Only the room the device asks for below the tabs, and no minimum: a
        browser whose own toolbar floats over the page asks for none, and a
        fixed margin then sat under the labels and made them look high. */
@@ -589,32 +623,12 @@
           <hr v-if="actions">
           <button role="menuitem" v-if="actions" @click="openBlocks()">Blocked releases <span class="n">{{ blocks.length }}</span></button>
           <a role="menuitem" class="quiet only-with-gate" href="/auth/logout">Sign out</a>
+          <!-- Which duva this is: worth finding, not worth a footer. -->
+          <span class="version mono">duva {{ version }}</span>
         </div>
       </div>
     </div>
   </header>
-
-  <!-- Two kinds of blocked, and what a person should do about them differs.
-       No actor is standing: nothing changes until a compose file is edited,
-       so it reads as a settled fact. An actor that is not ready is transient
-       -- the reference one is unready on an uncommitted repository -- so it
-       reads as "wait a moment" rather than "this is broken".
-
-       Told apart by b.kind, never by reading b.reason: that is the actor's
-       own prose and it is free to reword it. -->
-  <div v-for="b in blocked"
-       class="banner"
-       :class="b.kind === 'actor-not-ready' ? 'banner-wait' : 'banner-note'">
-    <span class="who">{{ b.kind === 'actor-not-ready' ? 'not right now' : 'no actor' }}</span>
-    &mdash; <span class="mono">{{ b.host }}</span>: {{ b.reason }}
-  </div>
-
-  <div class="banner banner-error" v-if="unreachable.length">
-    <span v-for="u in unreachable">
-      <span class="who mono">{{ u.Host }}</span> is {{ u.Err }}.
-    </span>
-    <br>What it last reported is shown below, faded, and cannot be approved until it answers again.
-  </div>
 
 
   <section class="pane" :class="tab === 'queue' ? '' : 'off'">
@@ -636,15 +650,22 @@
           <span class="kind" :class="'kind-' + r.kind" :title="r.why">{{ r.kind }}</span>
 
           <span class="acts" data-pop>
-            <button class="apply" v-if="canApply"
+            <button class="apply" v-if="canApply" data-arm
+                    :class="armed === armKey(r) ? 'armed' : ''"
                     :disabled="!r.can_apply || running(r.key) || busyHost(r.host)"
                     :title="buttonReason(r)"
-                    @click="apply(r)">{{ running(r.key) ? "Updating…" : "Update" }}</button>
-            <button class="more" v-if="actions" title="Block" aria-haspopup="menu"
+                    @click="press(r)">{{ running(r.key) ? "Updating…" : armed === armKey(r) ? "Confirm?" : "Update" }}</button>
+            <button class="more" title="Release notes, block" aria-haspopup="menu"
                     :aria-expanded="open === r.key ? 'true' : 'false'"
                     @click="toggle(r.key)"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true"><circle cx="3" cy="7" r="1.2" fill="currentColor"/><circle cx="7" cy="7" r="1.2" fill="currentColor"/><circle cx="11" cy="7" r="1.2" fill="currentColor"/></svg></button>
-            <span class="menu" role="menu" v-if="actions && open === r.key">
-              <button role="menuitem" class="danger" :disabled="r.stale || running(r.key)"
+            <span class="menu" role="menu" v-if="open === r.key">
+              <!-- Where the image says its source lives: the releases
+                   there, searched for this version. Not offered when the
+                   image does not say. -->
+              <a role="menuitem" v-if="r.notes" :href="r.notes" target="_blank" rel="noopener noreferrer" @click="openNotes($event)"><span>Release notes</span><svg class="out" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M9.5 2.5h4v4M13.5 2.5L7.5 8.5M12 9.5v3a1 1 0 0 1-1 1H3.5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></a>
+              <button role="menuitem" v-else disabled title="The image doesn't say where its source lives"><span>Release notes</span><svg class="out" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M9.5 2.5h4v4M13.5 2.5L7.5 8.5M12 9.5v3a1 1 0 0 1-1 1H3.5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+              <hr v-if="actions">
+              <button role="menuitem" class="danger" v-if="actions" :disabled="r.stale || running(r.key)"
                       title="Never apply this release, until it is unblocked"
                       @click="startBlock(r)">Block</button>
             </span>
@@ -674,7 +695,7 @@
   <section class="pane soak" :class="tab === 'scheduled' ? '' : 'off'">
     <div class="intro">
       <h2 class="h">Scheduled</h2>
-      <p class="lead">Allowed by policy and delayed (duva.delay); each updates itself at the time shown.</p>
+      <p class="lead">Allowed by policy and delayed</p>
     </div>
 
     <div class="group" v-for="g in groups(shownSoaking())" :key="g.host">
@@ -690,15 +711,19 @@
 
           <!-- Told apart by its entry: a service can be in both tables. -->
           <span class="acts" data-pop>
-            <button class="apply" v-if="canApply"
+            <button class="apply" v-if="canApply" data-arm
+                    :class="armed === armKey(r) ? 'armed' : ''"
                     :disabled="!r.can_apply || running(r.key) || busyHost(r.host)"
                     :title="buttonReason(r) || 'Update now, without waiting for the delay'"
-                    @click="apply(r)">{{ running(r.key) ? "Updating…" : "Update now" }}</button>
-            <button class="more" v-if="actions" title="Block" aria-haspopup="menu"
+                    @click="press(r)">{{ running(r.key) ? "Updating…" : armed === armKey(r) ? "Confirm?" : "Update now" }}</button>
+            <button class="more" title="Release notes, block" aria-haspopup="menu"
                     :aria-expanded="open === r.key + '#' + r.entry ? 'true' : 'false'"
                     @click="toggle(r.key + '#' + r.entry)"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true"><circle cx="3" cy="7" r="1.2" fill="currentColor"/><circle cx="7" cy="7" r="1.2" fill="currentColor"/><circle cx="11" cy="7" r="1.2" fill="currentColor"/></svg></button>
-            <span class="menu" role="menu" v-if="actions && open === r.key + '#' + r.entry">
-              <button role="menuitem" class="danger" :disabled="r.stale || running(r.key)"
+            <span class="menu" role="menu" v-if="open === r.key + '#' + r.entry">
+              <a role="menuitem" v-if="r.notes" :href="r.notes" target="_blank" rel="noopener noreferrer" @click="openNotes($event)"><span>Release notes</span><svg class="out" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M9.5 2.5h4v4M13.5 2.5L7.5 8.5M12 9.5v3a1 1 0 0 1-1 1H3.5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></a>
+              <button role="menuitem" v-else disabled title="The image doesn't say where its source lives"><span>Release notes</span><svg class="out" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M9.5 2.5h4v4M13.5 2.5L7.5 8.5M12 9.5v3a1 1 0 0 1-1 1H3.5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+              <hr v-if="actions">
+              <button role="menuitem" class="danger" v-if="actions" :disabled="r.stale || running(r.key)"
                       title="Never apply this release, until it is unblocked"
                       @click="startBlock(r)">Block</button>
             </span>
@@ -718,7 +743,6 @@
     </div>
   </section>
 
-  <footer class="mono"><div><span>duva {{ version }}</span></div></footer>
 
   <!-- The phone's way in: a row opens this, with everything the desktop
        spreads across a row's cells and menu. It reads the row from the queue
@@ -740,17 +764,27 @@
       </div>
       <!-- What a desktop shows on hover: why it waits, and why Update is
            greyed. A phone has no hover, so it is said here. -->
-      <p class="why" v-if="sheetRow().why">{{ sheetRow().why }}</p>
+      <!-- When it came out: worth knowing of any release. Why it waits only
+           when the service has a policy: with duva.auto at none, everything
+           waits for a person, and saying so says nothing. -->
+      <p class="why" v-if="sheetRow().published || sheetRow().first_seen">{{ sheetRow().published ? "Released " + ago(sheetRow().published) : "Found " + ago(sheetRow().first_seen) }}</p>
+      <p class="why" v-if="sheetRow().why && sheetRow().auto && sheetRow().auto !== 'none'">{{ sheetRow().why }}</p>
       <p class="why" v-if="buttonReason(sheetRow())">{{ buttonReason(sheetRow()) }}</p>
       <ul class="steps mono" v-if="steps[sheetRow().key] || finished[sheetRow().key]">
         <li v-for="line in (steps[sheetRow().key] || [])">{{ line }}</li>
         <li :class="finished[sheetRow().key] && finished[sheetRow().key].startsWith('failed') ? 'bad' : 'ok'"
             v-if="finished[sheetRow().key]">{{ finished[sheetRow().key] }}</li>
       </ul>
+      <!-- No Update here: it is on the row itself, one tap from the list. -->
       <div class="choices">
-        <button class="apply" v-if="canApply"
-                :disabled="!sheetRow().can_apply || running(sheetRow().key) || busyHost(sheetRow().host)"
-                @click="apply(sheetRow())">{{ running(sheetRow().key) ? "Updating…" : (sheetRow().release_at ? "Update now" : "Update") }}</button>
+        <a class="act notes" v-if="sheetRow().notes" :href="sheetRow().notes"
+           target="_blank" rel="noopener noreferrer" @click="openNotes($event)"><span>Release notes</span><svg class="out" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M9.5 2.5h4v4M13.5 2.5L7.5 8.5M12 9.5v3a1 1 0 0 1-1 1H3.5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></a>
+        <!-- There, but greyed: where the notes would be, and why they are
+             not. A phone has no hover, so the why is said under it. -->
+        <div class="notes-off" v-else>
+          <button class="act notes" disabled><span>Release notes</span><svg class="out" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M9.5 2.5h4v4M13.5 2.5L7.5 8.5M12 9.5v3a1 1 0 0 1-1 1H3.5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+          <span class="hint">The image doesn't say where its source lives.</span>
+        </div>
         <!-- Through the same confirmation as the desktop: a block reaches
              every service running the image, so a tap does not do it alone. -->
         <button class="act danger" v-if="actions" :disabled="sheetRow().stale || running(sheetRow().key)"
@@ -829,14 +863,16 @@
 
   <!-- Block asks first, and says what it does. One dialog for the page,
        about whichever row was clicked, in either section. -->
-  <dialog class="dlg rise" id="block" @close="blockRow = null">
+  <dialog class="dlg rise" id="block" @close="blockClosed()">
     <div class="grab" @pointerdown="dragDown($event)" @pointermove="dragMove($event)"
          @pointerup="dragUp($event)" @pointercancel="dragUp($event)"></div>
     <form v-if="blockRow" @submit.prevent="block()">
       <div class="body">
         <div class="title">
-          <h2>Block {{ blockRow.service }} <span class="to mono">{{ blockRow.moved ? "this digest" : blockRow.candidate }}</span>?</h2>
-          <p class="sub mono">{{ blockRow.host ? blockRow.host + " · " : "" }}{{ blockRow.image }}</p>
+          <!-- A digest move keeps its tag, so the tag names it, and the new
+               digest -- what is blocked -- goes beside the image. -->
+          <h2>Block {{ blockRow.service }} <span class="to mono">{{ blockRow.moved ? blockRow.tag : blockRow.candidate }}</span>?</h2>
+          <p class="sub mono">{{ blockRow.host ? blockRow.host + " · " : "" }}{{ blockRow.image }}{{ blockRow.moved && blockRow.candidate.startsWith("sha256:") ? " · " + blockRow.candidate.slice(0, 19) : "" }}</p>
         </div>
         <p class="say">Block this update from being applied, on any service running {{ blockRow.image }}.</p>
         <p class="hint">You can unblock it under Blocked releases, in the menu at the top.</p>
@@ -872,23 +908,54 @@
     </form>
   </dialog>
 
-  <!-- What an action just did, or why it was refused: a toast over the
-       page rather than a banner in it, since it is about a moment and not
-       about the page. Swiped off either side to dismiss. A success leaves
+  <!-- Toasts, over the page rather than in it, swiped off either side to
+       dismiss.
+
+       Standing ones first: what is true of a host for now -- it cannot
+       apply, or it is not answering. They stay while it is true. Dismissed,
+       one stays away until what it says changes; an unreachable host's rows
+       stay faded and the empty queue still says it is not the whole
+       picture, so dismissing never makes a host look fine.
+
+       Two kinds of cannot-apply, and what a person should do differs. No
+       actor is standing: nothing changes until a compose file is edited, so
+       it reads as a settled fact. An actor that is not ready is transient
+       -- the reference one is unready on an uncommitted repository -- so it
+       reads as "wait a moment" rather than "this is broken". Told apart by
+       b.kind, never by reading b.reason: that is the actor's own prose, and
+       it is free to reword it.
+
+       Then what an action just did, or why it was refused: a success leaves
        on its own; a refusal stays until it is dismissed, as it is the one
-       that must be read. The standing banners above -- a host not
-       answering, no actor -- are the page's state, and stay where they are. -->
-  <div class="toast" v-if="result.message" v-effect="toastTimer(result)"
-       :class="result.level === 'error' ? 'toast-error' : ''"
-       :role="result.level === 'error' ? 'alert' : 'status'"
-       @pointerdown="toastDown($event)" @pointermove="toastMove($event)"
-       @pointerup="toastUp($event)" @pointercancel="toastUp($event)">
-    <span class="who">{{ result.service }}</span> — {{ result.message }}
+       that must be read. -->
+  <div class="toasts">
+    <div class="toast toast-standing" v-for="b in blocked" :key="standingKey(b)"
+         v-show="!dismissed[standingKey(b)]" :data-key="standingKey(b)" role="status"
+         :class="b.kind === 'actor-not-ready' ? 'toast-wait' : 'toast-note'"
+         @pointerdown="toastDown($event)" @pointermove="toastMove($event)"
+         @pointerup="toastUp($event)" @pointercancel="toastUp($event)">
+      <span class="who">{{ b.host }} {{ b.kind === 'actor-not-ready' ? "can't update right now" : "has nothing to apply updates" }}</span>
+      <span class="why">{{ b.reason }}</span>
+    </div>
+    <div class="toast toast-standing toast-error" v-for="u in unreachable" :key="'down|' + u.Host + '|' + u.Err"
+         v-show="!dismissed['down|' + u.Host + '|' + u.Err]" :data-key="'down|' + u.Host + '|' + u.Err" role="alert"
+         @pointerdown="toastDown($event)" @pointermove="toastMove($event)"
+         @pointerup="toastUp($event)" @pointercancel="toastUp($event)">
+      <span class="who">{{ u.Host }} is not answering</span>
+      <span class="why">It is {{ u.Err }}. What it last reported is shown faded, and cannot be approved until it answers again.</span>
+    </div>
+    <div class="toast" v-if="result.message" v-effect="toastTimer(result)"
+         :class="result.level === 'error' ? 'toast-error' : ''"
+         :role="result.level === 'error' ? 'alert' : 'status'"
+         @pointerdown="toastDown($event)" @pointermove="toastMove($event)"
+         @pointerup="toastUp($event)" @pointercancel="toastUp($event)">
+      <span class="who">{{ result.service }}</span> — {{ result.message }}
+    </div>
   </div>
 
   <nav class="tabbar">
-    <button :class="tab === 'queue' ? 'sel' : ''" @click="tab = 'queue'">Queue <span class="n">{{ rows.length }}</span></button>
-    <button :class="tab === 'scheduled' ? 'sel' : ''" @click="tab = 'scheduled'">Scheduled <span class="n">{{ soaking.length }}</span></button>
+    <button :class="tab === 'queue' ? 'sel' : ''" @click="goTab('queue')">Queue <span class="n">{{ rows.length }}</span></button>
+    <button :class="tab === 'scheduled' ? 'sel' : ''" @click="goTab('scheduled')">Scheduled <span class="n">{{ soaking.length }}</span></button>
   </nav>
 </main>
 
@@ -920,8 +987,13 @@ createApp({
       hover: false,     // the pointer is over "Last checked"
       pinned: false,    // "Last checked" was clicked open
       tab: "queue",     // the phone's tab
+      scrolls: {},      // how far down each tab was when left
       sheetId: "",      // the phone's open row: its key, then #entry
       blockRow: null,   // the row the block dialog is about
+      blockFrom: "",    // the sheet it was asked from, to go back to on Cancel
+      blocking: false,  // it closed because Block was pressed
+      dismissed: {},    // standing toasts swiped away, by what they said
+      armed: "",        // the Update pressed once, waiting for its Confirm?
       since: "",        // how far back the check dialog will look; "" is since the last check
       checkOpts: false, // the check dialog's options are unfolded
       pickOpen: false,  // its services list is open
@@ -961,6 +1033,7 @@ createApp({
         // decider answering for nobody every 15s is the sort of thing noticed
         // in a log months later. Nor does it animate.
         setInterval(() => { if (!document.hidden) this.poll() }, 15000)
+        this.swipeTabs()
         // The header frosts over once the page has scrolled under it.
         const frost = () => document.documentElement.classList.toggle("scrolled", scrollY > 4)
         addEventListener("scroll", frost, { passive: true })
@@ -981,6 +1054,11 @@ createApp({
         // outside one means.
         let closing = false
         document.addEventListener("pointerdown", e => {
+          // An armed Update disarms on a press anywhere but an Update.
+          if (this.armed && !e.target.closest("[data-arm]")) {
+            clearTimeout(this.armAway)
+            this.armed = ""
+          }
           // Inside the open menu, or on what opened it: that is the menu's.
           // Another row's buttons are outside it, like anywhere else.
           const pop = e.target.closest("[data-pop]")
@@ -1132,6 +1210,27 @@ createApp({
         if (d.open) d.close()
       },
 
+      // Update is two presses: the first arms it -- "Confirm?", in another
+      // colour -- and the second applies. Replacing a container is the one
+      // thing here that cannot be taken back, and a list scrolled with a
+      // thumb is where a stray tap lands. Armed, it disarms by itself after
+      // a few seconds, or on a press anywhere else, so it never waits armed
+      // for a tap meant for something else.
+      armKey(r) {
+        return r.key + "#" + r.entry
+      },
+      press(r) {
+        const key = this.armKey(r)
+        clearTimeout(this.armAway)
+        if (this.armed !== key) {
+          this.armed = key
+          this.armAway = setTimeout(() => { this.armed = "" }, 4000)
+          return
+        }
+        this.armed = ""
+        this.apply(r)
+      },
+
       // A success's toast leaves on its own after a few seconds; a refusal's
       // stays until it is swiped away. Run again for every new result, so a
       // second one replaces the first and its timer.
@@ -1163,10 +1262,157 @@ createApp({
           el.style.transform = ""; el.style.opacity = ""
           return
         }
-        clearTimeout(this.toastAway)
         el.style.transform = "translateX(" + (dx < 0 ? "-" : "") + "120vw)"
         el.style.opacity = "0"
-        setTimeout(() => { this.result = {} }, 180)
+        const key = el.dataset.key
+        setTimeout(() => {
+          if (key) {
+            this.dismissed = { ...this.dismissed, [key]: true }
+          } else {
+            clearTimeout(this.toastAway)
+            this.result = {}
+          }
+        }, 180)
+      },
+
+      // On a phone, Queue and Scheduled are side by side: a sideways swipe
+      // drags the page over to the other, as the tab bar would. Only once a
+      // gesture is plainly sideways -- a scroll stays a scroll -- and not
+      // from the screen's very edge, which is Safari's back and forward, not
+      // on a toast, which a sideways swipe dismisses, and not while a sheet
+      // or dialog is up.
+      // Each tab keeps its own place: leaving one remembers how far down it
+      // was, and coming back is to there, by the tab bar or a swipe. In the
+      // frame after the switch, once the shown pane is the new one and the
+      // page is its height, and before anything is painted.
+      goTab(name) {
+        if (name === this.tab) return
+        this.scrolls[this.tab] = scrollY
+        this.tab = name
+        const to = this.scrolls[name] || 0
+        requestAnimationFrame(() => scrollTo(0, to))
+      },
+
+      // The other tab is there beside it while dragging -- just off the
+      // edge, coming in with the finger -- so a swipe shows where it goes
+      // rather than dragging the page off into nothing.
+      swipeTabs() {
+        let x0 = 0, y0 = 0, t0 = 0, dx = 0, mode = "", pane = null, nb = null
+        const order = ["queue", "scheduled"]
+        const panes = () => [...document.querySelectorAll(".pane")]
+        // Shows a neighbour beside the pane, where it will sit once it is the
+        // shown one and the page is back at its top -- which is where the
+        // switch leaves it -- so nothing jumps at the end.
+        const peek = el => {
+          if (nb === el) return
+          unpeek()
+          if (!el) return
+          nb = el
+          el.classList.add("peek")
+          // Where it will be once shown: at its own remembered scroll.
+          el.style.top = (pane.offsetTop + scrollY - (this.scrolls[order[panes().indexOf(el)]] || 0)) + "px"
+          el.style.left = pane.offsetLeft + "px"
+          el.style.width = pane.offsetWidth + "px"
+        }
+        const unpeek = () => {
+          if (!nb) return
+          nb.classList.remove("peek")
+          nb.style.top = nb.style.left = nb.style.width = nb.style.transform = nb.style.transition = ""
+          nb = null
+        }
+        const reset = () => { mode = ""; pane = null; dx = 0; nb = null }
+        document.addEventListener("touchstart", e => {
+          reset()
+          if (!phone.matches || e.touches.length !== 1) return
+          const t = e.touches[0]
+          if (t.clientX < 24 || t.clientX > innerWidth - 24) return
+          if (e.target.closest(".toast, dialog, .tabbar, .top")) return
+          if (document.querySelector("dialog[open]")) return
+          x0 = t.clientX; y0 = t.clientY; t0 = Date.now(); mode = "maybe"
+        }, { passive: true })
+        document.addEventListener("touchmove", e => {
+          if (!mode) return
+          const t = e.touches[0]
+          dx = t.clientX - x0
+          const dy = t.clientY - y0
+          if (mode === "maybe") {
+            if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return
+            if (Math.abs(dy) >= Math.abs(dx)) { reset(); return }
+            mode = "drag"
+            pane = document.querySelector(".pane:not(.off)")
+          }
+          // Locked sideways: the page holds still until the finger lifts,
+          // as a scroll locked vertical does not wander sideways.
+          if (e.cancelable) e.preventDefault()
+          // The neighbour on the side the finger is heading for, if there is
+          // one; none beyond either end, where it gives a little, no more.
+          const i = order.indexOf(this.tab)
+          const dir = dx < 0 ? 1 : -1
+          const there = panes()[i + dir] || null
+          peek(there)
+          const W = innerWidth
+          const shown = there ? dx : dx / 4
+          pane.style.transition = "none"
+          pane.style.transform = "translateX(" + shown + "px)"
+          if (nb) {
+            nb.style.transition = "none"
+            nb.style.transform = "translateX(" + (dir * W + shown) + "px)"
+          }
+        }, { passive: false }) // not passive: a sideways drag stops the page scrolling
+        document.addEventListener("touchend", () => {
+          if (mode !== "drag" || !pane) { reset(); return }
+          const el = pane, other = nb, i = order.indexOf(this.tab)
+          const quick = Math.abs(dx) > 40 && Date.now() - t0 < 300
+          const dir = dx < 0 ? 1 : -1
+          const go = other && (Math.abs(dx) > innerWidth / 4 || quick)
+          const W = innerWidth
+          const ease = "transform .2s ease"
+          el.style.transition = ease
+          if (other) other.style.transition = ease
+          mode = ""
+          if (!go) {
+            el.style.transform = ""
+            if (other) other.style.transform = "translateX(" + dir * W + "px)"
+            setTimeout(() => { el.style.transition = ""; unpeek(); reset() }, 200)
+            return
+          }
+          // Both slide the rest of the way: this one out, the other in.
+          el.style.transform = "translateX(" + -dir * W + "px)"
+          other.style.transform = "translateX(0)"
+          setTimeout(() => {
+            // In one go, before the next paint: the other leaves its place
+            // beside and becomes the shown pane where it already is.
+            el.style.transition = ""; el.style.transform = ""
+            unpeek()
+            this.goTab(order[i + dir])
+            reset()
+          }, 200)
+        })
+        document.addEventListener("touchcancel", () => {
+          if (pane) { pane.style.transition = ""; pane.style.transform = "" }
+          unpeek()
+          reset()
+        })
+      },
+
+      // Release notes open in a tab of their own, the duva page staying where
+      // it is. target="_blank" says so, but Safari on a phone was seen
+      // following it in the same tab; asked for in the tap's own handler, a
+      // new tab is what it does. Still a real link, so a long press offers
+      // what a link offers.
+      // window.open with noopener returns null whether or not a tab opened,
+      // so there is no telling; a tap is a user's own gesture, which is not
+      // blocked.
+      openNotes(e) {
+        e.preventDefault()
+        window.open(e.currentTarget.href, "_blank", "noopener,noreferrer")
+        this.open = ""
+      },
+
+      // A standing toast is the same toast while it says the same thing:
+      // dismissed, it stays away until the host's state or words change.
+      standingKey(b) {
+        return b.kind + "|" + b.host + "|" + b.reason
       },
 
       // A sheet follows the finger down, and lets go past 90px.
@@ -1209,8 +1455,24 @@ createApp({
       startBlock(r) {
         this.open = ""
         this.blockRow = r
+        // Asked from a row's sheet: backing out goes back to that sheet.
+        this.blockFrom = this.sheetId
+        this.blocking = false
         this.closeSheet()
         document.getElementById("block").showModal()
+      },
+
+      // The confirmation closed. Not by Block -- by Cancel, Escape, a tap
+      // outside, a swipe -- and opened from a sheet: that sheet again, as
+      // backing out of a question returns to where it was asked.
+      blockClosed() {
+        const back = !this.blocking && this.blockFrom
+        this.blockRow = null
+        this.blockFrom = ""
+        if (back) {
+          this.sheetId = back
+          document.getElementById("sheet").showModal()
+        }
       },
 
       closeBlock() {
@@ -1219,6 +1481,7 @@ createApp({
 
       async block() {
         const r = this.blockRow
+        this.blocking = true
         this.closeBlock()
         return this.act("block", r)
       },

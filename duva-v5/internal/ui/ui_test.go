@@ -139,12 +139,12 @@ func TestOtherRowsOnABusyHostAreDisabled(t *testing.T) {
 	}
 }
 
-// On a phone a row's buttons are hidden and the row opens a sheet instead.
-// The sheet's Block must go through the same confirmation as the desktop's
-// menu: a block reaches every service running the image, and a sheet is one
-// stray tap from doing it. The script decides "is this a phone" by the same
-// width the stylesheet hides the buttons at, or a tablet between the two
-// would get neither the buttons nor the sheet.
+// On a phone a row keeps Update but not its ⋯ menu: Block is in the sheet the
+// row opens. That Block must go through the same confirmation as the
+// desktop's menu: a block reaches every service running the image, and a
+// sheet is one stray tap from doing it. The script decides "is this a phone"
+// by the same width the stylesheet hides the menu at, or a tablet between the
+// two would get neither the menu nor the sheet.
 func TestThePhoneSheetConfirmsABlock(t *testing.T) {
 	s := &Server{Source: &fakeSource{}, Approver: &fakeApprover{}}
 	_, body := get(t, s, "/")
@@ -153,8 +153,8 @@ func TestThePhoneSheetConfirmsABlock(t *testing.T) {
 	if phone == "" {
 		t.Fatal("no phone media query in the page")
 	}
-	if !strings.Contains(phone, ".acts { display: none; }") {
-		t.Fatal("a row's buttons are no longer hidden on phones; this test guards the sheet that replaces them")
+	if !strings.Contains(phone, ".acts .more, .acts .menu { display: none; }") {
+		t.Fatal("a row's ⋯ menu is no longer hidden on phones; this test guards the sheet that replaces it")
 	}
 	if !strings.Contains(body, `matchMedia("(max-width: 45rem)")`) {
 		t.Error("the script's phone width is not the stylesheet's")

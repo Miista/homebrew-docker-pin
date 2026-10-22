@@ -66,6 +66,10 @@ type Service struct {
 	// Soak is how old a release must be before Auto applies it. Zero applies
 	// it as soon as it is found. A person approving it is not held to this.
 	Soak time.Duration
+	// Source is where the image says its source lives (the
+	// org.opencontainers.image.source label), an http(s) URL; empty when it
+	// does not say. For the page's link to the release notes.
+	Source string
 }
 
 // Pinned reports whether the service has opted in to being watched.

@@ -1,6 +1,16 @@
 package queue
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
+
+// ErrNotDeclared is a recheck's answer for an entry whose service the
+// compose project no longer declares (with a container_name): renamed,
+// removed, or lost its name. Not a conclusion by itself -- Reconcile drops the
+// entry only once the service's container is gone too, which is what
+// decommissioning a service is.
+var ErrNotDeclared = errors.New("no longer declared in the compose project")
 
 // Recheck is what reconciling concluded about one waiting entry.
 type Recheck struct {
@@ -37,6 +47,10 @@ type Recheck struct {
 //
 // Pure, like Decide: the caller reads the compose file.
 func RecheckEntry(e Entry, svc Service) Recheck {
+	// Where the image says its source lives, as the container says now: so
+	// an entry queued before it was recorded gains it, and one whose image
+	// changed its say follows.
+	e.Source = svc.Source
 	if svc.Digest != "" && svc.Digest == e.Digest {
 		return Recheck{Why: "already matches the compose file"}
 	}

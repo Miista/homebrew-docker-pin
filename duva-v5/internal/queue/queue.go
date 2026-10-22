@@ -51,6 +51,9 @@ type Entry struct {
 	// ReleaseAt, when set, is when a clock rather than a person releases
 	// this. Zero means it waits for someone.
 	ReleaseAt string `json:"release_at,omitempty"`
+	// Source is where the image says its source lives, for a link to the
+	// release notes; empty when it does not say. See SourceOf.
+	Source string `json:"source,omitempty"`
 }
 
 // Pending is what is waiting: the queue's rows in the store.
@@ -100,7 +103,7 @@ func (q *Pending) fail(err error) {
 // columns is every entry column, in the order scan reads them.
 const columns = `e.id, s.name, s.container, e.file, i.repo, e.from_ref, e.to_ref, e.tag,
 	COALESCE(e.digest, ''), COALESCE(e.kind, ''), e.auto, e.why, e.found_at,
-	COALESCE(e.published_at, ''), COALESCE(e.release_at, '')`
+	COALESCE(e.published_at, ''), COALESCE(e.release_at, ''), COALESCE(e.source, '')`
 
 const fromEntries = ` FROM queue_entries e
 	JOIN services s ON s.id = e.service_id
@@ -115,7 +118,7 @@ func scan(row scanner) (Entry, error) {
 	var e Entry
 	var kind, auto string
 	err := row.Scan(&e.ID, &e.Service, &e.Container, &e.File, &e.Image, &e.From, &e.To, &e.Tag,
-		&e.Digest, &kind, &auto, &e.Why, &e.FirstSeen, &e.Published, &e.ReleaseAt)
+		&e.Digest, &kind, &auto, &e.Why, &e.FirstSeen, &e.Published, &e.ReleaseAt, &e.Source)
 	e.Kind, e.Auto = version.Kind(kind), Auto(auto)
 	return e, err
 }
@@ -218,10 +221,10 @@ func (q *Pending) put(e Entry, now time.Time) (Entry, bool) {
 		}
 		res, err := tx.Exec(`INSERT INTO queue_entries
 			(service_id, file, from_ref, to_ref, tag, digest, kind, auto, why,
-			 published_at, found_at, release_at, status)
-			VALUES (?, ?, ?, ?, ?, NULLIF(?, ''), NULLIF(?, ''), ?, ?, NULLIF(?, ''), ?, NULLIF(?, ''), 'waiting')`,
+			 published_at, found_at, release_at, source, status)
+			VALUES (?, ?, ?, ?, ?, NULLIF(?, ''), NULLIF(?, ''), ?, ?, NULLIF(?, ''), ?, NULLIF(?, ''), NULLIF(?, ''), 'waiting')`,
 			serviceID, e.File, e.From, e.To, e.Tag, e.Digest, string(e.Kind), string(e.Auto), e.Why,
-			e.Published, e.FirstSeen, e.ReleaseAt)
+			e.Published, e.FirstSeen, e.ReleaseAt, e.Source)
 		if err != nil {
 			return err
 		}
@@ -417,6 +420,11 @@ func (q *Pending) Reconcile(check func(e Entry) (Recheck, error), onError func(s
 	now := time.Now()
 	for _, e := range current {
 		r, err := check(e)
+		if errors.Is(err, ErrNotDeclared) && q.decommissioned(e.Service) {
+			// Gone from the compose file and its container gone too: the
+			// service was taken out, and its updates with it.
+			r, err = Recheck{Why: "service removed: gone from the compose file, and its container with it"}, nil
+		}
 		if err != nil {
 			if onError != nil {
 				onError(e.Service, err)
@@ -425,11 +433,11 @@ func (q *Pending) Reconcile(check func(e Entry) (Recheck, error), onError func(s
 		}
 		if r.Keep {
 			kept := r.Entry
-			if kept.From == e.From && kept.Why == e.Why && kept.To == e.To {
+			if kept.From == e.From && kept.Why == e.Why && kept.To == e.To && kept.Source == e.Source {
 				continue
 			}
-			_, err := q.st.DB().Exec(`UPDATE queue_entries SET from_ref = ?, to_ref = ?, why = ? WHERE id = ?`,
-				kept.From, kept.To, kept.Why, e.ID)
+			_, err := q.st.DB().Exec(`UPDATE queue_entries SET from_ref = ?, to_ref = ?, why = ?, source = NULLIF(?, '') WHERE id = ?`,
+				kept.From, kept.To, kept.Why, kept.Source, e.ID)
 			q.fail(err)
 			continue
 		}
@@ -449,6 +457,17 @@ func (q *Pending) Reconcile(check func(e Entry) (Recheck, error), onError func(s
 	}
 	sort.SliceStable(dropped, func(i, j int) bool { return dropped[i].Entry.Service < dropped[j].Entry.Service })
 	return dropped
+}
+
+// decommissioned is whether a service by this compose name was known here and
+// has no container left: every row the service sync made for it is disabled.
+// A name never synced is not decommissioned -- nothing says it went -- and
+// one with a container still running is not either. Called under q.mu.
+func (q *Pending) decommissioned(service string) bool {
+	var known, running int
+	err := q.st.DB().QueryRow(`SELECT COUNT(*), COUNT(*) FILTER (WHERE removed_at IS NULL)
+		FROM services WHERE name = ?`, service).Scan(&known, &running)
+	return err == nil && known > 0 && running == 0
 }
 
 // List returns the newest open entry per service, ordered by service so a
@@ -604,6 +623,7 @@ func EntryFrom(v Verdict, svc Service, digest string) Entry {
 		Kind:      v.Kind,
 		Why:       v.Why,
 		Auto:      svc.Auto,
+		Source:    svc.Source,
 	}
 }
 
