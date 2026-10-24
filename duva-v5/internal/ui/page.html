@@ -472,6 +472,29 @@
                    font-size: 11px; color: var(--fainter); }
 
   /* ---------- phones ---------- */
+  /* ---------- the side menu ---------- */
+  /* In the margin beside the 1120px column, where there is room for it. */
+  .side { display: none; }
+  @media (min-width: 1440px) {
+    .side { position: fixed; top: 140px; left: calc(50% - 560px - 200px); width: 168px; z-index: 20;
+            display: flex; flex-direction: column; }
+    .side button { position: relative; display: flex; align-items: center; justify-content: space-between;
+                   height: 40px; padding: 0 14px; border: 0; background: transparent; cursor: pointer;
+                   color: var(--muted); font: inherit; font-size: 14px; font-weight: 600; text-align: left; }
+    .side button:hover { color: var(--soft); }
+    .side button.sel { color: var(--bright); }
+    .side .n { font-family: var(--mono); font-size: 12px; font-weight: 500; color: var(--faint); }
+    /* The same indicator as the phone's tab bar, standing up. */
+    .side .ink { position: absolute; left: 0; top: 0; width: 2px; height: 40px; background: var(--accent);
+                 transform: translateY(calc(var(--i) * 100%)); transition: transform .25s ease; }
+    /* A section scrolled to stops below the sticky header, not under it. */
+    #sec-queue, #sec-scheduled, #sec-upcoming { scroll-margin-top: 84px; }
+    /* The last section is at least a screen tall, so every section above it
+       can be scrolled to the top: a short one at the end left the page
+       unable to bring the one before it up. */
+    #sec-upcoming { min-height: calc(100vh - 84px); }
+  }
+
   @media (max-width: 45rem) {
     /* clip: a pane dragged sideways must not give the page a sideways
        scroll of its own. */
@@ -672,10 +695,13 @@
               <span class="mono">{{ c.host }}</span><span>{{ ago(c.at) }}</span>
             </div>
           </div>
-          <hr v-if="actions">
-          <button role="menuitem" v-if="actions" @click="openBlocks()">Blocked releases <span class="n">{{ blocks.length }}</span></button>
+          <!-- Groups: checking; the jobs; what duva leaves alone; signing out. -->
+          <hr>
           <a role="menuitem" href="#jobs" @click="top = false">Jobs</a>
+          <hr>
+          <button role="menuitem" v-if="actions" @click="openBlocks()">Blocked releases <span class="n">{{ blocks.length }}</span></button>
           <button role="menuitem" @click="openIgnored()">Ignored services <span class="n">{{ ignoredCount() }}</span></button>
+          <hr class="only-with-gate">
           <a role="menuitem" class="quiet only-with-gate" href="/auth/logout">Sign out</a>
           <!-- Which duva this is: worth finding, not worth a footer. -->
           <span class="version mono">duva {{ version }}</span>
@@ -685,7 +711,7 @@
   </header>
 
 
-  <section class="pane" :class="tab === 'queue' ? '' : 'off'" v-show="view === 'queue'">
+  <section class="pane" id="sec-queue" :class="tab === 'queue' ? '' : 'off'" v-show="view === 'queue'">
     <div class="intro">
       <h1>Queue</h1>
       <p class="lead">Updates ready to be applied</p>
@@ -746,7 +772,7 @@
 
   <!-- What applies itself when its delay runs out. Not in the queue above:
        nobody needs to do anything, so it is told apart rather than mixed in. -->
-  <section class="pane soak" :class="tab === 'scheduled' ? '' : 'off'" v-show="view === 'queue'">
+  <section class="pane soak" id="sec-scheduled" :class="tab === 'scheduled' ? '' : 'off'" v-show="view === 'queue'">
     <div class="intro">
       <h2 class="h">Automatic</h2>
       <p class="lead">Updates applied automatically</p>
@@ -801,7 +827,7 @@
   <!-- What comes to you when its delay runs out: duva.defer holds every
        release, and these are the ones duva.auto does not cover. Not in the
        queue yet, and not something duva will do on its own. -->
-  <section class="pane soak" :class="tab === 'upcoming' ? '' : 'off'" v-show="view === 'queue'">
+  <section class="pane soak" id="sec-upcoming" :class="tab === 'upcoming' ? '' : 'off'" v-show="view === 'queue'">
     <div class="intro">
       <h2 class="h">Deferred</h2>
       <p class="lead">Updates deferred for later approval</p>
@@ -949,7 +975,7 @@
     <form @submit.prevent="runCheck()">
       <div class="body">
         <div class="title">
-          <h2>Check for updates</h2>
+          <h2>Check for releases</h2>
           <p class="say">{{ checkSummary() }}</p>
         </div>
         <div class="fold">
@@ -1045,7 +1071,7 @@
         </li>
         <li class="none" v-if="!blocks.length">No blocked releases.</li>
       </ul>
-      <p class="hint note">Unblocking puts the release back in the queue, waiting for you.</p>
+      <p class="hint note">Unblocking puts its update back in the queue, waiting for you.</p>
       <div class="buttons only-desk"><button class="act">Close</button></div>
     </form>
   </dialog>
@@ -1119,6 +1145,15 @@
     </div>
   </div>
 
+  <!-- On a wide desktop, the sections as a menu in the margin: it scrolls to
+       one, and marks the one under the header as the page scrolls. -->
+  <nav class="side" v-show="view === 'queue'" :style="{ '--i': ['queue', 'scheduled', 'upcoming'].indexOf(spy) }">
+    <span class="ink" aria-hidden="true"></span>
+    <button :class="spy === 'queue' ? 'sel' : ''" @click="toSection('queue')">Queue <span class="n">{{ rows.length }}</span></button>
+    <button :class="spy === 'scheduled' ? 'sel' : ''" @click="toSection('scheduled')">Automatic <span class="n">{{ soaking.length }}</span></button>
+    <button :class="spy === 'upcoming' ? 'sel' : ''" @click="toSection('upcoming')">Deferred <span class="n">{{ upcoming.length }}</span></button>
+  </nav>
+
   <nav class="tabbar" v-show="view === 'queue'" :style="{ '--i': ['queue', 'scheduled', 'upcoming'].indexOf(tab) }">
     <span class="ink" aria-hidden="true"></span>
     <button :class="tab === 'queue' ? 'sel' : ''" @click="goTab('queue')">Queue <span class="n">{{ rows.length }}</span></button>
@@ -1157,6 +1192,8 @@ createApp({
       pinned: false,    // "Last checked" was clicked open
       tab: "queue",     // the phone's tab
       switching: false, // a tab change is restoring its scroll; see goTab
+      spy: "queue",     // the desktop section under the header, for the side menu
+      jumping: false,   // the side menu is scrolling to a section; see toSection
       view: location.hash === "#jobs" ? "jobs" : "queue", // the page: the queue, or #jobs
       scrolls: {},      // how far down each tab was when left
       sheetId: "",      // the phone's open row: its key, then #entry
@@ -1219,6 +1256,21 @@ createApp({
           document.documentElement.classList.toggle("scrolled", scrollY > 4)
         }
         addEventListener("scroll", frost, { passive: true })
+        // The side menu marks the last section whose top has passed under the
+        // header -- and the last one once the page is scrolled to its end,
+        // as a short last section never reaches the header.
+        const spy = () => {
+          if (this.jumping) return // toSection marked where it is going
+          const line = document.querySelector(".top").getBoundingClientRect().bottom + 24
+          let at = "queue"
+          for (const name of ["queue", "scheduled", "upcoming"]) {
+            const el = document.getElementById("sec-" + name)
+            if (el && el.getBoundingClientRect().top <= line) at = name
+          }
+          this.spy = at
+        }
+        addEventListener("scroll", spy, { passive: true })
+        spy()
         frost()
         document.addEventListener("visibilitychange", () => {
           document.documentElement.classList.toggle("hidden-tab", document.hidden)
@@ -1806,6 +1858,21 @@ createApp({
               (back ? ", over " + back : "") + "; anything found will appear here" }
         setTimeout(() => this.poll(), 3000)
         setTimeout(() => { this.checking = false; this.poll() }, 15000)
+      },
+
+      // The side menu: to a section, under the sticky header.
+      // Marked at once, and the scroll's own updates held off until it has
+      // landed: on the way past the others it would mark each in turn.
+      toSection(name) {
+        const el = document.getElementById("sec-" + name)
+        if (!el) return
+        this.spy = name
+        this.jumping = true
+        clearTimeout(this.jumpEnd)
+        const done = () => { this.jumping = false; removeEventListener("scrollend", done) }
+        addEventListener("scrollend", done)
+        this.jumpEnd = setTimeout(done, 1200) // where there is no scrollend
+        el.scrollIntoView({ behavior: "smooth", block: "start" })
       },
 
       openIgnored() {
