@@ -41,8 +41,8 @@ container starts or stops.
 |---|---|---|
 | **check** | on `schedule` (default 03:00), and from **Check…** or the Jobs page's Run now. Not at startup | Look for new releases of every service the compose file pins, and hand each to the queue. |
 | **sync** | each tick | Bring changes made outside duva into its state: services added to or removed from the compose file, and the image and tag each now follows. Read from the compose file, never from docker's container list. A service is removed only when it is gone from the file *and* its container is gone. |
-| **reconcile** | each tick, after the sync | Make everything in duva fit that state. Drop an entry whose service now follows another image or tag, has already got it, or was removed. And follow a changed policy: add `duva.auto` to a service and what already waits for it is scheduled (by its `duva.delay`, from when it was published); take it away and what was scheduled goes back to you. It never applies anything itself. |
-| **release** | each tick, after reconcile | When a delay is over, take the next action: apply what `duva.auto` covers (if the container still runs), and bring the rest to you, notifying you then. |
+| **reconcile** | each tick, after the sync | Make everything in duva fit that state. Drop an entry whose service now follows another image or tag, has already got it, or was removed. And follow a changed policy: add `duva.auto` to a service and what already waits for it is scheduled (by its `duva.defer`, from when it was published); take it away and what was scheduled goes back to you. It never applies anything itself. |
+| **release** | each tick, after reconcile | When a deferral is over, take the next action: apply what `duva.auto` covers (if the container still runs), and bring the rest to you, notifying you then. |
 
 ## Deploying
 
@@ -133,7 +133,7 @@ service:
 ```yaml
 labels:
   duva.auto: patch        # none (default), digest, patch, minor, major
-  duva.delay: 3d          # how old a release must be before duva.auto applies it
+  duva.defer: 3d          # how old a release must be before duva.auto applies it
   diun.include_tags: '^1\.\d+\.\d+$'
   diun.exclude_tags: '-rc'
 ```
@@ -165,47 +165,47 @@ registry refused for rate limiting is treated the same way.
 - **A click on the page** is tried once. The reason, naming the file, is
   shown and the entry stays queued.
 
-### Delaying a release
+### Deferring a release
 
-`duva.auto` says **what** is applied unattended. `duva.delay` says **when**
+`duva.auto` says **what** is applied unattended. `duva.defer` says **when**
 the next action for a release happens, whatever that action is: a release
-is held until it is old enough, counted from when it was published (or, if
-the registry does not say, from when it was found).
+is deferred until it is old enough, counted from when it was published (or,
+if the registry does not say, from when it was found).
 
-| when the delay is over | next action |
+| when the deferral is over | next action |
 |---|---|
 | `duva.auto` covers it | applied |
 | it does not, or there is no `duva.auto` | it comes to you in the queue, and you are notified then |
 
-So `duva.delay` alone, with no `duva.auto`, still means something: every
+So `duva.defer` alone, with no `duva.auto`, still means something: every
 release waits that long before it is put in front of you.
 
-| `duva.delay` | means |
+| `duva.defer` | means |
 |---|---|
 | `3d` | whole days |
 | `72h`, `90m`, `1h30m` | any Go duration |
-| `0`, or no label | no delay |
+| `0`, or no label | not deferred |
 
-Anything else -- `3 days`, `1w`, `-1d` -- is refused rather than read as no
-delay. There is no host-wide default. An early-v5 `duva.soak` label is
-refused by name: it is `duva.delay` now.
+Anything else -- `3 days`, `1w`, `-1d` -- is refused rather than read as not
+deferred. There is no host-wide default. The earlier names, `duva.soak` and
+`duva.delay`, are refused by name: it is `duva.defer` now.
 
-A held release is listed on the page under **Scheduled** if it will be
-applied, or **Upcoming** if it will come to you, with when, and is not
-announced while held. It is released on the queue's tick, at most
+A deferred release is listed on the page under **Automatic** if it will be
+applied, or **Deferred** if it will come to you, with when, and is not
+announced while deferred. It is released on the queue's tick, at most
 `DUVA_SETTING_RECONCILE_INTERVAL` late (ten minutes by default), or as soon as
 a container event prompts one. **Update now** applies either at once.
 
-Changing either label moves what already waits: add a delay and a release in
-the queue younger than it is held; take it away and what is held is due;
-change `duva.auto` and a held release moves between Scheduled and Upcoming,
-keeping its time.
+Changing either label moves what already waits: add a deferral and a release
+in the queue younger than it is deferred; take it away and what is deferred
+is due; change `duva.auto` and a deferred release moves between Automatic
+and Deferred, keeping its time.
 
-Each release is delayed on its own clock. A project that releases faster than
-its delay does not keep restarting the wait: an older release that comes due
-while a newer one is still delayed is applied, and the newer one is then
-offered from there. A release waiting for a person is different -- only the
-newest matters, so a newer one supersedes it.
+Each release is deferred on its own clock. A project that releases faster
+than its deferral does not keep restarting the wait: an older release that
+comes due while a newer one is still deferred is applied, and the newer one
+is then offered from there. A release waiting for a person is different --
+only the newest matters, so a newer one supersedes it.
 
 ### Seeing what is waiting, and acting on it
 
@@ -282,7 +282,7 @@ unset. A value that does not parse refuses to start, never falls back.
 | `git.push` | `DUVA_SETTING_GIT_PUSH` | push each commit; default false |
 | `schedule` | `DUVA_SETTING_SCHEDULE` | when to look for new tags, 5-field cron; default `0 3 * * *`. Not at startup: Run now on the Jobs page asks for one |
 | `since` | `DUVA_SETTING_SINCE` | override how far back the next check looks (RFC 3339, or a duration such as `168h`) |
-| `reconcile_interval` | `DUVA_SETTING_RECONCILE_INTERVAL` | how often the queue rechecks what is waiting, and releases delayed ones; default `10m` |
+| `reconcile_interval` | `DUVA_SETTING_RECONCILE_INTERVAL` | how often the queue rechecks what is waiting, and releases deferred ones; default `10m` |
 | `update_timeout` | `DUVA_SETTING_UPDATE_TIMEOUT` | how long an apply may run before it is called failed; default `30m` |
 | `ntfy.endpoint`, `ntfy.topic` | `DUVA_SETTING_NTFY_ENDPOINT`, `_TOPIC` | where to announce what waits for a person, and failed auto-applies |
 | `ntfy.click` | `DUVA_SETTING_NTFY_CLICK` | the link a notification opens, usually the page |

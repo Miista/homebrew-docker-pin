@@ -553,7 +553,7 @@ func (q *Pending) Waiting() []Entry {
 func (q *Pending) Soaking() []Entry { return q.delayed(true) }
 
 // Upcoming returns every delayed entry that comes to a person when the delay
-// is over: duva.delay holds every release, and duva.auto only decides what
+// is over: duva.defer holds every release, and duva.auto only decides what
 // the next action is.
 func (q *Pending) Upcoming() []Entry { return q.delayed(false) }
 

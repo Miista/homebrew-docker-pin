@@ -22,7 +22,7 @@ var refileNow = at("2026-10-22T12:00:00Z")
 
 const days = 24 * time.Hour
 
-// duva.delay says when the next action happens, whatever it is: a delay added
+// duva.defer says when the next action happens, whatever it is: a delay added
 // holds a release in the queue that is younger than it, covered or not.
 func TestRefileHoldsAReleaseYoungerThanANewDelay(t *testing.T) {
 	for _, auto := range []Auto{AutoNone, AutoDigest} {

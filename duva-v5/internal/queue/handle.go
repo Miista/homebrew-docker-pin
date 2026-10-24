@@ -199,7 +199,7 @@ func (h *Handler) Handle(n Notice) Result {
 	default: // Queue
 		e := EntryFrom(v, svc, digestFor(v, n))
 		e.Published = published(n)
-		// duva.delay says when the next action happens, whatever it is. Here
+		// duva.defer says when the next action happens, whatever it is. Here
 		// it is showing a person, so the release is held -- Upcoming on the
 		// page -- and announced when it comes to them, not now.
 		if at := releaseAt(svc.Soak, n.Published, h.now()); !at.IsZero() {

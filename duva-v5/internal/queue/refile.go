@@ -6,11 +6,11 @@ import (
 )
 
 // Refile fits a waiting entry to its service's policy as it stands now: a
-// change made outside duva -- duva.auto or duva.delay added, changed or
+// change made outside duva -- duva.auto or duva.defer added, changed or
 // removed -- is a change to what should happen to what already waits, not
 // only to what is found next.
 //
-// duva.auto says what is applied unattended; duva.delay says when the next
+// duva.auto says what is applied unattended; duva.defer says when the next
 // action happens, whatever it is. So:
 //
 //   - A release in the queue that is younger than a delay now on its service
@@ -46,20 +46,20 @@ func Refile(e Entry, svc Service, now time.Time, applies bool) (Entry, string) {
 		switch {
 		case !hold.IsZero() && stamp(hold) != e.ReleaseAt:
 			out.ReleaseAt = stamp(hold)
-			return out, fmt.Sprintf("held until %s: duva.delay is %s", out.ReleaseAt, formatSoak(svc.Soak))
+			return out, fmt.Sprintf("held until %s: duva.defer is %s", out.ReleaseAt, formatSoak(svc.Soak))
 		case hold.IsZero() && held.After(now):
 			out.ReleaseAt = stamp(now)
 			if svc.Soak <= 0 {
-				return out, "due now: duva.delay was removed"
+				return out, "due now: duva.defer was removed"
 			}
-			return out, fmt.Sprintf("due now: duva.delay is %s, and it is older than that", formatSoak(svc.Soak))
+			return out, fmt.Sprintf("due now: duva.defer is %s, and it is older than that", formatSoak(svc.Soak))
 		}
 		return out, ""
 	}
 
 	if !hold.IsZero() {
 		out.ReleaseAt = stamp(hold)
-		return out, fmt.Sprintf("held until %s: duva.delay is %s", out.ReleaseAt, formatSoak(svc.Soak))
+		return out, fmt.Sprintf("held until %s: duva.defer is %s", out.ReleaseAt, formatSoak(svc.Soak))
 	}
 	previous := e.Auto
 	if previous == "" {

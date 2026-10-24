@@ -130,7 +130,7 @@ and `duva-v5/README.md`.
 - **State is one SQLite database**, `/data/duva.db` (`internal/store`,
   `modernc.org/sqlite`, numbered embedded migrations; never edit a released
   one). The queue is a row per release with a status and a history
-  (`queue_events`): a delayed release (`duva.delay`; "soak" in the code) keeps
+  (`queue_events`): a deferred release (`duva.defer`; "soak" in the code) keeps
   its own clock, a release for a
   person supersedes older ones for a person, and applying supersedes
   everything older. The watcher's cutoffs and held findings are its own
@@ -150,11 +150,11 @@ and `duva-v5/README.md`.
   policy, so a failed apply is not re-armed every tick). Reconcile never
   applies: it sets or clears a release time, and the release job is the one
   unattended path. Held by `TestAPolicyChangedOutsideDuvaReachesWhatWaits`.
-- **`duva.auto` says what is applied unattended; `duva.delay` says when the
-  next action happens, whatever it is.** Every release of a delayed service
-  is held: when the delay is over, one `duva.auto` covers (`Auto.Covers`) is
+- **`duva.auto` says what is applied unattended; `duva.defer` says when the
+  next action happens, whatever it is.** Every release of a deferred service
+  is held: when the deferral is over, one `duva.auto` covers (`Auto.Covers`) is
   applied, any other comes to a person and is announced then. The page
-  splits held releases into Scheduled (will apply) and Upcoming (will come to
+  splits held releases into Automatic (will apply) and Deferred (will come to
   you). Held by `TestADelayHoldsWhatWaitsForAPersonToo` and
   `TestADueReleaseNotCoveredComesToAPerson`.
 - **No check at startup.** A deploy or restart used to be a full check of

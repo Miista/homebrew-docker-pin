@@ -687,7 +687,7 @@
   <section class="pane" :class="tab === 'queue' ? '' : 'off'" v-show="view === 'queue'">
     <div class="intro">
       <h1>Queue</h1>
-      <p class="lead">Pending image updates across your hosts.</p>
+      <p class="lead">Updates ready to be applied</p>
     </div>
 
     <div class="group" v-for="g in groups(shown())" :key="g.host">
@@ -747,8 +747,8 @@
        nobody needs to do anything, so it is told apart rather than mixed in. -->
   <section class="pane soak" :class="tab === 'scheduled' ? '' : 'off'" v-show="view === 'queue'">
     <div class="intro">
-      <h2 class="h">Scheduled</h2>
-      <p class="lead">Allowed by policy and delayed</p>
+      <h2 class="h">Automatic</h2>
+      <p class="lead">Updates applied automatically</p>
     </div>
 
     <div class="group" v-for="g in groups(shownSoaking())" :key="g.host">
@@ -767,7 +767,7 @@
             <button class="apply" v-if="canApply" data-arm
                     :class="armed === armKey(r) ? 'armed' : ''"
                     :disabled="!r.can_apply || running(r.key) || busyHost(r.host)"
-                    :title="buttonReason(r) || 'Update now, without waiting for the delay'"
+                    :title="buttonReason(r) || 'Update now, without waiting out the deferral'"
                     @click="press(r)">{{ running(r.key) ? "Updating…" : armed === armKey(r) ? "Confirm?" : "Update now" }}</button>
             <button class="more" title="Release notes, block" aria-haspopup="menu"
                     :aria-expanded="open === r.key + '#' + r.entry ? 'true' : 'false'"
@@ -792,18 +792,18 @@
     </div>
 
     <div class="empty quiet" v-if="!shownSoaking().length">
-      <p>{{ soaking.length ? "Nothing matches." : "Nothing scheduled." }}</p>
+      <p>{{ soaking.length ? "Nothing matches." : "Nothing automatic." }}</p>
     </div>
   </section>
 
 
-  <!-- What comes to you when its delay runs out: duva.delay holds every
+  <!-- What comes to you when its delay runs out: duva.defer holds every
        release, and these are the ones duva.auto does not cover. Not in the
        queue yet, and not something duva will do on its own. -->
   <section class="pane soak" :class="tab === 'upcoming' ? '' : 'off'" v-show="view === 'queue'">
     <div class="intro">
-      <h2 class="h">Upcoming</h2>
-      <p class="lead">Delayed, and coming to you when the delay is over</p>
+      <h2 class="h">Deferred</h2>
+      <p class="lead">Updates deferred for later approval</p>
     </div>
 
     <div class="group" v-for="g in groups(shownUpcoming())" :key="g.host">
@@ -822,7 +822,7 @@
             <button class="apply" v-if="canApply" data-arm
                     :class="armed === armKey(r) ? 'armed' : ''"
                     :disabled="!r.can_apply || running(r.key) || busyHost(r.host)"
-                    :title="buttonReason(r) || 'Update now, without waiting for the delay'"
+                    :title="buttonReason(r) || 'Update now, without waiting out the deferral'"
                     @click="press(r)">{{ running(r.key) ? "Updating…" : armed === armKey(r) ? "Confirm?" : "Update now" }}</button>
             <button class="more" title="Release notes, block" aria-haspopup="menu"
                     :aria-expanded="open === r.key + '#' + r.entry ? 'true' : 'false'"
@@ -847,7 +847,7 @@
     </div>
 
     <div class="empty quiet" v-if="!shownUpcoming().length">
-      <p>{{ upcoming.length ? "Nothing matches." : "Nothing upcoming." }}</p>
+      <p>{{ upcoming.length ? "Nothing matches." : "Nothing deferred." }}</p>
     </div>
   </section>
 
@@ -1097,8 +1097,8 @@
   <nav class="tabbar" v-show="view === 'queue'" :style="{ '--i': ['queue', 'scheduled', 'upcoming'].indexOf(tab) }">
     <span class="ink" aria-hidden="true"></span>
     <button :class="tab === 'queue' ? 'sel' : ''" @click="goTab('queue')">Queue <span class="n">{{ rows.length }}</span></button>
-    <button :class="tab === 'scheduled' ? 'sel' : ''" @click="goTab('scheduled')">Scheduled <span class="n">{{ soaking.length }}</span></button>
-    <button :class="tab === 'upcoming' ? 'sel' : ''" @click="goTab('upcoming')">Upcoming <span class="n">{{ upcoming.length }}</span></button>
+    <button :class="tab === 'scheduled' ? 'sel' : ''" @click="goTab('scheduled')">Automatic <span class="n">{{ soaking.length }}</span></button>
+    <button :class="tab === 'upcoming' ? 'sel' : ''" @click="goTab('upcoming')">Deferred <span class="n">{{ upcoming.length }}</span></button>
   </nav>
 </main>
 
@@ -1790,7 +1790,7 @@ createApp({
 
       jobName(job) {
         return { check: "Check for releases", sync: "Sync services",
-                 reconcile: "Reconcile the queue", release: "Release delayed" }[job] || job
+                 reconcile: "Reconcile the queue", release: "Release deferred" }[job] || job
       },
 
       // What each job is for, as the README's Jobs table says.
@@ -1799,7 +1799,7 @@ createApp({
           check: "Looks for new releases of every service the compose file pins.",
           sync: "Brings in changes made outside duva: services added or removed, and the image and tag each follows.",
           reconcile: "Drops what is waiting that no longer applies to what the compose file says.",
-          release: "Applies delayed releases whose delay is over.",
+          release: "When a deferral is over, applies what duva.auto covers and brings the rest to you.",
         }[job] || ""
       },
 

@@ -20,7 +20,7 @@ services:
 	var asked string
 	l.Labels = func(container string) (map[string]string, bool, error) {
 		asked = container
-		return map[string]string{"duva.auto": "patch", "duva.delay": "3d"}, true, nil
+		return map[string]string{"duva.auto": "patch", "duva.defer": "3d"}, true, nil
 	}
 
 	svc, found, err := l.Service("my-app")
@@ -52,19 +52,21 @@ func TestLookupWithoutAContainerIsAnError(t *testing.T) {
 	}
 }
 
-// The early-v5 name is refused by name, not ignored: ignored, the service
-// would lose its delay without a word.
-func TestTheOldDelayLabelIsRefused(t *testing.T) {
-	l := project(t, `
+// The earlier names are refused by name, not ignored: ignored, the service
+// would lose its deferral without a word.
+func TestTheOldDeferLabelsAreRefused(t *testing.T) {
+	for _, old := range []string{"duva.soak", "duva.delay"} {
+		l := project(t, `
 services:
   app:
     image: example.com/app:1.0.0@sha256:old
     container_name: my-app
     labels:
-      duva.soak: 3d
+      `+old+`: 3d
 `)
-	_, _, err := l.Service("my-app")
-	if err == nil || !strings.Contains(err.Error(), "duva.delay") {
-		t.Errorf("err = %v, want one naming duva.delay", err)
+		_, _, err := l.Service("my-app")
+		if err == nil || !strings.Contains(err.Error(), old+" is now duva.defer") {
+			t.Errorf("%s: err = %v, want one saying it is now duva.defer", old, err)
+		}
 	}
 }

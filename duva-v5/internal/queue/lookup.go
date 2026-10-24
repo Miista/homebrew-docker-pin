@@ -94,12 +94,15 @@ func (l Lookup) declared(container string, ref compose.ServiceRef) (Service, boo
 	}
 	// Per service, with no host default: a soak is a judgement about one
 	// image's upstream, the same as duva.auto, and lives beside it.
-	// duva.delay. The early-v5 name, duva.soak, is refused rather than
-	// ignored: ignored, a service carrying it would lose its delay silently.
-	if _, old := labels["duva.soak"]; old {
-		return Service{}, false, fmt.Errorf("%s: duva.soak is now duva.delay", ref.Service)
+	// duva.defer. The earlier names, duva.soak and duva.delay, are refused
+	// rather than ignored: ignored, a service carrying one would lose its
+	// deferral silently.
+	for _, old := range []string{"duva.soak", "duva.delay"} {
+		if _, set := labels[old]; set {
+			return Service{}, false, fmt.Errorf("%s: %s is now duva.defer", ref.Service, old)
+		}
 	}
-	soak, err := ParseSoak(labels["duva.delay"])
+	soak, err := ParseSoak(labels["duva.defer"])
 	if err != nil {
 		return Service{}, false, fmt.Errorf("%s: %w", ref.Service, err)
 	}

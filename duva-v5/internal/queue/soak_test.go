@@ -87,7 +87,7 @@ services:
     container_name: labelled
     labels:
       duva.auto: patch
-      duva.delay: 3d
+      duva.defer: 3d
   unlabelled:
     image: example.com/app:1.0.0@sha256:old
     container_name: unlabelled
@@ -98,7 +98,7 @@ services:
     container_name: opted-out
     labels:
       duva.auto: patch
-      duva.delay: "0"
+      duva.defer: "0"
 `
 
 func TestLookupReadsTheSoak(t *testing.T) {
@@ -125,10 +125,10 @@ services:
     image: example.com/app:1.0.0@sha256:old
     container_name: my-app
     labels:
-      duva.delay: a week
+      duva.defer: a week
 `)
 	if _, _, err := l.Service("my-app"); err == nil {
-		t.Fatal("want an error for an unreadable duva.delay")
+		t.Fatal("want an error for an unreadable duva.defer")
 	}
 }
 
@@ -141,7 +141,7 @@ services:
     container_name: my-app
     labels:
       duva.auto: patch
-      duva.delay: 3d
+      duva.defer: 3d
 `
 
 // Allowed by policy, but too young: it waits in the queue rather than being
@@ -213,7 +213,7 @@ func TestHandleKeepsTheSoakOnANoticeArrivingAgain(t *testing.T) {
 	}
 }
 
-// duva.delay says when the next action happens, whatever it is. For what
+// duva.defer says when the next action happens, whatever it is. For what
 // policy sends to a person that action is showing them, so it is held --
 // Upcoming, not the queue -- and announced only when the delay is over.
 func TestADelayHoldsWhatWaitsForAPersonToo(t *testing.T) {
