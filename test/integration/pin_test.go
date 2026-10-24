@@ -135,6 +135,17 @@ func TestPinRecordsWhatIsRunningNotWhatTheTagPointsAt(t *testing.T) {
 	got := s.Image("web")
 	if !strings.HasSuffix(got, "@"+running) {
 		t.Errorf("pin should record the digest the container is running:\n  got  %s\n  want ...@%s", got, running)
+		// What pin's running-digest lookup sees, so a failure says which step
+		// came up empty: the container, by compose's labels, or the repo
+		// digest of the image it runs.
+		t.Logf("project dir: %s", s.Dir)
+		t.Logf("containers:\n%s", s.docker("ps", "-a", "--no-trunc", "--format",
+			`{{.ID}} {{.Status}} image={{.Image}} service={{.Label "com.docker.compose.service"}} working_dir={{.Label "com.docker.compose.project.working_dir"}}`))
+		for _, id := range strings.Fields(s.docker("ps", "-aq", "--filter", "label=com.docker.compose.service=web")) {
+			img := strings.TrimSpace(s.docker("inspect", id, "--format", "{{.Image}}"))
+			t.Logf("container %s runs %s, repo digests: %s", id, img,
+				s.docker("image", "inspect", img, "--format", "{{range .RepoDigests}}{{.}} {{end}}"))
+		}
 	}
 	if strings.HasSuffix(got, "@"+moved) {
 		t.Errorf("pin recorded the newer digest sitting on the tag:\n  got %s", got)
