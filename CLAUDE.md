@@ -231,6 +231,13 @@ would lock to one. Consequences that are expected, not bugs:
 
 ## Conventions
 
+- **A release is something someone puts out there; an update is something
+  you choose to take.** A release is upstream: an image's new version or
+  digest, there whether anyone runs it or not. What is found, and what is
+  blocked (by image and digest, across services), is a release. An update is
+  a release applied to one service, from one version to another. What waits
+  in the Queue, Automatic and Deferred is an update. Words on the page,
+  logs and docs keep the two apart.
 - **Parse flags, then reject leftovers that are flag-shaped.** Never sniff
   `args[0] == "--all"` before checking argument counts: that is what let
   `pin --all --dry-riun` drop the mistyped flag and rewrite every compose file
