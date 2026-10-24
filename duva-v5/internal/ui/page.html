@@ -675,6 +675,7 @@
           <hr v-if="actions">
           <button role="menuitem" v-if="actions" @click="openBlocks()">Blocked releases <span class="n">{{ blocks.length }}</span></button>
           <a role="menuitem" href="#jobs" @click="top = false">Jobs</a>
+          <button role="menuitem" @click="openIgnored()">Ignored services <span class="n">{{ ignoredCount() }}</span></button>
           <a role="menuitem" class="quiet only-with-gate" href="/auth/logout">Sign out</a>
           <!-- Which duva this is: worth finding, not worth a footer. -->
           <span class="version mono">duva {{ version }}</span>
@@ -1045,6 +1046,30 @@
         <li class="none" v-if="!blocks.length">No blocked releases.</li>
       </ul>
       <p class="hint note">Unblocking puts the release back in the queue, waiting for you.</p>
+      <div class="buttons only-desk"><button class="act">Close</button></div>
+    </form>
+  </dialog>
+
+  <!-- The services duva does not follow (duva.ignore: true), from the menu.
+       A list and nothing else: the label is the one place to change it, so
+       a page that holds the docker socket never switches watching back on. -->
+  <dialog class="dlg wide rise" id="ignored">
+    <div class="grab" @pointerdown="dragDown($event)" @pointermove="dragMove($event)"
+         @pointerup="dragUp($event)" @pointercancel="dragUp($event)"></div>
+    <form method="dialog">
+      <div class="body">
+        <div class="titlebar"><h2>Ignored services</h2><button class="done">Done</button></div>
+      </div>
+      <ul class="blist">
+        <li v-for="i in ignoredList()" :key="i.host + '/' + i.service">
+          <span class="what">
+            <span class="name">{{ i.service }}<span class="mono rel">{{ i.tag }}</span></span>
+            <span class="by mono">{{ i.host }} &middot; {{ i.image }}</span>
+          </span>
+        </li>
+        <li class="none" v-if="!ignoredList().length">No ignored services.</li>
+      </ul>
+      <p class="hint note">duva never checks these or queues updates for them. To follow one again, remove its <span class="mono">duva.ignore</span> label in the compose file and recreate it.</p>
       <div class="buttons only-desk"><button class="act">Close</button></div>
     </form>
   </dialog>
@@ -1782,6 +1807,17 @@ createApp({
         setTimeout(() => this.poll(), 3000)
         setTimeout(() => { this.checking = false; this.poll() }, 15000)
       },
+
+      openIgnored() {
+        this.top = false
+        document.getElementById("ignored").showModal()
+      },
+
+      // Every host's ignored services, labelled with their host.
+      ignoredList() {
+        return this.checks.flatMap(c => (c.ignored || []).map(i => ({ ...i, host: c.host })))
+      },
+      ignoredCount() { return this.ignoredList().length },
 
       openBlocks() {
         this.top = false

@@ -352,6 +352,10 @@ func readServices(root string, log zerolog.Logger, labels func(string) (map[stri
 			log.Info().Msgf("%s: not checked, it has no container", ref.Service)
 			continue
 		}
+		if errors.Is(err, errIgnored) {
+			log.Info().Msgf("%s: not checked, duva.ignore is true", ref.Service)
+			continue
+		}
 		if err != nil {
 			log.Warn().Msgf("%s: %v", ref.Service, err)
 			continue

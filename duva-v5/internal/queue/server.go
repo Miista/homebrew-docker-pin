@@ -169,6 +169,10 @@ type Snapshot struct {
 	Applying []string `json:"applying,omitempty"`
 	// Jobs is what this host runs on its own, with the last run of each.
 	Jobs []jobs.Status `json:"jobs,omitempty"`
+	// Ignored is the services labelled duva.ignore: true, which duva does
+	// not follow. Reported for the page to list; nothing changes them but
+	// their label.
+	Ignored []IgnoredService `json:"ignored"`
 }
 
 // Blocker is which kind of thing stops an approval landing.
@@ -215,6 +219,7 @@ func (s *Server) Snapshot() Snapshot {
 		WhyNot:    whyNot,
 		Applying:  s.applying(),
 		Jobs:      s.jobs(),
+		Ignored:   s.Queue.Ignored(),
 	}
 }
 

@@ -66,6 +66,22 @@ func (a Auto) TakesDigestMoves() bool {
 	return a != AutoNone
 }
 
+// ParseIgnore reads a duva.ignore label: "true" means duva never follows the
+// service -- never checks it, never queues for it -- and its pin stays as it
+// is until someone changes it by hand. Unset is "false". Anything else is an
+// error rather than a guess: `duva.ignore: yes` read as false would follow a
+// service someone meant to switch off.
+func ParseIgnore(value string) (bool, error) {
+	switch value {
+	case "", "false":
+		return false, nil
+	case "true":
+		return true, nil
+	default:
+		return false, fmt.Errorf("duva.ignore: %q is not true or false", value)
+	}
+}
+
 // Covers reports whether this policy applies an entry unattended: a digest
 // move under anything but none, a version change no larger than allowed.
 //

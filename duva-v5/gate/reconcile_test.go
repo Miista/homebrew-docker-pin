@@ -148,3 +148,28 @@ func TestReconcileKeepsAnEntryWaitingOnItsContainer(t *testing.T) {
 		t.Errorf("the entry was not kept: %+v", queue.List())
 	}
 }
+
+// duva.ignore comes from the container, as policy does, and a tick drops
+// what waits for a service that has it: the sync records it as ignored, and
+// reconcile fits what waits to that.
+func TestATickDropsWhatWaitsForAnIgnoredService(t *testing.T) {
+	queue := q.NewPending()
+	queue.Put(q.Entry{Service: "app", Container: "app", Image: "example.com/app", Tag: "latest",
+		From: "sha256:aaaa", To: "sha256:bbbb", Digest: "sha256:bbbb", Auto: q.AutoNone}, time.Now())
+	ignore := func(string) (map[string]string, bool, error) {
+		return map[string]string{"duva.ignore": "true"}, true, nil
+	}
+	r := &reconciler{queue: queue, root: composeFile(t, appService), log: zerolog.Nop(), labels: ignore,
+		containers: func() ([]q.Container, error) { return []q.Container{{Name: "app", Service: "app"}}, nil }}
+	r.tick()
+
+	if queue.Len() != 0 {
+		t.Errorf("still waiting: %+v", queue.List())
+	}
+	if got := queue.Ignored(); len(got) != 1 || got[0].Service != "app" {
+		t.Errorf("ignored = %+v", got)
+	}
+	if got := queue.Tracked(); len(got) != 0 {
+		t.Errorf("tracked = %v, want none", got)
+	}
+}

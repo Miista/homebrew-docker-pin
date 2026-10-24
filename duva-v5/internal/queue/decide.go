@@ -70,6 +70,8 @@ type Service struct {
 	// org.opencontainers.image.source label), an http(s) URL; empty when it
 	// does not say. For the page's link to the release notes.
 	Source string
+	// Ignored is duva.ignore: duva does not follow this service at all.
+	Ignored bool
 }
 
 // Pinned reports whether the service has opted in to being watched.

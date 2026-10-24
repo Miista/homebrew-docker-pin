@@ -14,13 +14,14 @@ import (
 // localQueue is a queue in the UI's own process.
 type localQueue struct {
 	pending  []queue.Entry
+	ignored  []queue.IgnoredService
 	approved []string
 	refuse   string
 	acted    []string
 }
 
 func (l *localQueue) Snapshot() queue.Snapshot {
-	return queue.Snapshot{Host: "self", Pending: l.pending, CanApply: true}
+	return queue.Snapshot{Host: "self", Pending: l.pending, CanApply: true, Ignored: l.ignored}
 }
 
 func (l *localQueue) Approve(service, actor string) string {
@@ -130,5 +131,16 @@ func TestALocalRefusalIsAnError(t *testing.T) {
 	err := c.Approve(Key("optiplex", "app"), 0, "soren")
 	if err == nil || !strings.Contains(err.Error(), "nothing is queued") {
 		t.Errorf("err = %v", err)
+	}
+}
+
+// Each host's ignored services reach the page, with the host they are on --
+// for a list that only shows them.
+func TestTheIgnoredServicesReachThePage(t *testing.T) {
+	local := &localQueue{ignored: []queue.IgnoredService{{Service: "paperless-broker", Image: "redis", Tag: "7.4-alpine"}}}
+	c := NewCollector([]Upstream{{Host: "optiplex", Local: local}})
+	checks := c.LastChecks()
+	if len(checks) != 1 || len(checks[0].Ignored) != 1 || checks[0].Ignored[0].Service != "paperless-broker" {
+		t.Errorf("checks = %+v", checks)
 	}
 }

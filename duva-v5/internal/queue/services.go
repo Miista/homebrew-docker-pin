@@ -30,6 +30,9 @@ type Declared struct {
 	Tag string
 	// Pinned is whether the file pins it by digest: what duva tracks.
 	Pinned bool
+	// Ignored is whether its container says duva.ignore: true. Pinned and
+	// ignored is not tracked.
+	Ignored bool
 }
 
 // Tracked is every service duva tracks and that runs here, by compose name,
@@ -39,7 +42,8 @@ type Declared struct {
 func (q *Pending) Tracked() []string {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	rows, err := q.st.DB().Query(`SELECT DISTINCT name FROM services WHERE removed_at IS NULL AND pinned = 1 ORDER BY name`)
+	rows, err := q.st.DB().Query(`SELECT DISTINCT name FROM services
+		WHERE removed_at IS NULL AND pinned = 1 AND ignored = 0 ORDER BY name`)
 	if err != nil {
 		q.fail(err)
 		return nil
@@ -118,14 +122,14 @@ func (q *Pending) SyncServices(declared []Declared, containers []Container, now 
 			var id int64
 			var was sql.NullString
 			var oldImage, oldTag string
-			var oldPinned bool
-			existed := tx.QueryRow(`SELECT s.id, s.removed_at, i.repo, COALESCE(s.tag, ''), s.pinned
+			var oldPinned, oldIgnored bool
+			existed := tx.QueryRow(`SELECT s.id, s.removed_at, i.repo, COALESCE(s.tag, ''), s.pinned, s.ignored
 				FROM services s JOIN images i ON i.id = s.image_id WHERE s.container = ?`, d.Container).
-				Scan(&id, &was, &oldImage, &oldTag, &oldPinned) == nil
-			if _, err := tx.Exec(`INSERT INTO services (container, name, image_id, tag, pinned) VALUES (?, ?, ?, NULLIF(?, ''), ?)
+				Scan(&id, &was, &oldImage, &oldTag, &oldPinned, &oldIgnored) == nil
+			if _, err := tx.Exec(`INSERT INTO services (container, name, image_id, tag, pinned, ignored) VALUES (?, ?, ?, NULLIF(?, ''), ?, ?)
 				ON CONFLICT (container) DO UPDATE SET name = excluded.name, image_id = excluded.image_id,
-					tag = excluded.tag, pinned = excluded.pinned, removed_at = NULL`,
-				d.Container, d.Service, imageID, d.Tag, d.Pinned); err != nil {
+					tag = excluded.tag, pinned = excluded.pinned, ignored = excluded.ignored, removed_at = NULL`,
+				d.Container, d.Service, imageID, d.Tag, d.Pinned, d.Ignored); err != nil {
 				return err
 			}
 			if err := tx.QueryRow(`SELECT id FROM services WHERE container = ?`, d.Container).Scan(&id); err != nil {
@@ -143,6 +147,13 @@ func (q *Pending) SyncServices(declared []Declared, containers []Container, now 
 						these = append(these, Change{d.Container, ChangeTracked, "pinned in the compose file"})
 					} else {
 						these = append(these, Change{d.Container, ChangeUntracked, "no longer pinned"})
+					}
+				}
+				if d.Ignored != oldIgnored {
+					if d.Ignored {
+						these = append(these, Change{d.Container, ChangeIgnored, "duva.ignore is true"})
+					} else {
+						these = append(these, Change{d.Container, ChangeUnignored, "duva.ignore removed"})
 					}
 				}
 				if d.Image != oldImage {
@@ -218,6 +229,8 @@ const (
 	ChangeRemoved   ChangeKind = "removed"
 	ChangeTracked   ChangeKind = "tracked"
 	ChangeUntracked ChangeKind = "untracked"
+	ChangeIgnored   ChangeKind = "ignored"
+	ChangeUnignored ChangeKind = "unignored"
 	ChangeImage     ChangeKind = "image"
 	ChangeTag       ChangeKind = "tag"
 )
@@ -227,9 +240,39 @@ func (c Change) String() string {
 	what := map[ChangeKind]string{
 		ChangeAdded: "added", ChangeBack: "back", ChangeRemoved: "removed",
 		ChangeTracked: "now tracked", ChangeUntracked: "no longer tracked",
+		ChangeIgnored: "now ignored", ChangeUnignored: "no longer ignored",
 		ChangeImage: "image", ChangeTag: "tag",
 	}[c.Kind]
 	return c.Container + ": " + what + " (" + c.Detail + ")"
+}
+
+// IgnoredService is a service duva does not follow, for the page to list.
+type IgnoredService struct {
+	Service string `json:"service"`
+	Image   string `json:"image"`
+	Tag     string `json:"tag,omitempty"`
+}
+
+// Ignored is every service on this host labelled duva.ignore: true, as the
+// last sync saw it, by compose name.
+func (q *Pending) Ignored() []IgnoredService {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	rows, err := q.st.DB().Query(`SELECT s.name, i.repo, COALESCE(s.tag, '') FROM services s
+		JOIN images i ON i.id = s.image_id WHERE s.removed_at IS NULL AND s.ignored = 1 ORDER BY s.name`)
+	if err != nil {
+		q.fail(err)
+		return []IgnoredService{}
+	}
+	defer rows.Close()
+	out := []IgnoredService{}
+	for rows.Next() {
+		var i IgnoredService
+		if rows.Scan(&i.Service, &i.Image, &i.Tag) == nil {
+			out = append(out, i)
+		}
+	}
+	return out
 }
 
 func tracking(pinned bool) string {

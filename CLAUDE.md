@@ -157,6 +157,12 @@ and `duva-v5/README.md`.
   splits held releases into Automatic (will apply) and Deferred (will come to
   you). Held by `TestADelayHoldsWhatWaitsForAPersonToo` and
   `TestADueReleaseNotCoveredComesToAPerson`.
+- **`duva.ignore: "true"` switches a service off,** read from the running
+  container: the watcher skips it, the sync records it (`services.ignored`)
+  and keeps it out of what is tracked, reconcile drops what waits for it,
+  and the handler turns its findings away with a 2xx. The page only lists
+  ignored services; nothing there changes them. Held by
+  `TestATickDropsWhatWaitsForAnIgnoredService`.
 - **No check at startup.** A deploy or restart used to be a full check of
   every registry; a check now is the schedule, Check…, or Run now. The
   integration suites ask v5 for one through `/v1/check-all`.

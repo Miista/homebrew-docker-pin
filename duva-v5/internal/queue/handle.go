@@ -100,6 +100,13 @@ func (h *Handler) Handle(n Notice) Result {
 		return Result{Outcome: Reject, Service: svc.Name, Message: why, Status: http.StatusServiceUnavailable}
 	}
 
+	// duva.ignore: duva does not follow this service. Ignore, not a refusal:
+	// a 2xx, so the watcher drops the finding rather than holding it.
+	if found && svc.Ignored {
+		h.logf("%s: not taken — duva.ignore is true", svc.Name)
+		return Result{Outcome: Ignore, Service: svc.Name, Message: "duva.ignore is true", Status: http.StatusOK}
+	}
+
 	v := Decide(n, svc, found)
 
 	// A release a person blocked is not offered, however policy sizes it.

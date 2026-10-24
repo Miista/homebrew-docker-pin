@@ -133,7 +133,8 @@ service:
 ```yaml
 labels:
   duva.auto: patch        # none (default), digest, patch, minor, major
-  duva.defer: 3d          # how old a release must be before duva.auto applies it
+  duva.defer: 3d          # how old a release must be before its next action
+  duva.ignore: "true"     # never follow this service; its pin stays as it is
   diun.include_tags: '^1\.\d+\.\d+$'
   diun.exclude_tags: '-rc'
 ```
@@ -144,6 +145,13 @@ edited and committed takes effect when the container is recreated -- by
 service runs under the policy it was started with. A service with no
 container has no policy and is not acted on. The pin and the tag to follow do
 come from the file, since that is what duva rewrites.
+
+`duva.ignore: "true"` switches a service off: it is never checked, nothing
+is queued for it, and anything already waiting is dropped on the next tick.
+Its pin stays, as the record of what runs, and `docker pin upgrade` by hand
+still works. The page lists ignored services under **Ignored services** in
+the menu, and only lists them: the label is the one place to change it.
+Anything but `true` or `false` is refused rather than guessed at.
 
 ## Operating
 

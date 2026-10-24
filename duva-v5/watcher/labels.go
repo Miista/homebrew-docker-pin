@@ -1,6 +1,7 @@
 package watcher
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 
@@ -27,9 +28,23 @@ func tagRules(composeFile, service string) (include, exclude *regexp.Regexp, err
 	return rulesFrom(labels)
 }
 
+// errIgnored is a service labelled duva.ignore: true. Not a fault: duva was
+// told not to follow it.
+var errIgnored = errors.New("duva.ignore is true")
+
 // rulesFrom compiles the tag rules from a set of labels, wherever they were
 // read from.
 func rulesFrom(labels map[string]string) (include, exclude *regexp.Regexp, err error) {
+	// duva.ignore first: a service duva does not follow has no rules worth
+	// compiling. Strict, as the queue reads it: a value that is neither true
+	// nor false is an error, not a service quietly watched or not.
+	switch labels["duva.ignore"] {
+	case "", "false":
+	case "true":
+		return nil, nil, errIgnored
+	default:
+		return nil, nil, fmt.Errorf("duva.ignore: %q is not true or false", labels["duva.ignore"])
+	}
 
 	if raw := labels["diun.include_tags"]; raw != "" {
 		include, err = regexp.Compile(raw)

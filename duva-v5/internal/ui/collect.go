@@ -122,6 +122,8 @@ type snapshot struct {
 	applying map[string]bool
 	// jobs is what that host runs on its own, with each one's last run.
 	jobs []jobs.Status
+	// ignored is that host's services labelled duva.ignore: true.
+	ignored []queue.IgnoredService
 	// err is the transport failure, when the queue could not be asked.
 	//
 	// Kept rather than dropped because an unreachable queue must render as
@@ -161,7 +163,7 @@ func (c *Collector) Collect() {
 			results[i] = snapshot{queue: snap.Pending, soaking: snap.Soaking, upcoming: snap.Upcoming, blocks: snap.Blocks,
 				lastCheck: snap.LastCheck, services: snap.Services, canApply: snap.CanApply,
 				blocker: string(snap.Blocker), whyNot: snap.WhyNot,
-				applying: applying, jobs: snap.Jobs, err: err}
+				applying: applying, jobs: snap.Jobs, ignored: snap.Ignored, err: err}
 		}(i, d)
 	}
 	wg.Wait()
@@ -183,6 +185,7 @@ func (c *Collector) Collect() {
 			results[i].lastCheck = prev.lastCheck
 			results[i].services = prev.services
 			results[i].jobs = prev.jobs
+			results[i].ignored = prev.ignored
 			// Never applyable while unreachable, whatever the last answer
 			// said: the route to the updater is through the queue.
 			results[i].canApply = false
@@ -714,6 +717,9 @@ type HostCheck struct {
 	Services []string `json:"services"`
 	// Jobs is what that host runs on its own, with each one's last run.
 	Jobs []jobs.Status `json:"jobs"`
+	// Ignored is that host's services labelled duva.ignore: true. Listed
+	// only: the label is the one place to change it.
+	Ignored []queue.IgnoredService `json:"ignored"`
 }
 
 // LastChecks is each host's last check, and what it watches, in the
@@ -733,7 +739,11 @@ func (c *Collector) LastChecks() []HostCheck {
 		if js == nil {
 			js = []jobs.Status{}
 		}
-		out = append(out, HostCheck{Host: d.Host, At: s.lastCheck, Services: services, Jobs: js})
+		ignored := s.ignored
+		if ignored == nil {
+			ignored = []queue.IgnoredService{}
+		}
+		out = append(out, HostCheck{Host: d.Host, At: s.lastCheck, Services: services, Jobs: js, Ignored: ignored})
 	}
 	return out
 }

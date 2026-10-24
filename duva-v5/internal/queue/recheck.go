@@ -54,6 +54,10 @@ func RecheckEntry(e Entry, svc Service) Recheck {
 	// an entry queued before it was recorded gains it, and one whose image
 	// changed its say follows.
 	e.Source = svc.Source
+	// Ignored: nothing for it waits, whatever it was.
+	if svc.Ignored {
+		return Recheck{Why: "ignored: duva.ignore is true"}
+	}
 	// A release is of one image. A service that now follows another has no
 	// use for it: its tag and digest mean nothing there.
 	if svc.Image != "" && e.Image != "" && svc.Image != e.Image {

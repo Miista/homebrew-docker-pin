@@ -106,6 +106,10 @@ func (l Lookup) declared(container string, ref compose.ServiceRef) (Service, boo
 	if err != nil {
 		return Service{}, false, fmt.Errorf("%s: %w", ref.Service, err)
 	}
+	ignored, err := ParseIgnore(labels["duva.ignore"])
+	if err != nil {
+		return Service{}, false, fmt.Errorf("%s: %w", ref.Service, err)
+	}
 
 	return Service{
 		Name:      ref.Service,
@@ -117,6 +121,7 @@ func (l Lookup) declared(container string, ref compose.ServiceRef) (Service, boo
 		Auto:      auto,
 		Soak:      soak,
 		Source:    SourceOf(labels["org.opencontainers.image.source"]),
+		Ignored:   ignored,
 	}, true, nil
 }
 

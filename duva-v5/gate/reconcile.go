@@ -298,7 +298,7 @@ func (r *reconciler) syncServices() (string, bool) {
 	if r.containers == nil {
 		return "nothing to sync from", false
 	}
-	declared, err := declaredServices(r.root)
+	declared, err := declaredServices(r.root, r.labels)
 	if err != nil {
 		// Not a reason to mark anything removed: a file that cannot be read
 		// says nothing about what is declared in it.
@@ -322,7 +322,7 @@ func (r *reconciler) syncServices() (string, bool) {
 	}
 	tracked := 0
 	for _, d := range declared {
-		if d.Pinned {
+		if d.Pinned && !d.Ignored {
 			tracked++
 		}
 	}
@@ -362,7 +362,10 @@ func syncSummary(services, tracked int, changes []q.Change) string {
 // A service whose image cannot be parsed is left out rather than failing
 // the rest: it is still in the file, and a service left out is only removed
 // once its container is gone too.
-func declaredServices(root string) ([]q.Declared, error) {
+//
+// labels reads a container's labels, for duva.ignore; nil reads the compose
+// file's. A service whose labels cannot be read is not counted as ignored.
+func declaredServices(root string, labels func(container string) (map[string]string, bool, error)) ([]q.Declared, error) {
 	index, err := compose.ContainerIndex(root)
 	if err != nil {
 		return nil, err
@@ -379,8 +382,15 @@ func declaredServices(root string) ([]q.Declared, error) {
 		}
 		// The watcher's own test of what it watches, so what "Check…" offers
 		// is what a check covers.
+		var set map[string]string
+		if labels != nil {
+			set, _, _ = labels(container)
+		} else {
+			set, _ = compose.Labels(ref.File, ref.Service)
+		}
+		ignored, _ := q.ParseIgnore(set["duva.ignore"])
 		out = append(out, q.Declared{Container: container, Service: ref.Service, Image: base, Tag: tag,
-			Pinned: strings.Contains(raw, "@sha256:")})
+			Pinned: strings.Contains(raw, "@sha256:"), Ignored: ignored})
 	}
 	return out, nil
 }
