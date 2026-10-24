@@ -1,17 +1,19 @@
-# duva-v5's own GoReleaser config, separate from the root .goreleaser.yaml and
-# from duva-v4's.
+# duva's own GoReleaser config, separate from the root .goreleaser.yaml (the
+# CLI) and from duva-v4's.
 #
-# Its own tag namespace (duva-v5/vX.Y, pushed via
-# .github/workflows/duva-v5-release.yml) for the same reason v4 has one: duva
-# versions independently of docker-pin. Invoked with
-# --config .goreleaser.duva-v5.yaml.
+# Its own tags (duva-vX.Y.Z, pushed via .github/workflows/duva-release.yml):
+# duva versions independently of docker-pin. The workflow strips the prefix
+# and passes the bare version as GORELEASER_CURRENT_TAG, since the
+# open-source GoReleaser only reads plain semver. Invoked with
+# -f .goreleaser.duva.yaml.
 #
 # One build and one image, where v4 had four of each: watch, queue, updater
 # and UI are one process (docs/duva-v5-one-binary.md).
 #
-# GORELEASER_CURRENT_TAG must be set explicitly by the workflow to the pushed
-# tag. Without it, GoReleaser resolves "the current tag" via `git describe`,
-# which picks arbitrarily among tags on the same commit.
+# GORELEASER_CURRENT_TAG must be set explicitly by the workflow. Without it,
+# GoReleaser resolves "the current tag" via `git describe`, which picks
+# arbitrarily among tags on the same commit -- and the CLI's tags can share
+# one.
 version: 2
 
 builds:
@@ -27,7 +29,7 @@ builds:
       - CGO_ENABLED=0
     flags: [-trimpath]
     ldflags:
-      - -s -w -X main.version={{ trimprefix .Tag "duva-v5/" }}
+      - -s -w -X main.version=v{{ .Version }}
 
 archives:
   - id: default
@@ -44,11 +46,16 @@ dockers_v2:
       # so a host still on v4 is untouched until it switches.
       - "ghcr.io/miista/duva"
     tags:
-      - "{{ trimprefix .Tag \"duva-v5/\" }}"
+      - "{{ .Version }}"
       - "latest"
 
+# No GitHub release: the image on ghcr.io is the release, and the releases
+# page stays the CLI's.
 release:
-  name_template: "duva-v5 {{ trimprefix .Tag \"duva-v5/\" }}"
+  disable: true
+
+changelog:
+  disable: true
 
 checksum:
   disable: true

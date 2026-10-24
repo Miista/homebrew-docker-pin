@@ -23,11 +23,11 @@ docker-pin stays. It becomes duva's command-line tool, released with it.
   `dockerapi`), and they keep replacing each other by relative path. No
   second repository, and no cross-repo versions to tag.
 - **One version, one tag: `vX.Y`.** It replaces the CLI's `vX.Y.Z` and
-  `duva-v5/vX.Y`. duva v4 keeps its `duva-v4/vX.Y` tags until it is retired,
+  `duva-vX.Y.Z` (was `duva-v5/vX.Y`). duva v4 keeps its `duva-v4/vX.Y` tags until it is retired,
   as v3's were.
 - **One release pipeline.** A `v*` tag publishes:
   - **the duva image** to `ghcr.io/miista/duva`, for `linux/amd64` and
-    `linux/arm64`, as `.goreleaser.duva-v5.yaml` does today;
+    `linux/arm64`, as `.goreleaser.duva.yaml` does today;
   - **the `docker-pin` and `docker-unpin` binaries** for linux and darwin,
     amd64 and arm64, with their man pages;
   - **the .deb packages to Cloudsmith** (`guldmund/stable`, distribution
@@ -46,7 +46,7 @@ docker-pin stays. It becomes duva's command-line tool, released with it.
 | | |
 |---|---|
 | `release.yml` | on `v*`: genman, GoReleaser (`.goreleaser.yaml`: builds, archives, nfpm .debs, `brews:` into `Formula/`), then a curl loop uploading each .deb to Cloudsmith |
-| `duva-v5-release.yml` | on `duva-v5/v*`: GoReleaser with `.goreleaser.duva-v5.yaml`: the duva binary, and the image to ghcr.io for both arches |
+| `duva-release.yml` | on `duva-v*`: GoReleaser with `.goreleaser.duva.yaml`: the duva binary, and the image to ghcr.io for both arches |
 | `duva-v4-release.yml` | on `duva-v4/v*`: v4's four images |
 | `ci.yml` | tests |
 | `Formula/` | `docker-pin.rb`, `docker-plugins.rb`, written by GoReleaser |
@@ -63,7 +63,7 @@ docker-pin stays. It becomes duva's command-line tool, released with it.
      for the duva image. Drop `brews:`.
    - One `release.yml` on `v*`: genman, GoReleaser, the Cloudsmith upload,
      with ghcr login as today.
-   - Remove `duva-v5-release.yml` and `.goreleaser.duva-v5.yaml`. Keep
+   - Remove `duva-release.yml` and `.goreleaser.duva.yaml`. Keep
      `duva-v4-release.yml` until v4 is retired.
 3. **Rename the repository on GitHub** to `duva`. GitHub redirects the old
    URL for clones and fetches.
