@@ -44,7 +44,7 @@ that as major: a change it cannot measure is not one to make unattended.
 
 ## duva v4
 
-Released under its own `duva-v4/vX.Y` tags, separate from the CLI's `vX.Y.Z`.
+Released under its own `duva-v4/vX.Y` tags, separate from the CLI's.
 See `docs/duva-v4-watch-queue-update.md`.
 
 v4 reads two `duva.*` labels: `duva.auto` (how big a change applies
@@ -95,9 +95,9 @@ build context is the repo root since modules replace siblings by relative path.
 
 ## duva v5
 
-v4's components in one process: `duva serve`. Released under `duva-v5/vX.Y`
-tags as one image, `ghcr.io/miista/duva`. See `docs/duva-v5-one-binary.md`
-and `duva-v5/README.md`.
+v4's components in one process: `duva serve`. Released as one image,
+`ghcr.io/miista/duva`, from `duva-vX.Y.Z` tags (see Releases). See
+`docs/duva-v5-one-binary.md` and `duva-v5/README.md`.
 
 - **The same responsibilities, enforced by packages instead of processes.**
   `watcher`, `gate` (the queue), `updater` and `webui` are the v4 binaries as
@@ -228,6 +228,30 @@ would lock to one. Consequences that are expected, not bugs:
   will not treat them as the same.
 - Docker Hub's "Digest" column shows the per-arch manifest digest, which differs
   from the index digest recorded here.
+
+## Releases
+
+Two products, each with its own version numbers and its own tags; tagging
+one never releases the other. As in homebrew-hemma (`ui-vX.Y.Z`).
+
+| product | tag you push | workflow | publishes |
+|---|---|---|---|
+| docker pin | `cli-vX.Y.Z` | `release.yml` | GitHub release "cli vX.Y.Z", Homebrew formula, debs on Cloudsmith |
+| duva | `duva-vX.Y.Z` | `duva-release.yml` | `ghcr.io/miista/duva:X.Y.Z` and `:latest`; no GitHub release |
+
+- **The open-source GoReleaser reads only plain semver,** so each workflow
+  strips its prefix and passes the bare version as `GORELEASER_CURRENT_TAG`.
+- **The CLI's release also pushes the bare `vX.Y.Z`** on the same commit:
+  Go's module proxy and `go install ...@vX.Y.Z` read only those, and the
+  formula's download URLs are built from it. A tag pushed with the workflow's
+  token starts no workflow, so it cannot release twice; a bare `v*` pushed
+  by hand releases nothing.
+- **duva has no GitHub release:** the image is the release, so the releases
+  page stays the CLI's.
+- **A manual run of either workflow is a dry run:** it builds with the
+  version given and publishes nothing.
+- Older tags (`vX.Y.Z` before `cli-`, `duva-v4/vX.Y`, `duva-v5/v5.0`) stay as
+  they are.
 
 ## Conventions
 

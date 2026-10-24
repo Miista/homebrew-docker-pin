@@ -342,7 +342,7 @@ make build
 make test
 ```
 
-Releases are GoReleaser's, from `duva-v5/vX.Y` tags
-(`../.goreleaser.duva-v5.yaml`). The integration suite builds the same image
+Releases are GoReleaser's, from `duva-vX.Y.Z` tags
+(`../.goreleaser.duva.yaml`), as `ghcr.io/miista/duva:X.Y.Z`. The integration suite builds the same image
 from the same Dockerfile: `go test -tags integration ./test/...` from the
 repository root.
