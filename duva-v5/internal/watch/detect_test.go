@@ -108,6 +108,47 @@ func TestReportsTagsPublishedAfterTheCutoff(t *testing.T) {
 	}
 }
 
+// A finding carries the source its own tag's image names, and the registry is
+// asked only for the tags reported -- not the one before the cutoff, nor the
+// one the include rejects.
+func TestAFindingCarriesItsReleasesSource(t *testing.T) {
+	reg := &fakeRegistry{
+		tags: []string{"1.0.0", "1.1.0", "1.2.0", "nightly"},
+		published: map[string]time.Time{
+			"1.0.0":   at("2026-08-01T00:00:00Z"),
+			"1.1.0":   at("2026-09-05T00:00:00Z"),
+			"1.2.0":   at("2026-09-10T00:00:00Z"),
+			"nightly": at("2026-09-11T00:00:00Z"),
+		},
+	}
+	asked := map[string]bool{}
+	r := reg.registry()
+	r.TagSource = func(_, tag string) (string, error) {
+		asked[tag] = true
+		if tag == "1.2.0" {
+			return "", errors.New("registry down")
+		}
+		return "https://github.com/example/app", nil
+	}
+	res, err := collect(svc("1.0.0", `^\d`, ""), cutoff, r)
+	if err != nil {
+		t.Fatalf("Since: %v", err)
+	}
+	if len(res) != 2 {
+		t.Fatalf("got %d findings, want 2: %+v", len(res), res)
+	}
+	if res[0].Source != "https://github.com/example/app" {
+		t.Errorf("1.1.0 source = %q", res[0].Source)
+	}
+	// A registry that cannot say costs the link, not the finding.
+	if res[1].Tag != "1.2.0" || res[1].Source != "" {
+		t.Errorf("1.2.0 = %+v, want it reported with no source", res[1])
+	}
+	if asked["1.0.0"] || asked["nightly"] {
+		t.Errorf("asked for tags that were not reported: %v", asked)
+	}
+}
+
 // Every qualifying tag is handed to the callback, once each.
 //
 // That it happens *during* the check rather than at the end is what makes a

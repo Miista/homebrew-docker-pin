@@ -41,6 +41,27 @@ func declaresImage(image, tag, digest string) Service {
 	return svc
 }
 
+// An entry's source is its release's, read from the registry when it was
+// found. The running container carries the release before, and replacing it on
+// every recheck would undo exactly what the registry was asked for.
+func TestRecheckKeepsTheReleasesSource(t *testing.T) {
+	const up, wrap = "https://github.com/cloudflare/cloudflared", "https://github.com/Miista/cloudflared-wrapper"
+	for _, c := range []struct{ name, entry, running, want string }{
+		{"the release's survives a container that says otherwise", up, wrap, up},
+		{"the release's survives a container that says nothing", up, "", up},
+		{"an entry without one gains the container's", "", wrap, wrap},
+	} {
+		e := versionEntry("v7.8", "v7.9")
+		e.Source = c.entry
+		svc := declaresImage("ghcr.io/miista/duva-watch", "v7.8", d1)
+		svc.Source = c.running
+		r := RecheckEntry(e, svc)
+		if !r.Keep || r.Entry.Source != c.want {
+			t.Errorf("%s: kept = %v, source = %q, want %q", c.name, r.Keep, r.Entry.Source, c.want)
+		}
+	}
+}
+
 // The question used to be only "has it been done". These are the cases where
 // it had not been, and the entry still should not have been offered.
 func TestRecheckEntry(t *testing.T) {

@@ -192,11 +192,60 @@ func dockerHubTagCreated(baseImage, tag string) (time.Time, error) {
 // service take a minute and a half to check, and made a scheduled run look
 // like a flood to the resolver.
 func ociTagCreated(client *http.Client, baseURL, repo, tag string) (time.Time, error) {
+	cfg, err := ociTagConfig(client, baseURL, repo, tag)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if cfg.Created.IsZero() {
+		return time.Time{}, fmt.Errorf("image config for %s:%s carries no created timestamp", repo, tag)
+	}
+	return cfg.Created, nil
+}
+
+// TagSource returns the org.opencontainers.image.source label a tag's image
+// carries: where its publisher says its source, and so its release notes, live.
+// Empty when the image does not say.
+//
+// Read from the registry, not from a running container, because a container
+// has only the labels of the image it was created from: the release being
+// offered is the one whose label matters, and the container is running the
+// release before it.
+//
+// Only registries the config blob can be reached on. Docker Hub's date comes
+// from its own API, which does not carry labels, so reading one there would be
+// two more requests per tag; it reports none, and the caller falls back to
+// what the running container says.
+func TagSource(baseImage, tag string) (string, error) {
+	if isDockerHub(baseImage) {
+		return "", nil
+	}
+	host, repo := splitRegistryRepo(baseImage)
+	if host == "" {
+		return "", fmt.Errorf("could not determine registry host from %q", baseImage)
+	}
+	cfg, err := ociTagConfig(httpClient(), "https://"+host, repo, tag)
+	if err != nil {
+		return "", err
+	}
+	return cfg.Labels["org.opencontainers.image.source"], nil
+}
+
+// tagConfig is the part of an image config this package reads.
+type tagConfig struct {
+	Created time.Time
+	Labels  map[string]string
+}
+
+// ociTagConfig walks manifest (or index -> first sub-manifest) -> config blob
+// for any OCI Distribution registry, including GHCR, and returns what is read
+// from it. A multi-arch index's sub-manifests are built together, so the first
+// real one's labels stand for the tag.
+func ociTagConfig(client *http.Client, baseURL, repo, tag string) (tagConfig, error) {
 	token, _ := pullToken(client, baseURL, repo)
 
 	manifest, err := ociGetJSONAuth(client, fmt.Sprintf("%s/v2/%s/manifests/%s", baseURL, repo, tag), manifestAccept, token)
 	if err != nil {
-		return time.Time{}, err
+		return tagConfig{}, err
 	}
 	var m struct {
 		MediaType string `json:"mediaType"`
@@ -211,7 +260,7 @@ func ociTagCreated(client *http.Client, baseURL, repo, tag string) (time.Time, e
 		} `json:"config"`
 	}
 	if err := json.Unmarshal(manifest, &m); err != nil {
-		return time.Time{}, err
+		return tagConfig{}, err
 	}
 	if m.Config.Digest == "" {
 		// Multi-arch index: descend into the first real (non-attestation) manifest.
@@ -223,33 +272,33 @@ func ociTagCreated(client *http.Client, baseURL, repo, tag string) (time.Time, e
 			}
 		}
 		if sub == "" {
-			return time.Time{}, fmt.Errorf("manifest for %s has no config and no sub-manifests", tag)
+			return tagConfig{}, fmt.Errorf("manifest for %s has no config and no sub-manifests", tag)
 		}
 		manifest, err = ociGetJSONAuth(client, fmt.Sprintf("%s/v2/%s/manifests/%s", baseURL, repo, sub), manifestAccept, token)
 		if err != nil {
-			return time.Time{}, err
+			return tagConfig{}, err
 		}
 		if err := json.Unmarshal(manifest, &m); err != nil {
-			return time.Time{}, err
+			return tagConfig{}, err
 		}
 		if m.Config.Digest == "" {
-			return time.Time{}, fmt.Errorf("sub-manifest for %s has no config", tag)
+			return tagConfig{}, fmt.Errorf("sub-manifest for %s has no config", tag)
 		}
 	}
 	blob, err := ociGetJSONAuth(client, fmt.Sprintf("%s/v2/%s/blobs/%s", baseURL, repo, m.Config.Digest), "", token)
 	if err != nil {
-		return time.Time{}, err
+		return tagConfig{}, err
 	}
 	var cfg struct {
 		Created time.Time `json:"created"`
+		Config  struct {
+			Labels map[string]string `json:"Labels"`
+		} `json:"config"`
 	}
 	if err := json.Unmarshal(blob, &cfg); err != nil {
-		return time.Time{}, err
+		return tagConfig{}, err
 	}
-	if cfg.Created.IsZero() {
-		return time.Time{}, fmt.Errorf("image config for %s:%s carries no created timestamp", repo, tag)
-	}
-	return cfg.Created, nil
+	return tagConfig{Created: cfg.Created, Labels: cfg.Config.Labels}, nil
 }
 
 func ociGetJSON(client *http.Client, url, accept string) ([]byte, error) {

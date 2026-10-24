@@ -135,6 +135,7 @@ func (h *Handler) Handle(n Notice) Result {
 
 	case Apply:
 		e := EntryFrom(v, svc, digestFor(v, n))
+		e.Source = PreferSource(n.Source, svc.Source)
 		// Queued before the attempt, not after a failure: an apply that never
 		// finishes -- a crash, a pull that times out against a rate-limited
 		// registry -- must still leave the entry somewhere a person or the
@@ -205,6 +206,7 @@ func (h *Handler) Handle(n Notice) Result {
 
 	default: // Queue
 		e := EntryFrom(v, svc, digestFor(v, n))
+		e.Source = PreferSource(n.Source, svc.Source)
 		e.Published = published(n)
 		// duva.defer says when the next action happens, whatever it is. Here
 		// it is showing a person, so the release is held -- Upcoming on the

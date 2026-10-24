@@ -20,6 +20,21 @@ func SourceOf(label string) string {
 	return u.String()
 }
 
+// PreferSource is the source to record for a release: the one its own image
+// names, else the one the running container does.
+//
+// The release's first. A container has only the labels of the image it was
+// created from, which is the release before this one: it says nothing until
+// something has been updated to an image that carries the label, and then is
+// one release behind a publisher who changes it. Both are held to SourceOf,
+// so the registry's word is no more trusted than the container's.
+func PreferSource(release, running string) string {
+	if s := SourceOf(release); s != "" {
+		return s
+	}
+	return SourceOf(running)
+}
+
 // ReleaseNotes is where a person reads what a release changes, from the
 // repository its image names, as the places to try in order: the last is
 // always there to fall back to.

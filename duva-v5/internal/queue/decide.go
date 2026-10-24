@@ -42,6 +42,10 @@ type Notice struct {
 	// Published is when the release appeared upstream. Zero when the watcher
 	// did not say, which a soak counts from now instead.
 	Published time.Time
+	// Source is the release's own org.opencontainers.image.source label, as
+	// the watcher read it from the registry. Empty when it did not say, which
+	// leaves the running container's. Not trusted: see SourceOf.
+	Source string
 }
 
 // Service is what the compose file declares for one service: the tag it

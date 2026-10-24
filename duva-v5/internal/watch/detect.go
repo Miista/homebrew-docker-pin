@@ -47,6 +47,24 @@ type Registry struct {
 	// following a moving tag, which is the one case where the answer is the
 	// finding rather than a detail of it.
 	TagDigest func(baseImage, tag string) (string, error)
+	// TagSource is the org.opencontainers.image.source label of a tag's
+	// image, empty when it does not say. Optional: nil, or an error, leaves a
+	// finding without one, which only costs it the release-notes link.
+	// Called for the findings that are reported and no others, so a
+	// repository with hundreds of tags does not cost hundreds of calls.
+	TagSource func(baseImage, tag string) (string, error)
+}
+
+// sourceOf is what the image behind a finding says about where its source
+// lives. A registry that cannot say is not a reason to withhold the finding.
+func (r Registry) sourceOf(f Finding) Finding {
+	if r.TagSource == nil {
+		return f
+	}
+	if src, err := r.TagSource(f.Image, f.Tag); err == nil {
+		f.Source = src
+	}
+	return f
 }
 
 // DatedTag is a tag, and when it was published if that was known for free.
@@ -106,6 +124,10 @@ type Finding struct {
 	// digest has changed. Empty for a new tag, where the consumer has a tag
 	// to move to and needs nothing resolved.
 	Digest string
+	// Source is the image's org.opencontainers.image.source label, read from
+	// the registry for the release itself. Empty when it does not say or the
+	// registry could not be asked.
+	Source string
 }
 
 // A failure is returned rather than reported as an absence: a registry that
@@ -221,7 +243,7 @@ func since(svc Service, cutoff time.Time, atLeastOne bool, reg Registry, found f
 			continue
 		}
 		reported++
-		found(f)
+		found(reg.sourceOf(f))
 	}
 
 	// Nothing was new enough, and this service has never been checked. Report
@@ -258,7 +280,7 @@ func since(svc Service, cutoff time.Time, atLeastOne bool, reg Registry, found f
 	// which proves the check reached the repository but leaves no candidate --
 	// and reporting the zero value there would send an empty finding.
 	if atLeastOne && reported == 0 && !newestAt.IsZero() {
-		found(newest)
+		found(reg.sourceOf(newest))
 	}
 	return nil
 }
@@ -321,13 +343,13 @@ func sinceMoved(svc Service, reg Registry, found func(Finding)) error {
 	if digest == svc.Digest {
 		return nil
 	}
-	found(Finding{
+	found(reg.sourceOf(Finding{
 		Service:   svc.Name,
 		Container: svc.Container,
 		Image:     svc.Image,
 		Tag:       svc.Tag,
 		Digest:    digest,
-	})
+	}))
 	return nil
 }
 

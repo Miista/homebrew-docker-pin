@@ -24,6 +24,23 @@ func TestSourceOf(t *testing.T) {
 	}
 }
 
+// The release's own label wins over the running container's, which is the
+// previous release's and, for an image first labelled in this release, empty.
+func TestPreferSource(t *testing.T) {
+	const up, wrap = "https://github.com/cloudflare/cloudflared", "https://github.com/Miista/cloudflared-wrapper"
+	for _, c := range []struct{ name, release, running, want string }{
+		{"the release's", up, wrap, up},
+		{"the container's when the release says nothing", "", wrap, wrap},
+		{"the release's when the container says nothing", up, "", up},
+		{"the container's when the release's is not a link", "javascript:alert(1)", wrap, wrap},
+		{"neither", "", "", ""},
+	} {
+		if got := PreferSource(c.release, c.running); got != c.want {
+			t.Errorf("%s: PreferSource(%q, %q) = %q, want %q", c.name, c.release, c.running, got, c.want)
+		}
+	}
+}
+
 func TestReleaseNotes(t *testing.T) {
 	const pl = "https://github.com/paperless-ngx/paperless-ngx"
 	for _, c := range []struct {

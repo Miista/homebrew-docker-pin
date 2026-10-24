@@ -264,6 +264,9 @@ func run(log zerolog.Logger, only string, back time.Duration, opts Options) (err
 		// For a service following a moving tag: what does it point at now.
 		// One request, and the only one such a service needs.
 		TagDigest: registry.RemoteDigest,
+		// The release's own source label, for the finding it is reported
+		// with: the running container carries the previous release's.
+		TagSource: registry.TagSource,
 	}
 
 	report := opts.Report

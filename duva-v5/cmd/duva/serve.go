@@ -212,6 +212,7 @@ func hand(g handler, f watch.Finding) bool {
 		Image:     f.Image + ":" + f.Tag,
 		Digest:    f.Digest,
 		Published: f.Published,
+		Source:    f.Source,
 	})
 	return res.Status < http.StatusInternalServerError
 }

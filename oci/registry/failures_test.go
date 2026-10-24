@@ -161,6 +161,49 @@ func TestOCITagCreated_DescendsMultiArchIndexSkippingAttestations(t *testing.T) 
 	}
 }
 
+// The source label is read from the same config blob the date is, through the
+// same index descent, so a release's own label is known without a container.
+func TestOCITagConfig_ReadsSourceLabelThroughMultiArchIndex(t *testing.T) {
+	const (
+		realImage  = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+		configBlob = "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+	)
+	for name, blob := range map[string]string{
+		"labelled":   `{"created":"2026-01-15T10:00:00Z","config":{"Labels":{"org.opencontainers.image.source":"https://github.com/cloudflare/cloudflared"}}}`,
+		"unlabelled": `{"created":"2026-01-15T10:00:00Z","config":{}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case strings.HasSuffix(r.URL.Path, "/manifests/1.0.0"):
+					w.Header().Set("Content-Type", "application/vnd.oci.image.index.v1+json")
+					fmt.Fprintf(w, `{"manifests":[{"digest":%q,"platform":{"architecture":"amd64","os":"linux"}}]}`, realImage)
+				case strings.HasSuffix(r.URL.Path, "/manifests/"+realImage):
+					w.Header().Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
+					fmt.Fprintf(w, `{"config":{"digest":%q}}`, configBlob)
+				case strings.HasSuffix(r.URL.Path, "/blobs/"+configBlob):
+					fmt.Fprint(w, blob)
+				default:
+					http.Error(w, "unexpected "+r.URL.Path, http.StatusNotFound)
+				}
+			}))
+			defer srv.Close()
+
+			cfg, err := ociTagConfig(srv.Client(), srv.URL, "foo/bar", "1.0.0")
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			want := cfg.Labels["org.opencontainers.image.source"]
+			if (name == "labelled") != (want != "") {
+				t.Errorf("source label = %q", want)
+			}
+			if name == "labelled" && want != "https://github.com/cloudflare/cloudflared" {
+				t.Errorf("source label = %q", want)
+			}
+		})
+	}
+}
+
 // An index with nothing but attestations has no date to report; saying so
 // beats returning a zero time that reads as 1 January year 1.
 func TestOCITagCreated_IndexWithOnlyAttestations(t *testing.T) {

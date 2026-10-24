@@ -50,10 +50,12 @@ type Recheck struct {
 //
 // Pure, like Decide: the caller reads the compose file.
 func RecheckEntry(e Entry, svc Service) Recheck {
-	// Where the image says its source lives, as the container says now: so
-	// an entry queued before it was recorded gains it, and one whose image
-	// changed its say follows.
-	e.Source = svc.Source
+	// Where the image says its source lives. The entry's own, when it has
+	// one, is the release's -- read from the registry when it was found --
+	// and the container, which runs the release before, must not replace it.
+	// An entry without one gains the container's, so one queued before it
+	// was recorded still links its notes.
+	e.Source = PreferSource(e.Source, svc.Source)
 	// Ignored: nothing for it waits, whatever it was.
 	if svc.Ignored {
 		return Recheck{Why: "ignored: duva.ignore is true"}
