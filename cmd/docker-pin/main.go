@@ -1,6 +1,8 @@
 package main
 
 import (
+	_ "crypto/sha256"
+
 	"fmt"
 	"io"
 	"os"
@@ -14,10 +16,13 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/Miista/homebrew-docker-pin/internal/compose"
+	"github.com/opencontainers/go-digest"
+
+	"github.com/Miista/homebrew-docker-pin/compose"
 	"github.com/Miista/homebrew-docker-pin/internal/docker"
 	"github.com/Miista/homebrew-docker-pin/internal/help"
-	"github.com/Miista/homebrew-docker-pin/internal/registry"
+	pinpkg "github.com/Miista/homebrew-docker-pin/internal/pin"
+	"github.com/Miista/homebrew-docker-pin/oci/registry"
 )
 
 const (
@@ -78,11 +83,6 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
-	case "schedule":
-		if err := runSchedule(args[1:], realDocker, realSys); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
 	case "list":
 		if err := runList(args[1:]); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -107,12 +107,6 @@ func maybeHelp(args []string) bool {
 	topic := ""
 	if want && len(args) > 1 {
 		topic = args[1]
-		if topic == "schedule" && len(args) > 2 {
-			switch args[2] {
-			case "apply", "status", "remove", "run":
-				topic = "schedule " + args[2]
-			}
-		}
 	}
 	for _, a := range args {
 		if a == "-h" || a == "--help" {
@@ -126,14 +120,6 @@ func maybeHelp(args []string) bool {
 		switch args[0] {
 		case "upgrade", "list", "version":
 			topic = args[0]
-		case "schedule":
-			topic = "schedule"
-			if len(args) > 1 {
-				switch args[1] {
-				case "apply", "status", "remove", "run":
-					topic = "schedule " + args[1]
-				}
-			}
 		case "help":
 			// bare `help`: fall through to full usage
 		case "-h", "--help":
@@ -327,16 +313,46 @@ func pinInFile(composeFile, service string, d dockerFuncs, dryRun bool) (pinOutc
 		return pinOutcome{OldRaw: raw, NewRaw: raw, Tag: tag, Built: true}, nil
 	}
 
+	// An unexpanded variable means the file says `image: nginx:${TAG}`, and
+	// docker pin reads the file as text -- compose would substitute it from
+	// .env or the environment, but nothing does that here.
+	//
+	// Not pinnable either way: the pull fails at the daemon with "invalid
+	// reference format". Caught here so the message names the service and the
+	// cause instead of arriving from docker several steps later, and so no
+	// pull is attempted for something that cannot succeed.
+	if compose.HasUnexpandedVariable(raw) {
+		return pinOutcome{}, fmt.Errorf(
+			"%s has an unexpanded variable in its image (%s): "+
+				"docker pin reads the compose file as written, so the value must be a literal reference",
+			service, raw)
+	}
+
 	if !dryRun {
 		fmt.Printf("Read tag from compose file: %s\n", tag)
 	}
 
 	if strings.Contains(raw, "@sha256:") {
+		// Carrying a digest is not the same as carrying a usable one. Reporting
+		// "already pinned" for `nginx:1.25@sha256:abc` is the worst answer
+		// available: the command whose job is to guarantee a pin says the work
+		// is done, exits 0, and leaves a reference the daemon rejects outright.
+		//
+		// An error rather than a silent re-pin, because overwriting it would
+		// discard something a person wrote -- and the fix is one they should
+		// choose. `docker unpin` strips it, `docker pin upgrade` replaces it;
+		// both work on a malformed digest today.
+		if d := compose.DigestOf(raw); digest.Digest(d).Validate() != nil {
+			return pinOutcome{}, fmt.Errorf(
+				"%s is pinned to %s, which is not a valid digest and cannot be pulled: "+
+					"`docker unpin %s` to strip it, or `docker pin upgrade %s <version>` to replace it",
+				service, d, service, service)
+		}
 		if !dryRun {
 			fmt.Printf("%s is already pinned to %s\n", service, raw)
 			fmt.Println("Run `docker unpin` first, or `docker pin upgrade` to move to a new version.")
 		}
-		return pinOutcome{OldRaw: raw, NewRaw: raw, Tag: tag, Digest: digestOf(raw), AlreadyPinned: true}, nil
+		return pinOutcome{OldRaw: raw, NewRaw: raw, Tag: tag, Digest: compose.DigestOf(raw), AlreadyPinned: true}, nil
 	}
 
 	pullRef := baseImage + ":" + tag
@@ -457,7 +473,7 @@ func listInFile(composeFile string, missing, quiet bool, out io.Writer) (unpinne
 		if err != nil {
 			return 0, err
 		}
-		digest := digestOf(raw)
+		digest := compose.DigestOf(raw)
 		r := row{service: service, base: base, tag: tag, digest: digest, pinned: digest != ""}
 		if !r.pinned {
 			unpinned++
@@ -690,13 +706,13 @@ func upgradeAll(d dockerFuncs, dryRun bool, concurrency int) error {
 		fmt.Fprintln(w, "SERVICE\tACTION\tTAG\tSHA")
 		for _, r := range results {
 			action := "none"
-			tag := tagOf(r.outcome.OldRaw)
+			tag := compose.TagOf(r.outcome.OldRaw)
 			switch {
 			case r.outcome.Built:
 				action = "built"
 			case r.outcome.Changed:
 				action = "upgrade"
-				if newTag := tagOf(r.outcome.NewRaw); newTag != tag {
+				if newTag := compose.TagOf(r.outcome.NewRaw); newTag != tag {
 					tag = tag + " -> " + newTag
 				}
 			}
@@ -731,18 +747,8 @@ func upgrade(service, targetVersion string, d dockerFuncs, dryRun bool) (upgrade
 
 // upgradeOutcome describes what an upgradeInFile call did (or, in dry-run
 // mode, would have done).
-type upgradeOutcome struct {
-	OldRaw string
-	NewRaw string
-	// Tag and Digest are the tag and digest the service is (or would be)
-	// pinned to.
-	Tag, Digest string
-	// Changed is true when the pin moved (or would move, in a dry run).
-	Changed bool
-	// Built is true when the service is built locally (build:) and so was
-	// skipped -- there is no registry to check for a newer image.
-	Built bool
-}
+// upgradeOutcome is pinpkg.Outcome under the name the CLI code already uses.
+type upgradeOutcome = pinpkg.Outcome
 
 // upgradeInFile pulls the target (or discovered moving) tag and pins service
 // to the pulled digest. With dryRun it does everything except rewrite the
@@ -788,7 +794,7 @@ func upgradeInFile(composeFile, service, targetVersion string, d dockerFuncs, dr
 // pinned image computed by computeUpgrade. Kept separate from computeUpgrade
 // so callers (e.g. upgradeAll) can apply the file writes sequentially.
 func applyUpgrade(composeFile, service string, outcome upgradeOutcome) error {
-	return compose.PinImage(composeFile, service, outcome.NewRaw)
+	return pinpkg.Apply(composeFile, service, outcome)
 }
 
 // resolvePullRef works out which image ref to pull for service: either the
@@ -804,6 +810,14 @@ func resolvePullRef(composeFile, service, targetVersion string, dryRun, quiet bo
 	baseImage, currentTag, err := compose.ParseImage(composeFile, service)
 	if err != nil {
 		return "", "", err
+	}
+	// Everything downstream resolves this reference -- pulls it, or asks a
+	// registry which tags it has. Neither works on the literal "${TAG}".
+	if compose.HasUnexpandedVariable(baseImage + ":" + currentTag) {
+		return "", "", fmt.Errorf(
+			"%s has an unexpanded variable in its image (%s:%s): "+
+				"docker pin reads the compose file as written, so the value must be a literal reference",
+			service, baseImage, currentTag)
 	}
 
 	pullTag := targetVersion
@@ -831,54 +845,16 @@ func resolvePullRef(composeFile, service, targetVersion string, dryRun, quiet bo
 // are computed concurrently and immediate prints would interleave with a
 // shared progress counter.
 func computeUpgrade(composeFile, service, pullRef string, d dockerFuncs, dryRun, quiet bool) (outcome upgradeOutcome, err error) {
-	baseImage, currentTag, err := compose.ParseImage(composeFile, service)
+	out, err := pinpkg.Compute(composeFile, service, pullRef, pinpkg.Docker{GetDigest: d.getDigest, Pull: d.pull})
 	if err != nil {
-		return upgradeOutcome{}, err
+		return out, err
 	}
-
-	oldRaw, err := compose.RawImage(composeFile, service)
-	if err != nil {
-		return upgradeOutcome{}, err
+	if out.Built && !dryRun && !quiet {
+		fmt.Printf("%s is built locally (build:), nothing to upgrade\n", service)
 	}
-	outcome = upgradeOutcome{OldRaw: oldRaw, NewRaw: oldRaw, Tag: currentTag, Digest: digestOf(oldRaw)}
-
-	digest, err := d.getDigest(pullRef)
-	if err != nil {
-		return outcome, err
+	if !out.Changed && !out.Built && !dryRun && !quiet {
+		fmt.Printf("%s: up to date — %s still points at the pinned digest (%s)\n",
+			service, pullRef, compose.ShortDigest(out.Digest))
 	}
-
-	if oldDigest := digestOf(oldRaw); oldDigest != "" && oldDigest == digest {
-		if !dryRun && !quiet {
-			fmt.Printf("%s: up to date — %s still points at the pinned digest (%s)\n", service, pullRef, shortDigest(oldDigest))
-		}
-		return outcome, nil
-	}
-
-	pullTag := strings.TrimPrefix(pullRef, baseImage+":")
-	pinned := fmt.Sprintf("%s:%s@%s", baseImage, pullTag, digest)
-	outcome.NewRaw = pinned
-	outcome.Tag = pullTag
-	outcome.Digest = digest
-	outcome.Changed = true
-	return outcome, nil
-}
-
-func digestOf(image string) string {
-	if i := strings.Index(image, "@"); i != -1 {
-		return image[i+1:]
-	}
-	return ""
-}
-
-// tagOf extracts the tag from a "base:tag" or "base:tag@sha256:..." image
-// reference, for display purposes (e.g. summarizing what a moving tag like
-// "latest" actually resolved to).
-func tagOf(image string) string {
-	if i := strings.Index(image, "@"); i != -1 {
-		image = image[:i]
-	}
-	if i := strings.LastIndex(image, ":"); i != -1 {
-		return image[i+1:]
-	}
-	return ""
+	return out, nil
 }

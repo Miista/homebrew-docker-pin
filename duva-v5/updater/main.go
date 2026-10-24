@@ -1,0 +1,276 @@
+// updater applies what a queue decided.
+//
+// It is the reference implementation of the contract in internal/actor: pull
+// the image, write the digest into the compose file, recreate the container,
+// commit, push. Another updater answering the same two calls -- one that opens
+// a pull request, one that hands the work to Ansible -- would be a valid
+// replacement, and the queue could not tell the difference.
+//
+// Everything it holds, it holds because applying needs it:
+//
+//	/compose                  the repository, read-write: the pin is rewritten here
+//	/var/run/docker.sock      to pull and to replace a container
+//
+// Configuration, through internal/settings (DUVA_SETTING_<KEY>):
+//
+//	repo             the repository, mounted at the path it has on the
+//	                 host. Required: nothing can guess it.
+//	compose_dir      where the compose file is within it. Left out when it
+//	                 is at the repository root.
+//	commit_template  what a change is committed under
+//	git.push         publish commits (default off)
+//	log_level        trace/debug/info/warn/error
+package updater
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	// The timezone database, embedded in the binary. Go reads TZ on its
+	// own, but resolves a name like Europe/Copenhagen against the host's
+	// /usr/share/zoneinfo -- which a scratch image does not carry, so TZ
+	// would be silently ignored and every timestamp would stay UTC:
+	// every line it streams is timestamped by the log, and an operator watching an apply wants their own clock.
+	_ "time/tzdata"
+
+	"github.com/rs/zerolog"
+
+	"github.com/Miista/homebrew-docker-pin/compose"
+	"github.com/Miista/homebrew-docker-pin/dockerapi"
+
+	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/settings"
+	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/update"
+)
+
+var Version = "dev"
+
+// addr is where the updater listens. Fixed rather than configurable: it is
+// reached by container name on the host's own network, and nothing outside
+// addresses it.
+const addr = ":8080"
+
+// repoDir is the repository this stage works in.
+//
+// The repository, not the project: this is the stage that commits, and a
+// commit needs the whole of it. The watcher and the queue mount the project
+// alone, because reading compose files is all they do.
+//
+// It must be mounted at the SAME path it has on the host. A relative bind in
+// the compose file resolves against it, and the daemon then has to find that
+// path on the host -- with the two differing there is no single answer, since
+// a bind needs the host's path and an `include:` needs this container's, and
+// with them equal both are the same string.
+var repoDir = settings.Value(settings.Repo)
+
+// projectFile is the compose file this stage works through: the repo setting
+// is the repository, compose_dir is where within it the compose file is, and
+// it must be exactly there.
+func projectFile() (string, error) {
+	// The repository is required, with no default. Nothing can guess the path
+	// it has on the host, and an updater pointed at the wrong repository
+	// behaves exactly like one pointed at the right repository -- until a
+	// commit lands somewhere nobody expected.
+	if repoDir == "" {
+		return "", fmt.Errorf("%s is not set: it must be the repository, "+
+			"mounted at the same path it has on the host", settings.EnvVar(settings.Repo))
+	}
+	// The path is {repo}/{compose dir}, and the compose directory is left out
+	// when the compose file is at the root of the repository -- which is the
+	// ordinary case for a repository that holds one project.
+	sub := settings.Value(settings.ComposeDir)
+	if sub == "" {
+		return compose.FileIn(repoDir)
+	}
+	if filepath.IsAbs(sub) {
+		return "", fmt.Errorf("%s must be relative to %s, got %q", settings.EnvVar(settings.ComposeDir), repoDir, sub)
+	}
+	dir := filepath.Join(repoDir, sub)
+	// Join cleans ".." away rather than erroring, so a value trying to escape
+	// would otherwise resolve quietly to somewhere else.
+	rel, err := filepath.Rel(repoDir, dir)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("%s %q escapes %s", settings.EnvVar(settings.ComposeDir), sub, repoDir)
+	}
+	// Down only, never up. The subdirectory descends -- an absolute or
+	// ..-escaping value is refused above -- and FileIn consults no parent. A
+	// walk upwards would leave the project it was pointed at and find the
+	// repository root, or climb out of the mount entirely, and answer with a
+	// compose file belonging to something else. That answer looks like a
+	// right one, which is what makes it worth refusing.
+	return compose.FileIn(dir)
+}
+
+// New is the updater, checked and ready to apply: the repository is mounted,
+// writable and owned as it must be, and the commit template renders.
+//
+// Serving it is the caller's choice. As its own process it answers HTTP; in
+// duva v5's one process, the queue calls Local() instead.
+//
+// blocked is the blocklist, asked once a release's digest is known; nil
+// blocks nothing.
+func New(log zerolog.Logger, blocked func(image, digest string) (string, bool)) (*Server, error) {
+	push, tmpl, err := setup()
+	if err != nil {
+		return nil, err
+	}
+	if !push {
+		log.Info().Msg(settings.EnvVar(settings.GitPush) + " is off: commits stay local")
+	}
+	return &Server{
+		Version:    Version,
+		Log:        log,
+		Ready:      readiness,
+		Applicable: applicable,
+		IsSelf:     isSelf,
+		HandOff:    handOff,
+		Apply: func(req update.Request, step func(string, ...any)) (update.Status, string) {
+			d := realDocker
+			d.Blocked = blocked
+			return transaction(req, step, d, realGit, push, tmpl)
+		},
+	}, nil
+}
+
+// SelfUpdate is the helper's whole life, started as `duva self-update`: see
+// selfUpdate.
+func SelfUpdate(args []string) error {
+	level, _ := settings.String(settings.LogLevel, "")
+	return selfUpdate(newLogger(level), args)
+}
+
+// ProjectFile is the compose file the updater rewrites: the repo setting, and
+// compose_dir within it. In one process it is the project every
+// component reads.
+func ProjectFile() (string, error) { return projectFile() }
+
+// setup is what the updater and a self-update helper both check before taking
+// work, and the configuration both work under.
+func setup() (push bool, tmpl string, err error) {
+	// Before anything else: an updater that cannot write where the pins live
+	// would take work, do most of it, and fail at the step that matters. The
+	// same reasoning as duva's preflight -- discovering it later means
+	// discovering it after a container was already replaced.
+	//
+	// Which is also why the project is resolved here rather than at the first
+	// apply: the repo, and the compose file within it, are required,
+	// and a process that started happily and then refused every request is a
+	// worse way to learn that than one that never started.
+	if _, err := projectFile(); err != nil {
+		return false, "", err
+	}
+	if err := preflight(repoDir); err != nil {
+		return false, "", err
+	}
+
+	if push, err = settings.Bool(settings.GitPush, false); err != nil {
+		return false, "", err
+	}
+
+	// Loaded once, at startup, and a bad one refuses to start. A template
+	// that does not parse would otherwise be discovered by an apply -- after
+	// a container had already been replaced -- and the failure would be a
+	// commit nobody made rather than a container nobody expected.
+	tmpl, err = loadCommitTemplate()
+	if err != nil {
+		return false, "", fmt.Errorf("the commit template: %w", err)
+	}
+	commitTemplate = tmpl
+	if _, err := commitSubject(tmpl, commitFields{Host: settings.HostName(), Container: "probe", NewVersion: "1"}); err != nil {
+		return false, "", fmt.Errorf("the commit template: %w", err)
+	}
+	return push, tmpl, nil
+}
+
+// writable reports whether this process can write in dir.
+//
+// By writing rather than by reading permission bits: the question is "can
+// this process write here", and ownership, mode, ACLs and a read-only mount
+// are four different ways for the answer to be no.
+func writable(dir string) error {
+	info, err := os.Stat(dir)
+	if err != nil {
+		return fmt.Errorf("the repository is mounted at %s, which cannot be read: %w", dir, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%s is not a directory", dir)
+	}
+	probe, err := os.CreateTemp(dir, ".actor-preflight-*")
+	if err != nil {
+		return fmt.Errorf(
+			"the repository at %s is not writable: %w\n"+
+				"  Applying rewrites the pin in the compose file, so a read-only mount "+
+				"or a directory owned by another user leaves this able to pull and "+
+				"recreate but not to record what it did.", dir, err)
+	}
+	name := probe.Name()
+	probe.Close()
+	return os.Remove(name)
+}
+
+// readiness reports whether this updater would take work right now.
+//
+// Uncommitted edits are not asked about: they block only an apply to the file
+// they are in, which is per service, so the transaction refuses that one with
+// the file named. Greying every row for one edited file is what stopped a
+// whole host while one compose file was being worked on.
+//
+// A busy repository reads as ready: someone is mid-commit, it will be quiet
+// in a moment, and greying every button for that would be noise. The
+// transaction retries it by design.
+func readiness() update.Readiness {
+	_, err := realGit.IsClean(repoDir, repoDir)
+	if err != nil && !errors.Is(err, errRepoBusy) {
+		return update.Readiness{
+			Ready:  false,
+			Reason: fmt.Sprintf("the repository at %s cannot be read: %v", repoDir, err),
+		}
+	}
+
+	// Would the commit this is going to write be accepted? Asked here rather
+	// than discovered after a container has been replaced: leaving a running
+	// container the repository does not record is the divergence this tool
+	// exists to prevent, and a rollback at that point would mean tearing down
+	// a healthy service over a commit message.
+	if err := checkMessageAccepted(repoDir, commitTemplate); err != nil {
+		return update.Readiness{Ready: false, Reason: err.Error()}
+	}
+	return update.Readiness{Ready: true}
+}
+
+// applicable reports whether this updater would act on one service.
+//
+// One reason, and it is this updater's: the container is not running. A
+// service somebody stopped is not one to update -- recreating it would start
+// it again, which is the service coming back on its own as a side effect of an
+// image update, and nobody asked for that.
+//
+// The finding is not lost. The queue declines to enqueue it while this says
+// no, and enqueues it -- announcing it -- the first time this says yes, so a
+// service that comes back reports what accumulated while it was down.
+//
+// A daemon that cannot be asked answers yes. The alternative would silently
+// stop queueing everything whenever the socket is unavailable, which is work
+// disappearing with nothing to say so; an updater that cannot reach its daemon
+// is already visible as not ready.
+// A variable so a test can answer it without a docker daemon, the same way
+// resolveFile is swapped for a lookup that needs no repository.
+var applicable = func(service string) update.Applicable {
+	running, err := dockerapi.Running(service)
+	if err != nil {
+		return update.Applicable{Applicable: true}
+	}
+	if !running {
+		return update.Applicable{
+			Applicable: false,
+			Reason:     "its container is not running, and updating it would start it",
+		}
+	}
+	return update.Applicable{Applicable: true}
+}
+
+// commitTemplate is what readiness checks against and what an apply commits
+// under. Set once at startup so the two cannot differ: a readiness check that
+// validated a different template from the one used would be worse than none.
+var commitTemplate string

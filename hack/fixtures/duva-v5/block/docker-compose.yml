@@ -1,0 +1,62 @@
+# The receiver that stands in for ntfy, shared by every scenario that asserts
+# on what was announced.
+include:
+  - common/ntfy.yml
+
+# A release blocked by a person is never applied, even found again.
+#
+# A patch is found and soaks. The test blocks it -- a version change, so its
+# digest is looked up from its tag -- then asks for a rescan, which finds the
+# same release again. A version change's digest is not known when it is
+# queued, so it soaks again; when the soak ends the updater pulls it, sees
+# the digest is blocked, and refuses before writing anything.
+services:
+  app:
+    image: localhost:5555/block-app:1.0.0
+    container_name: block-app
+    labels:
+      duva.include: '^1\.0\.\d+$'
+      duva.auto: patch
+      # Long enough to block it while it soaks, short enough to wait out.
+      duva.defer: 40s
+
+  # duva v5: watch, queue and updater in one process. The only one with any
+  # privilege, so it runs as the user that owns the repository and in the
+  # docker group -- written to .env by the harness, because a fixture cannot
+  # know either.
+  duva:
+    image: duva:integration
+    command: ["serve"]
+    user: "${UID}:${GID}"
+    group_add:
+      - "${DOCKER_GID}"
+    environment:
+      DUVA_SETTING_HOST: integration
+      # serve checks once at startup, so restarting it is how a test asks
+      # for a check; this schedule never fires.
+      DUVA_SETTING_SCHEDULE: "0 3 * * *"
+      DUVA_SETTING_LOG_LEVEL: debug
+      DUVA_SETTING_API_TOKEN: integration-token
+      # The receiver stands in for ntfy, so a test can assert on what was
+      # announced rather than on what a log line said.
+      DUVA_SETTING_NTFY_ENDPOINT: http://ntfy:8080
+      DUVA_SETTING_NTFY_TOPIC: duva
+      # The project, mounted at the path it has on the host, so a relative
+      # bind in it resolves to a path the daemon can also find.
+      DUVA_SETTING_REPO: ${PROJECT_DIR}
+      DUVA_SETTING_COMMIT_TEMPLATE: "pin {{.Container}} to {{if eq .OldVersion .NewVersion}}{{.NewDigest}}{{else}}{{.NewVersion}}{{end}}"
+      # How often a soaked entry is checked for release. Seconds here so the
+      # scenario sees a soak end; the default is ten minutes.
+      DUVA_SETTING_RECONCILE_INTERVAL: 2s
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${PROJECT_DIR}:${PROJECT_DIR}
+      # Every component's state, which a test reads from here.
+      - ./data:/data
+      # Only here because the suite's registry is self-signed.
+      - ./certs/cert.pem:/etc/ssl/certs/ca-certificates.crt:ro
+    extra_hosts:
+      # The images are localhost:5555/..., and that name has to mean the
+      # registry both here, where tags are listed, and on the host's daemon,
+      # where the pull happens.
+      - localhost:host-gateway

@@ -1,0 +1,13 @@
+# A stand-in for ntfy: it accepts duva's notifications and appends them to a
+# file the test reads.
+#
+# Included by scenarios that assert on what duva announced. A container like
+# everything else, so a fixture declares it as a service and one `compose up`
+# brings the whole world up.
+services:
+  ntfy:
+    image: duva-receiver:integration
+    volumes:
+      # Relative to this file, which sits in common/, so the log lands at the
+      # project root where the test can read it.
+      - ../notifications:/log

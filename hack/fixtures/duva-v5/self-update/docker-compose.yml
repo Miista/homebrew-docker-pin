@@ -1,0 +1,42 @@
+# The receiver that stands in for ntfy, shared by every scenario that asserts
+# on what was announced.
+include:
+  - common/ntfy.yml
+
+# duva updating itself.
+#
+# duva runs from the suite's registry rather than from the image the suite
+# builds, so a newer one can be published and found like any other release.
+# duva.auto allows the patch, so it is applied unattended -- to the container
+# that is doing the applying. Done in place, the stop is the last thing duva
+# does; it has to hand the work to a helper.
+#
+# The image carries no digest: the suite pins it with docker pin before any of
+# this runs, so the starting state is produced the same way a real stack's is.
+services:
+  # duva v5, watching itself. The repository is duva-update because that is
+  # the name the suite publishes the updater under.
+  duva:
+    image: localhost:5555/duva-update:1.0.0
+    container_name: duva
+    command: ["serve"]
+    user: "${UID}:${GID}"
+    group_add:
+      - "${DOCKER_GID}"
+    environment:
+      DUVA_SETTING_HOST: integration
+      DUVA_SETTING_SCHEDULE: "0 3 * * *"
+      DUVA_SETTING_LOG_LEVEL: debug
+      DUVA_SETTING_API_TOKEN: integration-token
+      DUVA_SETTING_REPO: ${PROJECT_DIR}
+      DUVA_SETTING_COMMIT_TEMPLATE: "pin {{.Container}} to {{if eq .OldVersion .NewVersion}}{{.NewDigest}}{{else}}{{.NewVersion}}{{end}}"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${PROJECT_DIR}:${PROJECT_DIR}
+      - ./data:/data
+      - ./certs/cert.pem:/etc/ssl/certs/ca-certificates.crt:ro
+    extra_hosts:
+      - localhost:host-gateway
+    labels:
+      duva.include: '^1\.0\.\d+$'
+      duva.auto: patch

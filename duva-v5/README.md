@@ -1,0 +1,348 @@
+# duva v5
+
+Watches pinned compose services and applies the updates each one's policy
+allows. One process per host: the same watcher, queue, updater and UI as v4,
+connected by calls instead of HTTP. See `../docs/duva-v5-one-binary.md` for
+why.
+
+*Duva*. The dove from the Noah story: it's sent out, comes back with the olive
+branch, and you decide from what it brought.
+
+duva flies out to every registry your services come from and brings back what
+is new. You decide what comes aboard: let the patches in on their own, hold a
+release until it has proven itself, approve the big ones with a tap. Whatever
+lands is pinned by digest and committed, so your repository always says
+exactly what runs.
+
+    watch  ->  queue  ->  update
+                 ^
+                 |
+                 ui   (one host only, over every host's queue)
+
+| | what it does |
+|---|---|
+| **watch** | what tags exist, and when they were published |
+| **queue** | is this an update, how big, may it be applied, and when |
+| **update** | pull, write the pin, recreate, commit |
+| **ui** | the approval page, over every host's queue; on the hub only |
+
+Every host runs `duva serve`, in one of two modes (`DUVA_SETTING_MODE`). One
+host is the **hub**: it also serves the page, and reaches the others' queues
+over their API. The others are **agents** (the default): they serve only
+that API, for the hub. Agents never reach the hub, or each other.
+
+### Jobs
+
+What runs on its own, on each host. The last three run in that order, as one
+tick: every `reconcile_interval` (default 10 minutes), and at once whenever a
+container starts or stops.
+
+| job | when | what it is for |
+|---|---|---|
+| **check** | on `schedule` (default 03:00), and from **Check…** or the Jobs page's Run now. Not at startup | Look for new releases of every service the compose file pins, and hand each to the queue. |
+| **sync** | each tick | Bring changes made outside duva into its state: services added to or removed from the compose file, and the image and tag each now follows. Read from the compose file, never from docker's container list. A service is removed only when it is gone from the file *and* its container is gone. |
+| **reconcile** | each tick, after the sync | Make everything in duva fit that state. Drop an entry whose service now follows another image or tag, has already got it, or was removed. And follow a changed policy: add `duva.auto` to a service and what already waits for it is scheduled (by its `duva.defer`, from when it was published); take it away and what was scheduled goes back to you. It never applies anything itself. |
+| **release** | each tick, after reconcile | When a deferral is over, take the next action: apply what `duva.auto` covers (if the container still runs), and bring the rest to you, notifying you then. |
+
+## Deploying
+
+```yaml
+duva:
+  image: ghcr.io/miista/duva:<tag>@sha256:<digest>
+  restart: unless-stopped
+  command: ["serve"]
+  # The user that owns the repository below, and the docker group's GID on
+  # *this* host -- see "The user it runs as".
+  user: "1000:1000"
+  group_add: ["989"]
+  environment:
+    DUVA_SETTING_HOST: optiplex
+    DUVA_SETTING_REPO: /home/guldmund/docker
+    DUVA_SETTING_API_TOKEN: ${DUVA_API_TOKEN}
+    # The host prefix is literal text: this repository's commit-msg hook
+    # requires <box>/<service>.
+    DUVA_SETTING_COMMIT_TEMPLATE: "optiplex/{{.Container}}: update to {{if eq .OldVersion .NewVersion}}{{.NewDigest}}{{else}}{{.NewVersion}}{{end}}"
+    DUVA_SETTING_NTFY_ENDPOINT: https://ntfy.example.com
+    DUVA_SETTING_NTFY_TOPIC: duva
+  volumes:
+    # The repository at the path it has on the host, read-write: the pin is
+    # rewritten here, and a relative bind in a compose file must resolve to a
+    # path the daemon can also find.
+    - /home/guldmund/docker:/home/guldmund/docker
+    # Not :ro. That flag applies to the socket file, not to the API served
+    # over it: a container with a :ro socket can still create and delete
+    # containers. Anything holding this socket has root on the host.
+    - /var/run/docker.sock:/var/run/docker.sock
+    # Every component's state. A named volume, so Docker seeds it with the
+    # image's ownership (uid 1000).
+    - duva-data:/data
+  ports:
+    # The API, for the hub's page. Bind it to the LAN address, not 0.0.0.0,
+    # and firewall it to the hub. Not needed at all on the hub.
+    - "192.168.1.10:8080:8080"
+```
+
+On the hub, add:
+
+```yaml
+  environment:
+    DUVA_SETTING_MODE: hub
+    DUVA_SETTING_UI_OIDC_ISSUER: https://auth.example.com
+    DUVA_SETTING_UI_OIDC_CLIENT_ID: duva
+    DUVA_SETTING_UI_OIDC_CLIENT_SECRET: ${DUVA_UI_OIDC_CLIENT_SECRET}
+    DUVA_SETTING_UI_OIDC_BASE_URL: https://duva.example.com
+    # The other hosts. Tokens are not in this list: each is its own setting,
+    # and is that host's DUVA_SETTING_API_TOKEN.
+    DUVA_SETTING_PEERS: pi=http://192.168.1.11:8080
+    DUVA_SETTING_PEER_PI_TOKEN: ${DUVA_PI_API_TOKEN}
+  # The page is on 8081, apart from the API on 8080: the page is published
+  # (through the reverse proxy), and the API must not be.
+```
+
+The page holds the authority to replace containers on every host, and runs in
+a process that holds this host's docker socket. Sign-in is OIDC, always: duva
+refuses to start without all four `DUVA_SETTING_UI_OIDC_*` settings, and
+refuses v4's `DUVA_UI_AUTH_DISABLED`, `DUVA_UI_LOCAL_ENABLED` and
+`DUVA_UI_AUTH_PUBLIC_PATHS` by name, so a v4 configuration that set them fails
+to start rather than running with less protection than intended. Register
+`<base url>/auth/callback` as the redirect URI. Only `/healthz` is public.
+
+## The user it runs as
+
+**duva must run as the user that owns the repository, in the `docker` group.**
+It checks this at startup and refuses to run otherwise, reporting every
+problem at once. The checks are: not root, the repository writable, the
+docker socket openable, git present, and the repository having a commit
+identity. The last matters because the commit is the *final* step of an
+apply: a missing `user.email` fails it after the container has been replaced.
+
+- **As the repository's owner.** Running as root leaves root-owned files in
+  the repository, makes git refuse it (`detected dubious ownership`), and
+  loses the commit identity, which comes from the repository's own
+  `.git/config`.
+- **In the `docker` group.** The socket is `root:docker` mode `0660`. Add the
+  group by GID, and **the GID is host-specific**:
+  `stat -c '%g' /var/run/docker.sock`.
+
+## Policy
+
+A service is watched when it is pinned (`image: name:tag@sha256:...`) and has
+a `container_name`, which is how duva identifies it. Policy is labels on the
+service:
+
+```yaml
+labels:
+  duva.auto: patch        # none (default), digest, patch, minor, major
+  duva.defer: 3d          # how old a release must be before its next action
+  duva.ignore: "true"     # never follow this service; its pin stays as it is
+  diun.include_tags: '^1\.\d+\.\d+$'
+  diun.exclude_tags: '-rc'
+```
+
+**Policy is read from the running container, not the compose file.** A label
+edited and committed takes effect when the container is recreated -- by
+`docker compose up`, or by duva's next apply of it -- and until then the
+service runs under the policy it was started with. A service with no
+container has no policy and is not acted on. The pin and the tag to follow do
+come from the file, since that is what duva rewrites.
+
+`duva.ignore: "true"` switches a service off: it is never checked, nothing
+is queued for it, and anything already waiting is dropped on the next tick.
+Its pin stays, as the record of what runs, and `docker pin upgrade` by hand
+still works. The page lists ignored services under **Ignored services** in
+the menu, and only lists them: the label is the one place to change it.
+Anything but `true` or `false` is refused rather than guessed at.
+
+## Operating
+
+### An uncommitted edit, or a rate-limited registry
+
+Applying rewrites and commits one compose file, so duva will not start an
+apply while *that file* has uncommitted changes, or while git holds its index
+lock. Edits to other files are left alone: an apply to a service elsewhere goes
+ahead, and its commit holds only its own file, never anything you staged. With
+`git.push` on, the pull before the push carries your edits across with
+`--autostash`, unless origin's new commits change one of the same files; then
+nothing is pulled and the files are named. The refusal is not a failure:
+nothing was touched, the entry stays queued, and nobody is notified. A pull the
+registry refused for rate limiting is treated the same way.
+
+- **An update duva applied on its own** (`duva.auto`) is offered again with
+  exponential backoff: after 1 minute, then 2, 4, 8, 16, and every 30 minutes
+  from there. Commit or stash and it goes through on the next attempt.
+- **A click on the page** is tried once. The reason, naming the file, is
+  shown and the entry stays queued.
+
+### Deferring a release
+
+`duva.auto` says **what** is applied unattended. `duva.defer` says **when**
+the next action for a release happens, whatever that action is: a release
+is deferred until it is old enough, counted from when it was published (or,
+if the registry does not say, from when it was found).
+
+| when the deferral is over | next action |
+|---|---|
+| `duva.auto` covers it | applied |
+| it does not, or there is no `duva.auto` | it comes to you in the queue, and you are notified then |
+
+So `duva.defer` alone, with no `duva.auto`, still means something: every
+release waits that long before it is put in front of you.
+
+| `duva.defer` | means |
+|---|---|
+| `3d` | whole days |
+| `72h`, `90m`, `1h30m` | any Go duration |
+| `0`, or no label | not deferred |
+
+Anything else -- `3 days`, `1w`, `-1d` -- is refused rather than read as not
+deferred. There is no host-wide default. The earlier names, `duva.soak` and
+`duva.delay`, are refused by name: it is `duva.defer` now.
+
+A deferred release is listed on the page under **Automatic** if it will be
+applied, or **Deferred** if it will come to you, with when, and is not
+announced while deferred. It is released on the queue's tick, at most
+`DUVA_SETTING_RECONCILE_INTERVAL` late (ten minutes by default), or as soon as
+a container event prompts one. **Update now** applies either at once.
+
+Changing either label moves what already waits: add a deferral and a release
+in the queue younger than it is deferred; take it away and what is deferred
+is due; change `duva.auto` and a deferred release moves between Automatic
+and Deferred, keeping its time.
+
+Each release is deferred on its own clock. A project that releases faster
+than its deferral does not keep restarting the wait: an older release that
+comes due while a newer one is still deferred is applied, and the newer one
+is then offered from there. A release waiting for a person is different --
+only the newest matters, so a newer one supersedes it.
+
+### Seeing what is waiting, and acting on it
+
+On the page, the menu beside each row's Update button has **Block**: that
+release is never applied, on any service running the image, until you unblock
+it from **Blocked releases** in the menu at the top, which puts it back in the
+queue. On a phone, tapping a row opens a sheet with Update and Block.
+
+**Check…**, also in the menu at the top, looks for new releases: opened and
+confirmed, every service on every host, since the last check. Its folded
+**Options** narrow it to the services picked -- any a host watches, waiting or
+not -- and choose how far back: since the last check, or the past day, week
+or month. Since the last check finds what is new. Further back
+also finds what an earlier check passed over -- a tag a since-changed
+`diun.include_tags` filtered out, a release dropped from the queue -- and
+offers it again; blocked releases stay blocked, and anything older than what
+runs is not an update. Each service looks back to whichever is earlier, its
+own last check or the chosen time, so a longer look never sees less.
+
+The history records who did each -- the signed-in person, or what asked over
+the API. `docker exec <duva> duva queue` prints what is waiting, by service,
+with each entry's id.
+
+**A block is by digest, never by tag**, so a release re-pushed under the same
+tag with a fix is not blocked with the broken one. A version change's digest
+is not known until it is pulled, so blocking one looks up what its tag points
+at now, and the updater checks the blocklist again after every pull: a
+release blocked after it was queued, or approved, is still refused, with
+nothing written. A refused release is settled as blocked, and nobody is
+notified of what they decided. A check is refused within a minute of the
+last, per service and for every service, however far back it looks, so
+repeated clicks cannot spend a registry's rate limit.
+
+### Updating by hand
+
+The queue rechecks what is waiting against the compose file when it starts,
+every `DUVA_SETTING_RECONCILE_INTERVAL`, and whenever a container is created, started,
+stopped or removed. An entry goes once the file has what it offered, or has
+moved somewhere it no longer leads from. The log says why each entry went.
+
+### Updating duva itself
+
+duva cannot replace its own container: recreating stops the old container
+first, and the stop is the last thing it would do. So an update naming duva is
+handed to a helper -- the same image, run as `duva self-update`, in a copy of
+duva's own container without its compose labels or network aliases.
+
+- A self-update is deferred while duva is applying anything else.
+- On success the helper removes its own container, and the new duva's first
+  reconcile clears the entry the helper's commit satisfied.
+- On failure the helper is left, named `<container>-self-update-<time>` and
+  labelled `duva.self-update`, so `docker logs` can say why. Remove it with
+  `docker rm` once read.
+
+## Configuration
+
+Every setting is read through [configy](https://github.com/miista/configy), as
+in every app here: `DUVA_SETTING_<KEY>`, the key upper-cased with `.` as `_`.
+From the environment only: nothing edits settings from the page, so none is
+stored, and a secret never lands in the database. An empty variable counts as
+unset. A value that does not parse refuses to start, never falls back.
+
+| setting | variable | |
+|---|---|---|
+| `repo` | `DUVA_SETTING_REPO` | the repository, mounted at the path it has on the host. Required |
+| `compose_dir` | `DUVA_SETTING_COMPOSE_DIR` | the compose project, relative to `repo`; default its root |
+| `host` | `DUVA_SETTING_HOST` | what this host is called on the page; default the hostname |
+| `api_token` | `DUVA_SETTING_API_TOKEN` | the token the hub's page, or the CLI, must present to this host's API. Required |
+| `mode` | `DUVA_SETTING_MODE` | `hub` (serves the page on 8081, over every host) or `agent` (only the API, for the hub). Default `agent`; an agent refuses the hub's settings |
+| `ui.oidc.issuer`, `.client_id`, `.client_secret`, `.base_url` | `DUVA_SETTING_UI_OIDC_ISSUER`, ... | sign-in; all four required with `ui` |
+| `agents` | `DUVA_SETTING_AGENTS` | on the hub: the agents, `host=url,host=url` |
+| `agent.<host>.token` | `DUVA_SETTING_AGENT_<HOST>_TOKEN` | on the hub: each agent's `api_token`. A `-` or `.` in the host name is `_` |
+| `commit_template` | `DUVA_SETTING_COMMIT_TEMPLATE` | the commit message; fields `.Container`, `.Image`, `.OldVersion`, `.NewVersion`, `.OldDigest`, `.NewDigest`. Unset gets a default; a template that does not render refuses to start |
+| `git.push` | `DUVA_SETTING_GIT_PUSH` | push each commit; default false |
+| `schedule` | `DUVA_SETTING_SCHEDULE` | when to look for new tags, 5-field cron; default `0 3 * * *`. Not at startup: Run now on the Jobs page asks for one |
+| `since` | `DUVA_SETTING_SINCE` | override how far back the next check looks (RFC 3339, or a duration such as `168h`) |
+| `reconcile_interval` | `DUVA_SETTING_RECONCILE_INTERVAL` | how often the queue rechecks what is waiting, and releases deferred ones; default `10m` |
+| `update_timeout` | `DUVA_SETTING_UPDATE_TIMEOUT` | how long an apply may run before it is called failed; default `30m` |
+| `ntfy.endpoint`, `ntfy.topic` | `DUVA_SETTING_NTFY_ENDPOINT`, `_TOPIC` | where to announce what waits for a person, and failed auto-applies |
+| `ntfy.click` | `DUVA_SETTING_NTFY_CLICK` | the link a notification opens, usually the page |
+| `ntfy.token` | `DUVA_SETTING_NTFY_TOKEN` | ntfy access token, when the topic needs one |
+| `log_level` | `DUVA_SETTING_LOG_LEVEL` | trace, debug, info (default), warn, error |
+| `read_only` | `DUVA_SETTING_READ_ONLY` | the page shows the queue and approves nothing |
+
+A setting set under its old name (`DUVA_REPO`, `DUVA_QUEUES`,
+`DUVA_QUEUE_TOKEN_PI`, `NTFY_TOKEN`, ...) refuses to start, naming the new
+one: read under the old name it would be silently ignored, and duva would run
+on a default nobody chose.
+
+`/data` holds `duva.db`, a SQLite database -- what is waiting, the history of
+every decision and who made it, the blocklist, the services duva knows, and
+how far back each was checked -- and `auth/`, the page's session key. Losing
+`auth/` signs people out. Backing it up is the host's job, as for any other volume. Copy `duva.db`
+together with `duva.db-wal` (and `-shm`), or stop duva first; `sqlite3
+duva.db "VACUUM INTO 'backup.db'"` on the host turns the copy into one
+consistent file. Do not copy `duva.db` alone while duva runs: recent changes
+may still be in the `-wal` file.
+
+## Moving from v4
+
+v5 replaces the four v4 containers on each host with one.
+
+1. **Carry the state over**, or accept one noisy first check and an empty
+   queue. Copy `queue.json` out of the v4 queue container's `/data` and
+   `detector.json` out of the watcher's, with `docker cp`, into v5's `/data`
+   before its first start. v5 imports them into its database on that start
+   and renames them `.migrated`; going back to v4 can rename them back.
+2. **Rename and drop variables.** Every variable is `DUVA_SETTING_*` now
+   (see Configuration); duva names any it finds under the old name.
+   `DUVA_WEBHOOK_URL`, `DUVA_UPDATE_URL` and
+   `DUVA_UPDATE_TOKEN` are gone: nothing talks over a network inside a host
+   any more. The page's local account and `DUVA_UI_AUTH_DISABLED` are gone.
+3. **Set `DUVA_SETTING_API_TOKEN` on every host.** v4 minted a queue token
+   when it was unset; v5 refuses to start.
+4. **Move the page** from v4's UI container to the hub, `DUVA_SETTING_MODE=hub`
+   on one host's duva, and point the reverse proxy at port 8081.
+5. **Remove the v4 containers** and their volumes once v5 has checked once.
+
+v4's updater cannot hand itself to v5 (they are different images), so the
+switch is by hand: `docker compose up -d duva`, then commit the pin.
+
+## Build
+
+```sh
+make build
+make test
+```
+
+Releases are GoReleaser's, from `duva-v5/vX.Y` tags
+(`../.goreleaser.duva-v5.yaml`). The integration suite builds the same image
+from the same Dockerfile: `go test -tags integration ./test/...` from the
+repository root.

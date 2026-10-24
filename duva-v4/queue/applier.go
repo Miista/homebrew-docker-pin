@@ -1,0 +1,389 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"net/http"
+	"sort"
+	"sync"
+	"time"
+
+	"github.com/rs/zerolog"
+
+	"github.com/Miista/homebrew-docker-pin/duva-v4/internal/queue"
+	"github.com/Miista/homebrew-docker-pin/duva-v4/internal/update"
+)
+
+// applier carries out an approved decision, one at a time.
+//
+// The lock is the whole of its concurrency: applying replaces a container and
+// rewrites a file, and two at once on one host is a way to lose both. A
+// candidate arriving mid-apply waits rather than cancelling what is running --
+// and is then decided again, against the file as it is afterwards, which may
+// make it a different change or none at all.
+type applier struct {
+	client  *update.Client
+	timeout time.Duration
+	log     zerolog.Logger
+
+	// queue is where the entry stays until the updater reports success.
+	//
+	// An entry starting to apply is not an entry applied: a failed pull, a
+	// registry rate limit, a container that would not start all leave the
+	// service exactly as unpatched as before, and only the queue knows that.
+	// Dropping the entry at Start rather than at Completed was how a failed
+	// apply became a silently forgotten one -- the watcher only re-reports a
+	// digest move it has not already handed on, and this had already handed
+	// it on.
+	queue *queue.Pending
+
+	// mu serialises applies. Held for the whole transaction, not just the
+	// start: the point is that nothing else begins until this one is done.
+	mu sync.Mutex
+
+	// watchers guards the per-service fan-out. Separate from mu so a UI
+	// asking to watch never waits behind the work it is asking about.
+	watchers sync.Mutex
+	running  map[string]*live
+
+	// onFailure is told when an apply did not finish. Nil means nobody is.
+	//
+	// Only the failure: a successful apply is the policy working as
+	// configured, and announcing every routine patch is how a topic becomes
+	// something nobody reads. A failed one may have left the container down
+	// and the repository dirty, which is nobody's business but a person's.
+	onFailure func(queue.Entry, string)
+
+	// retryAfter and retryMax bound the backoff between offers of a deferred
+	// apply. Zero means the defaults below.
+	retryAfter, retryMax time.Duration
+}
+
+// A deferral waits defaultRetryAfter, then twice that, and so on up to
+// defaultRetryMax: a dirty repository that clears in a minute is retried
+// soon, and one left dirty for days costs a check every half hour rather
+// than every minute.
+const (
+	defaultRetryAfter = time.Minute
+	defaultRetryMax   = 30 * time.Minute
+)
+
+// live is one apply in flight, and everyone currently watching it.
+type live struct {
+	mu    sync.Mutex
+	subs  map[chan string]struct{}
+	done  bool
+	lines []string // what has been said so far, for a watcher arriving late
+}
+
+func newApplier(c *update.Client, timeout time.Duration, log zerolog.Logger, q *queue.Pending) *applier {
+	return &applier{
+		client:  c,
+		timeout: timeout,
+		log:     log,
+		queue:   q,
+		running: map[string]*live{},
+	}
+}
+
+// Start begins applying an entry, returning once the updater has accepted it.
+//
+// It returns before the work finishes: an apply can take minutes, and a
+// caller holding an HTTP request open for it would time out long before the
+// updater did.
+func (a *applier) Start(e queue.Entry) error {
+	return a.start(e, false, 0)
+}
+
+// StartUnattended is Start for an apply the queue decided on itself. If the
+// updater defers it, it is offered again later; a person's click is not,
+// because they are watching and will click again when they are ready.
+func (a *applier) StartUnattended(e queue.Entry) error {
+	return a.start(e, true, 0)
+}
+
+// start begins an apply. attempt counts the deferrals so far, and sets how
+// long the next one waits; it means nothing for a manual apply.
+func (a *applier) start(e queue.Entry, unattended bool, attempt int) error {
+	a.watchers.Lock()
+	if _, already := a.running[e.Service]; already {
+		a.watchers.Unlock()
+		return fmt.Errorf("%s is already being updated", e.Service)
+	}
+	l := &live{subs: map[chan string]struct{}{}}
+	a.running[e.Service] = l
+	a.watchers.Unlock()
+
+	go a.apply(e, l, unattended, attempt)
+	return nil
+}
+
+func (a *applier) apply(e queue.Entry, l *live, unattended bool, attempt int) {
+	defer func() {
+		l.finish()
+		a.watchers.Lock()
+		delete(a.running, e.Service)
+		a.watchers.Unlock()
+	}()
+
+	// One at a time, across every service on this host.
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), a.timeout)
+	defer cancel()
+
+	acc, err := a.client.Apply(ctx, update.Request{
+		Service: e.Service,
+		Image:   e.Image,
+		From:    e.From,
+		To:      e.To,
+		Tag:     e.Tag,
+		Digest:  e.Digest,
+	})
+	if err != nil {
+		a.log.Error().Msgf("%s: the actor would not take it — %v", e.Service, err)
+		l.write(update.Terminal(update.Failed, err.Error()))
+		a.failed(e, err.Error())
+		return
+	}
+
+	status, reason, err := a.client.Watch(ctx, acc.Stream, l)
+	switch {
+	case err != nil:
+		a.log.Error().Msgf("%s: lost the actor's stream — %v", e.Service, err)
+		l.write(update.Terminal(update.Failed, err.Error()))
+		a.failed(e, err.Error())
+	case status == update.Completed:
+		a.log.Info().Msgf("%s: %s -> %s applied", e.Service, e.From, e.To)
+		// Only now has the decision actually happened. Removed here rather
+		// than at Start, so a failure anywhere above leaves the entry exactly
+		// where a person or the next notice can still find it.
+		if a.queue != nil {
+			a.queue.Remove(e.Service)
+		}
+	case status == update.Deferred:
+		// Not a failure: the updater touched nothing and said so. No
+		// notification -- a dirty repository clears when someone commits --
+		// and the entry stays queued. Unattended work is offered again after
+		// a pause; a manual click is not.
+		a.log.Warn().Msgf("%s: deferred — %s", e.Service, reason)
+		if unattended {
+			a.retryLater(e, attempt)
+		}
+	default:
+		a.log.Error().Msgf("%s: failed — %s", e.Service, reason)
+		a.failed(e, reason)
+	}
+}
+
+// retryDelay is how long the attempt-th deferral waits: the base, doubled for
+// each earlier one, capped at the ceiling.
+func (a *applier) retryDelay(attempt int) time.Duration {
+	base, ceiling := a.retryAfter, a.retryMax
+	if base == 0 {
+		base = defaultRetryAfter
+	}
+	if ceiling == 0 {
+		ceiling = defaultRetryMax
+	}
+	d := base
+	for i := 0; i < attempt && d < ceiling; i++ {
+		d *= 2
+	}
+	return min(d, ceiling)
+}
+
+// retryLater offers a deferred entry to the updater again after a backoff, if
+// it is still waiting then. An entry approved or removed in the meantime is
+// left alone.
+func (a *applier) retryLater(e queue.Entry, attempt int) {
+	d := a.retryDelay(attempt)
+	a.log.Info().Msgf("%s: will try again in %s", e.Service, d)
+	time.AfterFunc(d, func() {
+		if a.queue == nil {
+			return
+		}
+		cur, ok := a.queue.Get(e.Service)
+		if !ok {
+			return
+		}
+		if err := a.start(cur, true, attempt+1); err != nil {
+			a.log.Warn().Msgf("%s: retry not started: %v", e.Service, err)
+		}
+	})
+}
+
+// failed tells whoever is listening that an apply did not finish.
+func (a *applier) failed(e queue.Entry, reason string) {
+	if a.onFailure != nil {
+		a.onFailure(e, reason)
+	}
+}
+
+// Stream relays an in-flight apply to a watcher.
+//
+// Nothing running means nothing to say: the response is empty and ends, which
+// is the whole of this endpoint's error handling.
+func (a *applier) Stream(service string, w http.ResponseWriter, r *http.Request) {
+	a.watchers.Lock()
+	l, ok := a.running[service]
+	a.watchers.Unlock()
+	if !ok {
+		return
+	}
+
+	ch, backlog := l.subscribe()
+	defer l.unsubscribe(ch)
+
+	// What has already been said, so a watcher arriving mid-apply sees how
+	// it got here rather than joining a conversation in progress.
+	for _, line := range backlog {
+		fmt.Fprintln(w, line)
+	}
+	flush(w)
+
+	for {
+		select {
+		case line, open := <-ch:
+			if !open {
+				return
+			}
+			fmt.Fprintln(w, line)
+			flush(w)
+		case <-r.Context().Done():
+			// The watcher left. The apply carries on without them.
+			return
+		}
+	}
+}
+
+func flush(w http.ResponseWriter) {
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// Write makes live an io.Writer, so the updater client can tee straight into it.
+func (l *live) Write(p []byte) (int, error) {
+	for _, line := range splitLines(p) {
+		l.write(line)
+	}
+	return len(p), nil
+}
+
+func (l *live) write(line string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.done {
+		return
+	}
+	l.lines = append(l.lines, line)
+	for ch := range l.subs {
+		// Never block on a watcher: one that has stopped reading must not
+		// stall the apply everyone else is watching.
+		select {
+		case ch <- line:
+		default:
+		}
+	}
+}
+
+func (l *live) finish() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.done = true
+	for ch := range l.subs {
+		close(ch)
+	}
+	l.subs = map[chan string]struct{}{}
+}
+
+func (l *live) subscribe() (chan string, []string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	backlog := append([]string(nil), l.lines...)
+	if l.done {
+		ch := make(chan string)
+		close(ch)
+		return ch, backlog
+	}
+	// Buffered so a slow watcher has room before lines start being dropped.
+	ch := make(chan string, 256)
+	l.subs[ch] = struct{}{}
+	return ch, backlog
+}
+
+func (l *live) unsubscribe(ch chan string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if _, ok := l.subs[ch]; ok {
+		delete(l.subs, ch)
+		close(ch)
+	}
+}
+
+// splitLines breaks a write into lines, dropping the trailing empty one that
+// a newline-terminated write produces.
+func splitLines(p []byte) []string {
+	var out []string
+	start := 0
+	for i, b := range p {
+		if b == '\n' {
+			out = append(out, string(trimCR(p[start:i])))
+			start = i + 1
+		}
+	}
+	if start < len(p) {
+		out = append(out, string(trimCR(p[start:])))
+	}
+	return out
+}
+
+func trimCR(b []byte) []byte {
+	if len(b) > 0 && b[len(b)-1] == '\r' {
+		return b[:len(b)-1]
+	}
+	return b
+}
+
+var _ io.Writer = (*live)(nil)
+
+// Applying lists the services with an apply in flight, sorted.
+func (a *applier) Applying() []string {
+	a.watchers.Lock()
+	defer a.watchers.Unlock()
+	out := make([]string, 0, len(a.running))
+	for s := range a.running {
+		out = append(out, s)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// Ready asks the updater whether work offered now would be attempted.
+//
+// Asked per snapshot rather than cached: what makes this updater unready is a
+// dirty working tree, which becomes clean the moment someone commits, and a
+// cached answer would leave the button grey after the thing that greyed it
+// was fixed. It is one local request against a container on the same host.
+func (a *applier) Ready() (bool, string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	r := a.client.Ready(ctx)
+	return r.Ready, r.Reason
+}
+
+// Applicable reports whether the updater would act on this service now.
+//
+// Its answer, not the queue's: the updater holds the socket, and a container's
+// state is not in the compose file. An updater that cannot be asked, or one
+// too old to know the question, answers yes -- refusing work because a check
+// failed would silently stop queueing everything.
+func (a *applier) Applicable(service string) (bool, string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	r := a.client.Applicable(ctx, service)
+	return r.Applicable, r.Reason
+}

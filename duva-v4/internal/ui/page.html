@@ -1,0 +1,553 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" type="image/png" href="/favicon.png">
+<title>duva</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #faf9f7; --card: #ffffff; --fg: #1b1a18; --muted: #6e6b66;
+    --faint: #948f89; --line: #e6e3de; --line-soft: #efece7;
+    --accent: #1d5e52; --accent-fg: #ffffff; --tint: #f2efea;
+    --major: #a8281f; --major-bg: #fbeceb; --major-line: #eccfcc;
+    --minor: #7d5300; --digest: #55524e;
+    --ok: #2f6b4f;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141517; --card: #1c1e21; --fg: #e9e7e4; --muted: #9b9791;
+      --faint: #7c7873; --line: #2c2f33; --line-soft: #24272a;
+      --accent: #64c3ad; --accent-fg: #10221e; --tint: #1b1d20;
+      --major: #ff8377; --major-bg: #2b1c1a; --major-line: #4a2b27;
+      --minor: #d9a55c; --digest: #b4b0ab;
+      --ok: #7bc79c;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 1.75rem 1.15rem 3rem; background: var(--bg); color: var(--fg);
+    font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    -webkit-text-size-adjust: 100%;
+  }
+  main { max-width: 66rem; margin: 0 auto;
+         --cols: 11rem minmax(0, 1fr) 5rem 8rem 5.5rem; }
+  code, .mono { font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+
+  /* ---------- header ---------- */
+  .top { display: flex; align-items: baseline; gap: .55rem; flex-wrap: wrap;
+         padding-bottom: .7rem; border-bottom: 1px solid var(--line); }
+  /* align-self overrides .top's baseline alignment, which suits the text
+     beside it but has no equivalent meaning for an image. */
+  .logo { align-self: center; }
+  /* Pushed to the far end of the header. Hidden unless the sign-in gate is on:
+     it serves /auth/client.js, which sets data-authy on <html>. */
+  .signout { margin-left: auto; font-size: .78rem; color: var(--faint); text-decoration: none; }
+  .signout:hover { color: var(--fg); }
+  html:not([data-authy]) .only-with-gate { display: none !important }
+  .mark { font-size: 1.1rem; font-weight: 700; letter-spacing: .12em;
+          text-transform: uppercase; color: var(--fg); }
+  .host { font-size: 1.1rem; font-weight: 400; color: var(--muted);
+          letter-spacing: -.01em; }
+  .count { font-size: .78rem; color: var(--faint); font-weight: 400;
+           font-variant-numeric: tabular-nums; }
+
+  /* ---------- result banner ---------- */
+  /* Same reason as .steps div: a failure reason carries the pinned image
+     line, digest and all, and one 71-character token has nowhere to break. */
+  .banner { margin: 1.1rem 0 0; padding: .6rem .8rem; font-size: .9rem;
+            background: var(--card); border: 1px solid var(--line);
+            border-radius: 8px; overflow-wrap: anywhere; }
+  .banner-error { background: var(--major-bg); border-color: var(--major-line);
+                  color: var(--major); }
+  /* A standing fact, not a failure: muted rather than red. */
+  .banner-note { color: var(--muted); }
+  /* Transient: it clears on its own, so it should catch the eye without
+     reading as something broken. Amber, between the muted note and the red. */
+  .banner-wait { color: var(--minor); border-color: var(--minor); }
+  .banner .who { font-weight: 650; }
+
+  /* ---------- section framing ---------- */
+  /* The .45rem below used to come from the subtitle that sat here. With the
+     heading alone it has to come from the heading, or it sits flush on the
+     column head. */
+  h1 { font-size: .95rem; font-weight: 700; margin: 1.6rem 0 .55rem;
+       letter-spacing: -.005em; }
+
+  /* ---------- filters: the host tabs and the search box ---------- */
+  .filters { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap;
+             margin: 0 0 .55rem; }
+  .tabs { display: flex; gap: .25rem; }
+  .tabs button { font: inherit; font-size: .78rem; cursor: pointer;
+                 padding: .2rem .55rem; border-radius: 999px;
+                 border: 1px solid var(--line); background: none;
+                 color: var(--muted); }
+  .tabs button:hover { border-color: var(--muted); }
+  .tabs button.on { background: var(--tint); border-color: var(--muted);
+                    color: var(--fg); font-weight: 600; }
+  /* The count is the reason to click a tab, so it reads as part of the label
+     rather than as a badge competing with it. */
+  .tabs .n { font-variant-numeric: tabular-nums; color: var(--faint);
+             margin-left: .3rem; }
+  .tabs button.on .n { color: var(--muted); }
+  .search { font: inherit; font-size: .78rem; flex: 1; min-width: 12rem;
+            padding: .22rem .5rem; border-radius: 6px;
+            border: 1px solid var(--line); background: var(--card);
+            color: var(--fg); }
+  .search::placeholder { color: var(--faint); }
+  .none { margin: .9rem 0 0; color: var(--muted); font-size: .8rem; }
+
+  /* ---------- rows ---------- */
+  .rows { list-style: none; margin: 0; padding: 0; }
+  /* > li, not li: a row's own steps are a nested <ul class="steps"> with its
+     own <li> lines (see below), and a plain descendant selector here matched
+     those too -- turning each streamed step into its own 42px grid row with
+     a divider, the same layout as a whole service row, rather than the tight
+     muted list .steps intends. */
+  .rows > li { display: grid; align-items: center; grid-template-columns: var(--cols);
+             gap: 0 .55rem; min-height: 42px; padding: .2rem 0;
+             border-top: 1px solid var(--line-soft); }
+  .rows > li form, .head span:last-child { grid-column: 5; justify-self: end; }
+  .head { display: grid; grid-template-columns: var(--cols); gap: 0 .55rem;
+          padding: .4rem .9rem .3rem;
+          background: var(--card); border: 1px solid var(--line);
+          border-bottom: 0; border-radius: 10px 10px 0 0; }
+  main > .rows { padding: 0 .9rem;
+                 background: var(--card); border: 1px solid var(--line);
+                 border-top: 0; border-radius: 0 0 10px 10px; }
+  .head span { font-size: .69rem; font-weight: 700; text-transform: uppercase;
+               letter-spacing: .07em; color: var(--faint); }
+  /* The host a row came from, shown only when a hub is serving several. */
+  .on { display: block; font-size: .7rem; font-weight: 500; color: var(--accent);
+        letter-spacing: .02em; margin-top: .1rem; }
+  .svc { font-size: .9rem; font-weight: 550; letter-spacing: -.005em; white-space: nowrap;
+         min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .img { display: block; font-size: .72rem; color: var(--faint);
+         font-weight: 400; letter-spacing: 0; opacity: 0; transition: opacity .12s;
+         margin-top: -.15rem; overflow: hidden; text-overflow: ellipsis;
+         white-space: nowrap; }
+  .rows > li:hover .img, .rows > li:focus-within .img { opacity: 1; }
+  /* min-width: 0 lets the grid track's width win over the content's
+     intrinsic size, so a long tag clips rather than overflowing into the
+     Kind column. */
+  .jump { white-space: nowrap; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .jump .from { color: var(--faint); font-size: .8rem; }
+  .jump .to { color: var(--fg); font-weight: 400; }
+  .arrow { color: var(--faint); padding: 0 .4rem; }
+
+  /* ---------- kind = severity ---------- */
+  .kind { font-size: .69rem; font-weight: 700; text-transform: uppercase;
+          letter-spacing: .07em; white-space: nowrap; }
+  .kind-major { color: var(--major); }
+  .kind-minor { color: var(--minor); }
+  .kind-patch, .kind-digest { color: var(--digest); font-weight: 700; }
+  /* No dotted underline. It is the convention for "hover me", but .kind is a
+     grid cell, so the border ran the width of the column rather than the word
+     -- and a phone has no hover to offer anyway. The title attribute stays:
+     free where there is a pointer, silent where there is not. */
+  /* Fainter than the rest, because it is the only kind that is not a
+     measurement: duva could not compare the two tags, so there is nothing
+     being reported about how big the change is. It is also the reliable tell
+     for a candidate that should not have been offered. */
+  .kind-unknown { color: var(--faint); font-weight: 600; cursor: help; }
+
+  /* ---------- buttons ---------- */
+  form { margin: 0; }
+  button { font: inherit; cursor: pointer; }
+  .apply { font-size: .8rem; line-height: 1.25; padding: .15rem .6rem;
+           border: 1px solid transparent; border-radius: 5px;
+           background: var(--accent); color: var(--accent-fg); font-weight: 600; }
+  .apply:hover:not(:disabled) { filter: brightness(1.07); }
+  .apply:active:not(:disabled) { transform: translateY(1px); }
+  /* Greyed rather than hidden: the row still has a decision waiting, and
+     removing the button would make it look like one that does not. */
+  .apply:disabled { background: none; border-color: var(--line);
+                    color: var(--faint); font-weight: 400; cursor: not-allowed; }
+  .apply:focus-visible { outline: 1px solid currentColor; outline-offset: 2px; }
+
+  /* A row from a decider that has stopped answering: shown, because it was
+     really queued, but faded because it cannot be confirmed. */
+  .rows > li.stale { opacity: .55; }
+
+  /* ---------- an apply, as it happens ---------- */
+  .steps { grid-column: 1 / -1; margin: .1rem 0 .35rem;
+           padding: .45rem .65rem .45rem 1.6rem;
+           background: var(--tint); border-radius: 6px; font-size: .78rem;
+           color: var(--muted); }
+  /* A digest is 71 characters with no space or hyphen in it, so a browser has
+     nowhere to break the line and lets it run past the panel and off the
+     screen -- which on a phone means most of the step is unreadable.
+     overflow-wrap: break-word will not do it: that breaks between words, and
+     this is one word. anywhere is the rule that breaks mid-token. */
+  .steps li { padding: .05rem 0; overflow-wrap: anywhere; }
+  .steps .ok { color: var(--ok); font-weight: 600; }
+  .steps .bad { color: var(--major); font-weight: 600; }
+
+  /* ---------- empty state: the common case ---------- */
+  .empty { padding: 3rem 1rem 2.75rem; text-align: center; }
+  .tick { width: 2.1rem; height: 2.1rem; margin: 0 auto .9rem;
+          border-radius: 50%; border: 1.5px solid var(--ok); position: relative; }
+  .tick::after { content: ""; position: absolute; left: .58rem; top: .46rem;
+                 width: .46rem; height: .8rem; border: 1.5px solid var(--ok);
+                 border-top: 0; border-left: 0; transform: rotate(42deg); }
+  .empty h1 { margin: 0; font-size: 1rem; }
+  .empty p { margin: .25rem auto 0; color: var(--muted); font-size: .875rem;
+             max-width: 24rem; text-wrap: pretty; }
+
+  /* ---------- footer ---------- */
+  footer { margin-top: 1.25rem; padding-top: .7rem; border-top: 1px solid var(--line);
+           display: flex; gap: .5rem; flex-wrap: wrap;
+           color: var(--faint); font-size: .78rem; }
+
+  /* ---------- narrow phones: two tight lines, no sideways scroll ---------- */
+  @media (max-width: 30rem) {
+    body { padding: 1.25rem .9rem 2.5rem; }
+    /* The head draws the card's top edge, which is why main > .rows sets
+       border-top: 0. Hiding it leaves the card open at the top, and the first
+       row's own border-top stands in for it -- inset on both sides, because a
+       row sits inside the card's .7rem padding. That is the short line above
+       the list. Both halves are needed: the card draws its own edge, and the
+       first row stops drawing one. Either alone still looks wrong. */
+    .head { display: none; }
+    main > .rows { padding: 0 .7rem;
+                   border-top: 1px solid var(--line); border-radius: 10px; }
+    .rows > li:first-child { border-top: 0; }
+    .rows > li { grid-template-columns: minmax(0, 1fr) max-content max-content;
+               row-gap: 0; padding: .4rem 0; min-height: 0; }
+    .svc { grid-column: 1; white-space: normal; }
+    .img { opacity: 1; }
+    .kind { grid-column: 2; justify-self: end; }
+    .rows > li form { grid-column: 3; grid-row: 1 / span 2; justify-self: end; }
+    .jump { grid-column: 1 / 3; grid-row: 2; }
+    .apply { padding: .3rem .7rem; }
+  }
+</style>
+<!-- Served by the sign-in gate; a 404 when the gate is off, which keeps the
+     Sign out link hidden. -->
+<script src="/auth/client.js"></script>
+</head>
+<body>
+<!-- One description of a row, not two.
+
+     The Go template renders the markup below with petite-vue's directives
+     still in it, and the initial state as JSON at the bottom. Without
+     JavaScript nothing renders at all -- see the note below.
+     server-side and the page is complete and correct. With it, petite-vue
+     mounts over the same markup and takes over -- the queue polls, and an
+     apply's steps stream into the row that started it.
+
+     This is what makes the two update channels one thing. A poll writes to
+     `state`, a stream writes to `steps`, and the DOM follows from both
+     without either knowing the other exists. -->
+<noscript>
+  <div class="banner banner-error" style="max-width:66rem;margin:1.75rem auto;">
+    <span class="who">JavaScript is off</span> — this page is markup the browser
+    fills in, so with it disabled there is nothing here. The queue itself is
+    still readable as JSON at <code>/api/state</code>, and a decider will
+    answer <code>/v1/snapshot</code> directly given its token.
+  </div>
+</noscript>
+
+<main v-scope="Queue()" @vue:mounted="start()">
+  <div class="top">
+    <img class="logo" src="/logo.png" alt="" width="24" height="24">
+    <span class="mark">duva</span>
+    <a class="signout only-with-gate" href="/auth/logout">Sign out</a>
+  </div>
+
+  <!-- Two kinds of blocked, and what a person should do about them differs.
+       No actor is standing: nothing changes until a compose file is edited,
+       so it reads as a settled fact. An actor that is not ready is transient
+       -- the reference one is unready on an uncommitted repository -- so it
+       reads as "wait a moment" rather than "this is broken".
+
+       Told apart by b.kind, never by reading b.reason: that is the actor's
+       own prose and it is free to reword it. -->
+  <div v-for="b in blocked"
+       class="banner"
+       :class="b.kind === 'actor-not-ready' ? 'banner-wait' : 'banner-note'">
+    <span class="who">{{ b.kind === 'actor-not-ready' ? 'not right now' : 'no actor' }}</span>
+    &mdash; <span class="mono">{{ b.host }}</span>: {{ b.reason }}
+  </div>
+
+  <div class="banner banner-error" v-if="unreachable.length">
+    <span v-for="u in unreachable">
+      <span class="who mono">{{ u.Host }}</span> is {{ u.Err }}.
+    </span>
+    <br>What it last reported is shown below, faded, and cannot be approved until it answers again.
+  </div>
+
+  <div class="banner" :class="result.level === 'error' ? 'banner-error' : ''" v-if="result.message">
+    <span class="who">{{ result.service }}</span> — {{ result.message }}
+  </div>
+
+  <template v-if="rows.length">
+  <h1>Queue <span class="count">({{ rows.length }})</span></h1>
+
+  <!-- Only when there is more than one host. A single tab reading "optiplex"
+       beside "All" offers a choice between a thing and the same thing. -->
+  <!-- No v-if on the tabs. petite-vue's v-if reads el.parentElement, and the
+       first element inside a <template v-if> has none while the block is being
+       built -- it throws "null is not an object (evaluating 's.insertBefore')"
+       and the whole page fails to mount, footer included. So the tab strip is
+       always in the DOM and hides itself when there is one host, where
+       "optiplex" beside "All" offers a choice between a thing and the same
+       thing. -->
+  <div class="filters">
+    <div class="tabs" :style="hosts().length > 1 ? '' : 'display:none'">
+      <button :class="host === '' ? 'on' : ''" @click="host = ''">
+        All <span class="n">{{ rows.length }}</span>
+      </button>
+      <button v-for="h in hosts()" :key="h"
+              :class="host === h ? 'on' : ''" @click="host = h">
+        {{ h }} <span class="n">{{ countFor(h) }}</span>
+      </button>
+    </div>
+    <input class="search" type="search" v-model="q" placeholder="Filter by service, image or tag">
+  </div>
+
+  <div class="head" aria-hidden="true">
+    <span>Service</span><span>Change</span><span>Kind</span><span></span>
+  </div>
+  <ul class="rows">
+    <li v-for="r in shown()" :key="r.key" :class="r.stale ? 'stale' : ''">
+      <span class="svc">{{ r.service }}<span class="on mono" v-if="r.host">{{ r.host }}</span><span class="img mono">{{ r.image }}</span></span>
+
+      <span class="jump mono" v-if="r.moved"><span class="to">{{ r.tag }}</span></span>
+      <span class="jump mono" v-else><span class="from">{{ r.current_tag }}</span><span class="arrow">&rarr;</span><span class="to">{{ r.candidate }}</span></span>
+
+      <span class="kind" :class="'kind-' + r.kind"
+            :title="r.kind === 'unknown' ? 'duva could not compare these tags — not a semantic version' : ''">{{ r.kind }}</span>
+
+      <button class="apply" v-if="canApply"
+              :disabled="!r.can_apply || running(r.key) || busyHost(r.host)"
+              :title="buttonReason(r)"
+              @click="apply(r)">{{ running(r.key) ? "Updating…" : "Update" }}</button>
+
+      <ul class="steps" v-if="steps[r.key] || finished[r.key]">
+        <li v-for="line in (steps[r.key] || [])">{{ line }}</li>
+        <li :class="finished[r.key] && finished[r.key].startsWith('failed') ? 'bad' : 'ok'"
+            v-if="finished[r.key]">{{ finished[r.key] }}</li>
+      </ul>
+    </li>
+  </ul>
+  <p class="none" :style="shown().length ? 'display:none' : ''">
+    Nothing matches. <a href="#" @click.prevent="host = ''; q = ''">Show all {{ rows.length }}</a>.
+  </p>
+  </template>
+
+  <div class="empty" v-else>
+    <div class="tick" aria-hidden="true"></div>
+    <h1>Nothing waiting for approval</h1>
+    <p v-if="unreachable.length">Nothing from the deciders that answered. The ones above did not, so this is not the whole picture.</p>
+    <p v-else>Every container duva watches is where you left it. Nothing will change without your say.</p>
+  </div>
+
+  <footer>
+    <span>duva {{ version }}</span>
+  </footer>
+</main>
+
+<!-- The first paint's data, so the page is correct before any request is
+     made. Written by the template rather than fetched, which is what keeps
+     the no-JavaScript case whole. -->
+<script type="application/json" id="initial">[[ .InitialJSON ]]</script>
+
+<script type="module">
+import { createApp } from "/petite-vue.js"
+
+const initial = JSON.parse(document.getElementById("initial").textContent)
+
+createApp({
+  Queue() {
+    return {
+      rows: initial.rows || [],
+      unreachable: initial.unreachable || [],
+      blocked: initial.blocked || [],
+      canApply: initial.can_apply,
+      version: initial.version,
+      steps: {},        // key -> lines so far
+      finished: {},     // key -> terminal status
+      result: {},       // the last apply's answer, when it refused
+      host: "",         // "" is every host
+      q: "",            // what was typed in the search box
+
+      // Pick up applies this page did not start.
+      //
+      // `steps` is this page's memory of what it began, and a reload empties
+      // it while the queue carries on. The queue says what is in flight, so
+      // a row it reports as applying is treated as running and re-attached:
+      // the stream replays what was said so far. Rows with a panel already
+      // are skipped, which includes a failed one kept for reading.
+      resume() {
+        for (const r of this.rows) {
+          if (r.applying && !this.steps[r.key] && !this.finished[r.key]) {
+            this.steps = { ...this.steps, [r.key]: [] }
+            this.watch(r.key)
+          }
+        }
+      },
+
+      start() {
+        this.resume()
+        // A hidden tab does not poll: this page is left open for days, and a
+        // decider answering for nobody every 15s is the sort of thing noticed
+        // in a log months later.
+        setInterval(() => { if (!document.hidden) this.poll() }, 15000)
+        document.addEventListener("visibilitychange", () => {
+          if (!document.hidden) this.poll()
+        })
+      },
+
+      async poll() {
+        try {
+          const r = await fetch("/api/state")
+          // The sign-in gate answers 401 once the session has ended; a
+          // reload sends the browser back through sign-in.
+          if (r.status === 401) { location.reload(); return }
+          const s = await r.json()
+          this.rows = s.rows || []
+          this.unreachable = s.unreachable || []
+          this.blocked = s.blocked || []
+          this.canApply = s.can_apply
+          this.resume()
+        } catch (e) {
+          // A failed poll is not worth reporting: the next one is 15s away,
+          // and a UI that cannot reach itself has nothing useful to say from
+          // inside itself.
+        }
+      },
+
+      // The hosts with something waiting, in a stable order.
+      //
+      // Derived from the rows rather than configured: a host with nothing
+      // queued has no tab, because a tab that always shows an empty list is a
+      // thing to click and be disappointed by.
+      hosts() {
+        return [...new Set(this.rows.map(r => r.host))].sort()
+      },
+
+      // What the table shows: the rows the tab and the search box allow.
+      //
+      // Filtered here rather than by narrowing rows, because everything else
+      // asks rows a question about the whole queue -- whether a host is busy,
+      // how many are waiting -- and a filtered list would answer about what
+      // happens to be on screen.
+      shown() {
+        const q = this.q.trim().toLowerCase()
+        return this.rows.filter(r =>
+          (!this.host || r.host === this.host) &&
+          (!q || (r.service + " " + r.image + " " + r.current_tag + " " +
+                  r.candidate + " " + r.tag).toLowerCase().includes(q)))
+      },
+
+      // How many are waiting on a host, for the tab that offers it.
+      countFor(host) {
+        return host ? this.rows.filter(r => r.host === host).length : this.rows.length
+      },
+
+      // Is this row being applied right now?
+      //
+      // Having steps is not the same as running: the panel keeps its lines
+      // after the actor is done, because a finished apply is worth reading and
+      // a failed one is worth reading most of all. A terminal status is what
+      // ends the run, so that -- not the presence of lines -- is what the
+      // button and the host lock ask about. Without this the row said
+      // "Updating…" forever and, through busyHost, held the whole host greyed.
+      running(key) {
+        return !!this.steps[key] && !this.finished[key]
+      },
+
+      // Is another service on this host already being applied?
+      //
+      // The decider serialises applies across every service it owns -- one
+      // decider is one host -- and holds that lock for the whole transaction.
+      // A second click therefore does not fail: it is accepted, spawns a
+      // goroutine, and parks on the mutex saying "Updating…" while doing
+      // nothing, for as long as the first apply takes. Greying the rest is
+      // what makes the page agree with what the decider will actually do.
+      busyHost(host) {
+        return this.rows.some(r => this.running(r.key) && r.host === host)
+      },
+
+      buttonReason(r) {
+        if (r.stale) return r.host + " is not answering, so this cannot be confirmed or applied"
+        if (this.busyHost(r.host) && !this.running(r.key)) {
+          const busy = this.rows.find(o => this.running(o.key) && o.host === r.host)
+          return r.host + " is applying " + (busy ? busy.service : "another service") +
+                 "; one at a time per host"
+        }
+        if (r.can_apply) return ""
+        // The decider's own words, relayed: why an actor would refuse is its
+        // business, and a sentence composed here would be one this page had
+        // to keep in agreement with an actor it knows nothing about.
+        const b = this.blocked.find(b => b.host === r.host)
+        return b && b.reason ? r.host + " — " + b.reason : r.host + " cannot apply right now"
+      },
+
+      async apply(r) {
+        this.result = {}
+        // Clear the previous run's outcome, or running() would see a stale
+        // terminal status and call the new apply finished before it began.
+        const { [r.key]: _done, ...others } = this.finished
+        this.finished = others
+        this.steps = { ...this.steps, [r.key]: [] }
+        const applied = await fetch("/api/apply/" + r.key, { method: "POST" })
+        if (applied.status === 401) { location.reload(); return }
+        const res = await applied.json()
+        if (res.message) {
+          // Refused before anything started: drop the panel and say why.
+          const { [r.key]: _, ...rest } = this.steps
+          this.steps = rest
+          this.result = { service: r.service, level: "error", message: res.message }
+          return
+        }
+        this.watch(r.key)
+      },
+
+      // Reading the actor's steps as they arrive. Lines go into `steps`, and
+      // the DOM follows -- there is no "find the panel and append to it".
+      async watch(key) {
+        try {
+          const res = await fetch("/api/stream/" + key)
+          const reader = res.body.getReader()
+          const dec = new TextDecoder()
+          let buf = ""
+          for (;;) {
+            const { done, value } = await reader.read()
+            if (done) break
+            buf += dec.decode(value, { stream: true })
+            const lines = buf.split("\n")
+            buf = lines.pop()
+            for (const line of lines) {
+              if (!line) continue
+              if (line.startsWith("status: ")) {
+                this.finished = { ...this.finished, [key]: line.slice(8) }
+              } else {
+                this.steps = { ...this.steps, [key]: [...(this.steps[key] || []), line] }
+              }
+            }
+          }
+        } catch (e) {
+          this.finished = { ...this.finished, [key]: "failed: lost the connection while it ran" }
+        }
+        // The queue has changed underneath: an applied entry has left it.
+        await this.poll()
+
+        // A succeeded apply has left the queue, so the poll above already took
+        // its row away. A failed one has not: the entry is still pending, and
+        // its panel is the only account of what went wrong, so that stays
+        // until the person does something about it.
+        if ((this.finished[key] || "").startsWith("failed")) return
+        const { [key]: _s, ...steps } = this.steps
+        const { [key]: _f, ...finished } = this.finished
+        this.steps = steps
+        this.finished = finished
+      },
+    }
+  },
+}).mount()
+</script>
+</body>
+</html>

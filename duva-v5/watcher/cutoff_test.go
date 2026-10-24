@@ -1,0 +1,299 @@
+package watcher
+
+import (
+	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/store"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/rs/zerolog"
+
+	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/watch"
+)
+
+// useTempState gives the test a database of its own, in a temporary
+// directory, the way serve gives the watcher duva's.
+func useTempState(t *testing.T) {
+	t.Helper()
+	st, err := store.Open(filepath.Join(t.TempDir(), "duva.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := memStore
+	memStore = st
+	t.Cleanup(func() { memStore = old; st.Close() })
+}
+
+func loadOrFail(t *testing.T) *memory {
+	t.Helper()
+	mem, err := loadMemory(zerolog.Nop(), 0)
+	if err != nil {
+		t.Fatalf("loadMemory: %v", err)
+	}
+	return mem
+}
+
+// A service never checked looks back a window rather than to the beginning of
+// time: a watcher with no memory reporting every tag ever published would
+// bury the run in noise nobody would read.
+func TestAnUncheckedServiceLooksBackAWindow(t *testing.T) {
+	useTempState(t)
+	mem := loadOrFail(t)
+
+	got := mem.Cutoff("never-seen")
+	if time.Since(got) > defaultWindow+time.Minute {
+		t.Errorf("cutoff is %v ago, want about %v", time.Since(got), defaultWindow)
+	}
+	if mem.why == "" {
+		t.Error("the memory should say where its cutoffs came from, for the log")
+	}
+}
+
+func TestARecordedCutoffIsUsed(t *testing.T) {
+	useTempState(t)
+	want := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+
+	mem := loadOrFail(t)
+	mem.Checked("app", want)
+	if err := mem.save(); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	if got := loadOrFail(t).Cutoff("app"); !got.Equal(want) {
+		t.Errorf("cutoff = %v, want %v", got, want)
+	}
+}
+
+// The rule the whole split exists for: one service's line is its own.
+func TestOneServicesLineDoesNotAffectAnothers(t *testing.T) {
+	useTempState(t)
+	recorded := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+
+	mem := loadOrFail(t)
+	mem.Checked("checked", recorded)
+	if err := mem.save(); err != nil {
+		t.Fatal(err)
+	}
+
+	reloaded := loadOrFail(t)
+	if got := reloaded.Cutoff("checked"); !got.Equal(recorded) {
+		t.Errorf("the checked service = %v, want %v", got, recorded)
+	}
+	// The other one still looks back a window, rather than inheriting a line
+	// it never earned.
+	if got := reloaded.Cutoff("untouched"); time.Since(got) > defaultWindow+time.Minute {
+		t.Errorf("an unchecked service inherited %v; it should look back a window", got)
+	}
+}
+
+// The override is how you ask "what appeared in the last week" without
+// disturbing what is recorded.
+func TestSinceOverrideAcceptsADuration(t *testing.T) {
+	useTempState(t)
+	t.Setenv("DUVA_SETTING_SINCE", "24h")
+
+	mem := loadOrFail(t)
+	got := mem.Cutoff("app")
+	if d := time.Since(got); d < 23*time.Hour || d > 25*time.Hour {
+		t.Errorf("cutoff is %v ago, want about 24h", d)
+	}
+	if !strings.Contains(mem.why, "DUVA_SETTING_SINCE") {
+		t.Errorf("why = %q, want it to name the override", mem.why)
+	}
+}
+
+func TestSinceOverrideAcceptsATimestamp(t *testing.T) {
+	useTempState(t)
+	want := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	t.Setenv("DUVA_SETTING_SINCE", want.Format(time.RFC3339))
+
+	if got := loadOrFail(t).Cutoff("app"); !got.Equal(want) {
+		t.Errorf("cutoff = %v, want %v", got, want)
+	}
+}
+
+// An override asks a question; it must not answer for the watcher's memory.
+func TestAnOverrideRecordsNothing(t *testing.T) {
+	useTempState(t)
+	recorded := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+
+	mem := loadOrFail(t)
+	mem.Checked("app", recorded)
+	if err := mem.save(); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("DUVA_SETTING_SINCE", "1h")
+	overridden := loadOrFail(t)
+	overridden.Checked("app", time.Now())
+	if err := overridden.save(); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("DUVA_SETTING_SINCE", "")
+	if got := loadOrFail(t).Cutoff("app"); !got.Equal(recorded) {
+		t.Errorf("an override overwrote the recorded line: %v, want %v", got, recorded)
+	}
+}
+
+func TestAMalformedSinceIsAnError(t *testing.T) {
+	useTempState(t)
+	t.Setenv("DUVA_SETTING_SINCE", "yesterday-ish")
+
+	if _, err := loadMemory(zerolog.Nop(), 0); err == nil {
+		t.Error("a malformed DUVA_SETTING_SINCE was accepted")
+	}
+}
+
+// --- what is held ------------------------------------------------------------
+
+// A finding that could not be handed on waits, and survives a restart. This
+// is what makes running with no webhook configured a way to defer publishing
+// rather than a way to lose findings.
+func TestHeldFindingsSurviveARestart(t *testing.T) {
+	useTempState(t)
+
+	mem := loadOrFail(t)
+	mem.Hold(watch.Finding{Service: "app", Tag: "1.1.0", Image: "example.com/app"})
+	if err := mem.save(); err != nil {
+		t.Fatal(err)
+	}
+
+	held := loadOrFail(t).Held()
+	if len(held) != 1 {
+		t.Fatalf("held %d findings after a reload, want 1", len(held))
+	}
+	if held[0].Service != "app" || held[0].Tag != "1.1.0" {
+		t.Errorf("held = %+v, want app 1.1.0", held[0])
+	}
+}
+
+// Handing one on drops it, so it is not sent twice.
+func TestAHandedFindingIsNoLongerHeld(t *testing.T) {
+	useTempState(t)
+	f := watch.Finding{Service: "app", Tag: "1.1.0"}
+
+	mem := loadOrFail(t)
+	mem.Hold(f)
+	mem.Handed(f)
+	if err := mem.save(); err != nil {
+		t.Fatal(err)
+	}
+
+	if held := loadOrFail(t).Held(); len(held) != 0 {
+		t.Errorf("held %d findings, want none after it was handed on", len(held))
+	}
+}
+
+// A moving tag that moves repeatedly during an outage leaves one entry, not
+// one per move -- the gate's queue is keyed by service and would discard all
+// but the last anyway.
+func TestHoldingTheSameTagTwiceKeepsOne(t *testing.T) {
+	useTempState(t)
+
+	mem := loadOrFail(t)
+	mem.Hold(watch.Finding{Service: "app", Tag: "latest", Digest: "sha256:aaa"})
+	mem.Hold(watch.Finding{Service: "app", Tag: "latest", Digest: "sha256:bbb"})
+
+	held := mem.Held()
+	if len(held) != 1 {
+		t.Fatalf("held %d, want 1 -- the same tag twice is one finding", len(held))
+	}
+	if held[0].Digest != "sha256:bbb" {
+		t.Errorf("held the older digest %q; the newer one supersedes it", held[0].Digest)
+	}
+}
+
+// --- writing ------------------------------------------------------------------
+
+// --- the project path --------------------------------------------------------
+
+// What is mounted is the project, so there is no subdirectory to honour and
+// none to escape from. This stage reads compose files and touches no git, so
+// it has no reason to see the repository around them -- only the updater
+// mounts that, because committing needs it.
+func TestTheProjectIsWhatIsMounted(t *testing.T) {
+	dir := t.TempDir()
+	// A repository-shaped tree: the project in a subdirectory, which this
+	// stage must NOT go looking through.
+	sub := filepath.Join(dir, "pi")
+	os.MkdirAll(sub, 0o755)
+	os.WriteFile(filepath.Join(sub, "docker-compose.yml"), []byte("services: {}\n"), 0o644)
+
+	old := composeDir
+	composeDir = dir
+	t.Cleanup(func() { composeDir = old })
+
+	if _, err := projectFile(); err == nil {
+		t.Error("a project one directory down was found, so the mount is not the contract")
+	}
+}
+
+// A service with no recorded cutoff is on its first check, and one that has
+// been checked is not.
+func TestFirstCheckIsOnlyForAServiceWithNoHistory(t *testing.T) {
+	m := &memory{services: map[string]serviceState{
+		"checked": {Cutoff: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)},
+		// Recorded, but never completed a check: its cutoff is zero, so it is
+		// still owed a first one.
+		"held": {Pending: map[string]watch.Finding{"1.0.0": {}}},
+	}}
+
+	if m.FirstCheck("checked") {
+		t.Error("a service with a recorded cutoff was called a first check")
+	}
+	if !m.FirstCheck("held") {
+		t.Error("a service with findings but no completed check is still owed a first one")
+	}
+	if !m.FirstCheck("brand-new") {
+		t.Error("a service never seen before is a first check")
+	}
+}
+
+// An override is not a first check: DUVA_SETTING_SINCE asks a question against a
+// window someone chose, and widening it would make the flag mean something
+// else.
+func TestAnOverrideIsNeverAFirstCheck(t *testing.T) {
+	m := &memory{services: map[string]serviceState{}, override: true}
+	if m.FirstCheck("anything") {
+		t.Error("DUVA_SETTING_SINCE was treated as a first check, so it would report more than it was asked for")
+	}
+}
+
+// A check asked to look back further looks back to whichever is earlier: its
+// own cutoff, or how far it was asked. Never later -- asking for a week must
+// not look less far back than an ordinary check, for a service not checked
+// in longer -- and it changes no recorded cutoff by itself.
+func TestALookBackIsTheEarlierOfTheTwo(t *testing.T) {
+	useTempState(t)
+	recent := time.Now().Add(-2 * time.Hour)
+	long := time.Now().Add(-30 * 24 * time.Hour)
+	mem := loadOrFail(t)
+	mem.Checked("recent", recent)
+	mem.Checked("stale", long)
+	if err := mem.save(); err != nil {
+		t.Fatal(err)
+	}
+
+	back, err := loadMemory(zerolog.Nop(), 7*24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	week := time.Now().Add(-7 * 24 * time.Hour)
+	if got := back.Cutoff("recent"); got.After(week.Add(time.Minute)) {
+		t.Errorf("recent looks back to %v, want about a week ago", got)
+	}
+	if got := back.Cutoff("stale"); !got.Equal(long.UTC()) {
+		t.Errorf("stale looks back to %v, want its own, older cutoff %v", got, long)
+	}
+	if back.FirstCheck("recent") {
+		t.Error("a look-back made a checked service a first check")
+	}
+
+	plain := loadOrFail(t)
+	if !plain.Cutoff("recent").Equal(recent.UTC()) {
+		t.Error("loading with a look-back changed the recorded cutoff")
+	}
+}

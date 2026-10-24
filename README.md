@@ -172,81 +172,6 @@ when any exist, so a single step enforces "everything in this repo is pinned":
 
 Read-only — parses the compose file, never touches Docker or the network.
 
-### Scheduled upgrades (systemd)
-
-Declare a schedule in a git-tracked `pin.yaml` (also accepts `pin.yml`) next
-to the compose file:
-
-```yaml
-schedule: "0 6 * * 1"        # 5-field cron expression, required
-services:                     # optional; omitted = every service
-  - caddy
-  - name: paperless-db        # constrained: upgrade only to registry tags
-    tags: '^17\.\d+-alpine$'  # matching this regex — majors stay pinned
-    exclude: '(alpha|beta|rc)' # optional; drop matching candidates
-    delay: 7d                 # optional; only adopt tags published at least
-                              # this long ago ("48h", "7d", "2w")
-on_change: ./pin-upgraded.sh  # optional; run in the compose dir after
-                              # upgrades changed the compose file
-hostname: myhost              # optional; box name in notification titles
-                              # (defaults to the OS hostname)
-notify:                       # optional; report each run via ntfy
-  ntfy:
-    url: https://ntfy.example.net
-    topic: docker-pin
-    token_env: NTFY_TOKEN     # env var holding the token (this is the default)
-    token_file: /etc/ntfy.env # optional KEY=VALUE file to read it from
-```
-
-```bash
-sudo docker pin schedule apply    # install/update the systemd timer (idempotent)
-docker pin schedule status        # config, install/drift state, next fire time
-sudo docker pin schedule remove   # disable + delete the units; pin.yaml stays
-docker pin schedule run           # one scheduled run in the foreground
-docker pin schedule run --dry-run # full discovery, prints what would upgrade,
-                                  # changes nothing
-```
-
-`apply` translates the cron expression to a systemd `OnCalendar` and writes a
-`docker-pin-<dir>-<hash>.service`/`.timer` pair into `/etc/systemd/system`.
-Each run treats every configured service as its own transaction: upgrade the
-pin like `docker pin upgrade`, `docker compose up -d <service>`, run
-`on_change`, send one notification — independently per service. `on_change`
-receives `PIN_SERVICE`, `PIN_OLD_IMAGE` and `PIN_NEW_IMAGE` in its
-environment, so a hook like
-
-```yaml
-on_change: git add docker-compose.yml && git commit -m "$PIN_SERVICE: upgrade to $PIN_NEW_IMAGE" && git push
-```
-
-produces one revertable commit per service upgrade. The full set of hook
-variables: `PIN_SERVICE`, `PIN_OLD_IMAGE`/`PIN_NEW_IMAGE` (full references),
-`PIN_OLD_TAG`/`PIN_NEW_TAG` and `PIN_OLD_DIGEST`/`PIN_NEW_DIGEST` — so e.g.
-`git commit -m "$PIN_SERVICE: $PIN_OLD_TAG -> $PIN_NEW_TAG"` needs no string
-surgery. A service with a `tags` regex only ever moves to the newest registry
-tag matching that regex (numeric version order, prerelease/build suffixes rank
-below the bare release) and is left untouched when nothing newer matches — it
-never falls back to a moving tag, so e.g. a database can track `17.x-alpine`
-patches while never jumping to 18. `exclude` drops candidates matching a
-second regex. `delay` adds a soak period: the newest candidate published at
-least that long ago wins, so a release gets time in the wild before you adopt
-it (publish time from the Docker Hub tag API, or the image config's `created`
-timestamp on GHCR and other OCI registries; at most 10 candidate dates are
-checked per service per run). With `notify.ntfy` configured, every run
-that upgraded or failed anything posts a summary (failures at high priority);
-the token is read from the environment or a `KEY=VALUE` file, never from
-`pin.yaml`. Runs never leave the system in a bad state: if a service's
-`compose up` fails, only that service's pin is rolled back and re-asserted —
-the other services proceed untouched and the failed upgrade retries next run —
-and a failed `on_change` (e.g. a rejected `git push`) is non-fatal: the local
-commit rides along with the next push. Restricting both day-of-month and
-day-of-week in the cron
-expression is rejected (cron ORs them, systemd ANDs them). Requires Linux with
-systemd.
-
-Because the schedule lives in `pin.yaml`, restoring a host from backup is
-just: clone the repo, `sudo docker pin schedule apply`.
-
 ### Shell completion
 
 Both plugins implement the completion protocol the Docker CLI (v25+) uses to
@@ -279,76 +204,142 @@ image: postgres:16.3
 
 No-op if the service isn't pinned.
 
-## duva — the notify-only companion
+## duva — the update companion
 
-This repo also ships **duva** (Swedish for dove — a carrier pigeon: flies to
-the registry, comes back with one note, touches nothing) as a container image:
-`ghcr.io/miista/duva`. It watches **pinned** services in a compose project
-(`image:` has `@sha256:...`) and sends one ntfy notification when a newer
-version tag appears (or, for an unconstrained pin, when the remote digest
-changes) — then remembers what it reported so it never repeats itself. It
-never rewrites the compose file, never pulls an image, never touches the
-Docker socket.
+**duva** (Swedish for dove — a carrier pigeon: flies to the registry and comes
+back) watches **pinned** services in a compose project (`image:` has
+`@sha256:...`) and either applies an update or queues it for a person,
+according to that service's `duva.auto` policy. Applying means: pull the
+image, rewrite the pin, recreate the container, commit the change.
 
 Being pinned **is** the opt-in: `docker pin <service>` starts duva watching
-it, `docker unpin <service>` stops it. A service without a digest is logged
-as skipped and otherwise ignored — no notification, no state tracking. This
-is what duva is actually for: telling you when a deliberate version pin has
-gone stale, not generic "is anything newer" drift-watching.
+it, `docker unpin <service>` stops it. A service without a digest is ignored.
+This is what duva is for — telling you when a deliberate version pin has gone
+stale, not generic "is anything newer" drift-watching.
 
-Per-service rules live as labels on the service, right next to the pin they
-govern:
+duva ships as **four images**, one per stage:
+
+    watch  ->  queue  ->  update
+                 ^
+                 |
+                 ui
+
+| stage | what it does | docker socket | /compose | git |
+|---|---|---|---|---|
+| **watch** (`ghcr.io/miista/duva-watch`) | what tags exist, and when | — | read | — |
+| **queue** (`ghcr.io/miista/duva-queue`) | is this an update, how big, may it be applied | — | read | — |
+| **update** (`ghcr.io/miista/duva-update`) | pull, write the pin, recreate, commit | read-write | **read-write** | yes |
+| **ui** (`ghcr.io/miista/duva-ui`) | the approval queue, over one or more hosts | — | — | — |
+
+Only update holds any privilege, and that is the point of the split: the
+network-facing half needs none of what the work needs. Watch, queue and update
+each run on the host they touch, since each reads that host's compose project
+and — for update — its docker socket and its repository. Only the UI is
+host-agnostic, serving as many hosts' queues as it is given.
+
+These version independently of the CLI, under their own `duva-v4/vX.Y` tags.
+See `duva-v4/README.md` for the full deployment contract, including why the
+updater refuses to run as root.
+
+### Per-service labels
+
+Rules live on the service, next to the pin they govern:
 
 ```yaml
 services:
   radarr:
     image: ghcr.io/linuxserver/radarr:latest@sha256:...
     labels:
-      duva.include: '^\d+\.\d+\.\d+$' # only consider tags matching this regex
-      duva.exclude: '(alpha|beta|rc)' # drop matching candidates
-      duva.delay: 7d                  # only report a candidate this old
+      diun.include_tags: '^\d+\.\d+\.\d+$'  # only consider tags matching this
+      diun.exclude_tags: '(alpha|beta|rc)'  # drop matching candidates
+      duva.auto: digest                     # what may be applied unattended
 ```
 
-Everything else is env vars — `DUVA_SCHEDULE` (cron expression),
-`DUVA_HOSTNAME` (optional, defaults to the OS hostname), and
-`DUVA_NTFY_URL`/`DUVA_NTFY_TOPIC`/`DUVA_NTFY_TOKEN` for notifications. The
-container contract is two fixed mount paths plus env — no config file:
+**Tag filtering reads diun's labels, not duva's.** These are detection rules
+and the watcher is what reads them; around forty-five services already carry
+them because diun was the watcher here for a long time, and a second namespace
+saying the same thing would mean a migration that changes nothing. Policy —
+what may be applied unattended — is a different question and lives on
+`duva.auto`.
 
-```yaml
-services:
-  duva:
-    image: ghcr.io/miista/duva:latest
-    environment:
-      DUVA_SCHEDULE: "0 6 * * *"
-      DUVA_NTFY_URL: https://ntfy.example.net
-      DUVA_NTFY_TOPIC: docker-pin
-    env_file: ./duva-secrets.env   # DUVA_NTFY_TOKEN=... ; gitignored
-    volumes:
-      - .:/compose:ro
-      - duva-state:/data
-volumes:
-  duva-state:
-```
+`duva.auto` decides what may be applied without asking: `none` (the default),
+`digest`, `patch`, `minor` or `major`. A service with no `duva.auto` is only
+ever queued for a person.
 
-`/data` holds only the small dedup-state file, so a named volume is the
-right default: it lives on disk under Docker's data root, persists across
-restarts and upgrades, and inherits the image's `nonroot` ownership on
-first use — no `user:` or `chown` needed. If you prefer a bind mount
-(`./duva/data:/data`), the image's distroless `nonroot` user (UID 65532)
-must be able to write it: set `user:` to the directory owner's UID:GID or
-`chown 65532` the directory.
+`digest` is not a rung on that ladder but a different mode. `patch`, `minor`
+and `major` size a *version step* — the tag itself changing — and each also
+implies taking a digest move on the tag already followed. `digest` takes only
+the latter: what `latest` now points at, or an upstream republishing `1.4.2`
+with a patched base layer, without also consenting to be walked up to `1.4.3`.
+A digest move has no magnitude to threshold on, which is why it is a mode
+rather than the smallest step.
 
-**`/compose` MUST be the compose project _directory_, never the compose file
-alone.** Two things break with a single-file mount: `include:`'d nested
-compose files resolve relative to the directory and wouldn't exist inside
-the container, and a single-file bind mount silently pins the old inode when
-the host file is replaced by rename — which is exactly how editors and
-`docker pin` itself rewrite it, so duva would keep reading a stale file
-forever without any error.
+An unrecognised value is an error rather than a fallback: `duva.auto: pathc`
+silently meaning "none" is the kind of thing discovered months later, when
+something has not been happening and nobody knows why — and the opposite
+mistake, a typo that quietly widened what may be applied unattended, is worse
+still.
 
-`duva serve` (the image's default command) runs the check on
-`DUVA_SCHEDULE`'s cron expression; `duva run` does a single check and
-exits.
+### Configuration
+
+Each stage is configured by env vars; there is no config file.
+
+**watch** — `DUVA_SCHEDULE` (cron expression), `DUVA_WEBHOOK_URL` (where to
+publish notices), `DUVA_HOST`, `DUVA_SINCE`, `DUVA_LOG_LEVEL`. Mounts the
+project read-only at `/compose` and keeps one timestamp in `/data`. Its only
+state is that timestamp, so losing it costs a noisy run rather than a rebuild.
+`serve` checks on the schedule and stays up between checks — restarting it is
+how you ask for a check now.
+
+**queue** — `DUVA_UPDATE_URL`/`DUVA_UPDATE_TOKEN` (the updater it hands work
+to), `DUVA_QUEUE_TOKEN` (what a UI must present), `DUVA_NTFY_ENDPOINT`/
+`DUVA_NTFY_TOPIC`/`DUVA_NTFY_CLICK` for notifications, `DUVA_UPDATE_TIMEOUT`,
+and `DUVA_RECONCILE_INTERVAL` (how often a queued entry is re-checked against
+the compose file, to catch one satisfied by something other than its own
+apply; default 10m). Mounts the project read-only at `/compose` and keeps the
+queue in `/data` — without that volume a deploy drops every decision waiting
+on a person, and announces each one again when the watcher re-sends it.
+
+**update** — `DUVA_REPO` (the repository, at the path it has on the host),
+`DUVA_COMMIT_TEMPLATE`, `DUVA_GIT_PUSH` (off by default: commits stay local),
+`DUVA_UPDATE_TOKEN`. Mounts the repository read-write at its own host path,
+plus the docker socket.
+
+**ui** — `DUVA_QUEUES` (`host=url,host=url`), `DUVA_QUEUE_TOKEN_<HOST>` per
+host, and `DUVA_READ_ONLY` to serve the page without the Update button. Tokens
+are never in the queue list, so the list itself is not a secret. It refuses to
+start with no queues: "nothing waiting for approval" is the most misleading
+sentence it can print, and is also what it says when all is well.
+
+### What the mounts are for
+
+- **`/var/run/docker.sock`** (update only) — pulling images and recreating
+  containers means driving the host's daemon. This is real access to the host.
+  `:ro` on a socket applies to the file, not the API served over it: a
+  container holding it can still create and delete containers either way.
+- **`/compose`** — the compose project *directory*, never the file alone. Two
+  things break with a single-file mount: `include:`'d nested compose files
+  resolve relative to the directory and would not exist inside the container,
+  and a single-file bind silently pins the old inode when the host file is
+  replaced by rename — which is exactly how editors and `docker pin` itself
+  rewrite it, so the stage would read a stale file forever without any error.
+  Read-only for watch and queue; read-write for update, because rewriting the
+  pin is the whole point.
+- **`/data`** (watch, queue) — a named volume, not a bind. Docker chowns a
+  fresh named volume to match what the image carries; a bind mount would be
+  root-owned and the stage would fail on its final write, having done all the
+  work.
+
+Because update commits, it will not act on a dirty repository — committing on
+top of someone's half-finished edit is never wanted. It is a precondition, not
+a setting.
+
+**No rollback.** Everything answerable is answered in a precheck before the
+pull. A failed recreate is left alone: recreating stops and removes the old
+container before creating the replacement, so one error covers the old
+container running, gone, or a new one that will not start — and restoring the
+pin is wrong in some of those. The file keeps what was decided, the repository
+is dirty, and the next apply is blocked with the reason.
 
 ## How digests work (multi-arch)
 
@@ -379,7 +370,7 @@ pinned. If you have services pinned by an older version, check for ones whose
 tag you did not choose yourself.
 
 The registry tag-listing code is still used to find upgrade candidates
-(`docker pin upgrade`, `schedule`, and duva); it just no longer decides what
+(`docker pin upgrade` and duva); it just no longer decides what
 tag a pin is written under. Supported registries: **Docker Hub**, **GHCR**, and
 any **OCI-compliant registry** (bearer auth discovered via the
 `WWW-Authenticate` challenge).
@@ -454,6 +445,13 @@ This repo is the Homebrew tap. Pushing a `vX.Y.Z` tag triggers a GoReleaser work
 4. Publishes the `.deb`s to the shared [Cloudsmith](https://cloudsmith.io) apt
    repository (`guldmund/stable`), which indexes and signs them server-side.
    Each tool pushes only its own artifacts — there is no shared build step.
+
+duva's four images version independently, under `duva-v4/vX.Y` tags handled by
+`.github/workflows/duva-v4-release.yml` and its own `.goreleaser.duva-v4.yaml`.
+A queue fix should not wait on a CLI release, and a CLI release should not
+force a rebuild of four images that did not change — so the tag namespaces are
+deliberately separate, and the `duva-v4/` prefix is what keeps these tags out
+of the CLI workflow's `v*` trigger.
 
 ## License
 

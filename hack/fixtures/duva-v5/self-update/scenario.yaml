@@ -1,0 +1,8 @@
+# The newer updater this scenario means duva to find and apply to itself.
+#
+# Pushed as the real updater image, not the sleeper every other repository
+# gets: the replacement has to start and serve, because the queue reaches it
+# afterwards. See Scenario.Push.
+updates:
+  duva-update:
+    - 1.0.1

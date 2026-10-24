@@ -1,0 +1,122 @@
+# The receiver that stands in for ntfy, shared by every scenario that asserts
+# on what was announced.
+include:
+  - common/ntfy.yml
+
+# The v4 pipeline with a soak: policy allows a patch, but not until the
+# release is old enough.
+#
+# Two services, both allowing patches, differing only in how long they soak.
+# One soaks for days and must still be waiting when the scenario ends; the
+# other soaks for a minute, and the queue's own clock -- not a new notice --
+# must release it. The soak counts from when each image was pushed, which is
+# when the watcher says it was published.
+#
+# The images carry no digest: the suite pins them with docker pin before any
+# of this runs, so the starting state is produced the same way a real stack's
+# is.
+services:
+  # Each its own repository and container_name: a container_name is global to
+  # the daemon, and an image left on the host by another scenario must not
+  # look like a newer release here.
+  held:
+    image: localhost:5555/soak-held:1.0.0
+    container_name: soak-held
+    labels:
+      duva.include: '^1\.0\.\d+$'
+      duva.auto: patch
+      duva.soak: 3d
+
+  released:
+    image: localhost:5555/soak-released:1.0.0
+    container_name: soak-released
+    labels:
+      duva.include: '^1\.0\.\d+$'
+      duva.auto: patch
+      # Long enough that the first check sees it soaking rather than already
+      # old enough, short enough to wait out.
+      duva.soak: 60s
+
+  # Stage one. Asks the registry what exists and posts findings to the queue.
+  # Holds no socket and no git: it only reads the compose file.
+  duva-watch:
+    image: duva-watch:integration
+    command: ["serve"]
+    environment:
+      DUVA_HOST: integration
+      # serve is what ships. It checks once at startup, so restarting the
+      # container is what triggers a check; this schedule never fires.
+      DUVA_SCHEDULE: "0 3 * * *"
+      DUVA_WEBHOOK_URL: http://duva-queue:8080/v1/notify
+      # Debug, so a scenario that finds nothing says which service it skipped
+      # and why -- the difference between a failing test and a puzzle.
+      DUVA_LOG_LEVEL: debug
+    volumes:
+      - .:/compose:ro
+      - ./watch-data:/data
+      # Only here because the suite's registry is self-signed.
+      - ./certs/cert.pem:/etc/ssl/certs/ca-certificates.crt:ro
+    extra_hosts:
+      # The images are localhost:5555/..., and that name has to mean the
+      # registry in two places: here, where the watcher lists tags over
+      # HTTPS, and on the host's daemon, where the pull happens. A real
+      # registry resolves the same everywhere, so neither this nor the
+      # certificate mount exists there.
+      - localhost:host-gateway
+    depends_on:
+      duva-queue:
+        condition: service_healthy
+
+  # Stage two. Decides what a finding means and either queues it for a person
+  # or hands it to update. Holds no socket either -- it reads the compose file
+  # and talks over the network.
+  duva-queue:
+    image: duva-queue:integration
+    environment:
+      DUVA_HOST: integration
+      DUVA_QUEUE_TOKEN: integration-token
+      DUVA_UPDATE_URL: http://duva-update:8080
+      DUVA_UPDATE_TOKEN: integration-token
+      # The receiver stands in for ntfy, so a test can assert on what was
+      # announced rather than on what a log line said.
+      DUVA_NTFY_ENDPOINT: http://ntfy:8080
+      DUVA_NTFY_TOPIC: duva
+      # How often a soaked entry is checked for release. Seconds here so the
+      # scenario sees a soak end; the default is ten minutes, which against a
+      # soak measured in days is noise.
+      DUVA_RECONCILE_INTERVAL: 2s
+    volumes:
+      - .:/compose:ro
+      # The queue survives its own restart, and a test reads it from here.
+      - ./queue-data:/data
+    depends_on:
+      - duva-update
+
+  # Stage three. The only one with any privilege: it pulls, rewrites the pin,
+  # replaces the container and commits.
+  duva-update:
+    image: duva-update:integration
+    # The user that owns the repository, and the docker group on this host.
+    # Written to .env by the harness, because a fixture cannot know either:
+    # running as root would leave root-owned files in /compose and lose the
+    # commit identity its .git/config carries, and the group's id differs per
+    # host. The update stage refuses to start otherwise, which is the whole
+    # point of its preflight.
+    user: "${UID}:${GID}"
+    group_add:
+      - "${DOCKER_GID}"
+    environment:
+      DUVA_UPDATE_TOKEN: integration-token
+      # Where to read the project from. It is mounted at the path it has on
+      # the host, so a relative bind in the compose file resolves to a string
+      # the daemon can also find -- which is what recreating a container with
+      # one needs.
+      DUVA_REPO: ${PROJECT_DIR}
+      DUVA_COMMIT_TEMPLATE: "pin {{.Container}} to {{if eq .OldVersion .NewVersion}}{{.NewDigest}}{{else}}{{.NewVersion}}{{end}}"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Read-write, unlike the other two: rewriting the pin is its whole job.
+      - ${PROJECT_DIR}:${PROJECT_DIR}
+      - ./certs/cert.pem:/etc/ssl/certs/ca-certificates.crt:ro
+    extra_hosts:
+      - localhost:host-gateway

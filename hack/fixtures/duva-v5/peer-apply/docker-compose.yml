@@ -1,0 +1,57 @@
+# The receiver that stands in for ntfy, shared by every scenario that asserts
+# on what was announced.
+include:
+  - common/ntfy.yml
+
+# A duva approved over its API by a page on another host: what pi is to the
+# page on optiplex.
+#
+# The page holds nothing of pi's but its API: it approves with /v1/apply and
+# learns everything else from /v1/snapshot. So the test is that page, from
+# outside -- the API published on a port, as pi's is on the LAN -- polling
+# the snapshot through the apply as the page polls it.
+#
+# duva.auto is none, so the patch waits for that approval rather than being
+# applied on its own. The reconcile runs every second, so one is sure to fall
+# inside the apply, which is when the race it guards against happens: on
+# 2026-10-21 a reconcile mid-apply dropped speedtest-tracker's entry as
+# "already matches the compose file", and the readiness check reported the
+# apply's own rewrite as an uncommitted repository.
+services:
+  app:
+    image: localhost:5555/app:1.0.0
+    container_name: app
+    volumes:
+      - ./payload:/payload:ro
+    labels:
+      duva.include: '^1\.0\.\d+$'
+      duva.auto: none
+
+  duva:
+    image: duva:integration
+    command: ["serve"]
+    user: "${UID}:${GID}"
+    group_add:
+      - "${DOCKER_GID}"
+    environment:
+      DUVA_SETTING_HOST: integration
+      # serve checks once at startup; this schedule never fires.
+      DUVA_SETTING_SCHEDULE: "0 3 * * *"
+      DUVA_SETTING_LOG_LEVEL: debug
+      DUVA_SETTING_API_TOKEN: integration-token
+      DUVA_SETTING_NTFY_ENDPOINT: http://ntfy:8080
+      DUVA_SETTING_NTFY_TOPIC: duva
+      DUVA_SETTING_REPO: ${PROJECT_DIR}
+      DUVA_SETTING_COMMIT_TEMPLATE: "pin {{.Container}} to {{if eq .OldVersion .NewVersion}}{{.NewDigest}}{{else}}{{.NewVersion}}{{end}}"
+      # A reconcile every second, so one lands inside the apply.
+      DUVA_SETTING_RECONCILE_INTERVAL: 1s
+    ports:
+      # The API, as a peer's page reaches it. Loopback only.
+      - "127.0.0.1:18080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${PROJECT_DIR}:${PROJECT_DIR}
+      - ./data:/data
+      - ./certs/cert.pem:/etc/ssl/certs/ca-certificates.crt:ro
+    extra_hosts:
+      - localhost:host-gateway

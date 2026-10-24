@@ -16,8 +16,14 @@ jobs:
       - run: go vet ./...
       - run: go test ./... -cover
 
-  e2e-duva:
+  # The integration suite: docker pin and duva v5 against a real daemon and a
+  # local registry, with nothing upstream. hack/e2e-duva.sh became this
+  # suite. v4 is skipped: v5 has replaced it.
+  integration:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: bash hack/e2e-duva.sh
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: duva-v5/go.mod
+      - run: go test -tags integration -count=1 -p 1 -skip 'TestV4' ./test/...
