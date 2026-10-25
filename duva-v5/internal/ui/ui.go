@@ -77,6 +77,11 @@ type SoakSource interface {
 	Soaking() []Hosted
 }
 
+// HealthSource is a Source that can say how the fleet is: the hub's collector.
+type HealthSource interface {
+	Health() queue.Health
+}
+
 // UpcomingSource is a Source that also reports what is held for a person.
 type UpcomingSource interface {
 	Upcoming() []Hosted
@@ -134,7 +139,13 @@ type Server struct {
 // Handler returns the routes.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	// The fleet's health where the source can say it -- the hub's collector
+	// -- and plain "ok" where it cannot.
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		if hs, ok := s.Source.(HealthSource); ok {
+			queue.WriteHealth(w, hs.Health())
+			return
+		}
 		fmt.Fprintln(w, "ok")
 	})
 	mux.HandleFunc("/logo.png", servePNG(logoPNG))

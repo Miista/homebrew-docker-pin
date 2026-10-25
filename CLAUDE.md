@@ -163,6 +163,12 @@ v4's components in one process: `duva serve`. Released as one image,
   and the handler turns its findings away with a 2xx. The page only lists
   ignored services; nothing there changes them. Held by
   `TestATickDropsWhatWaitsForAnIgnoredService`.
+- **`/healthz` has three levels:** `ok`; `degraded` (a job failed
+  `queue.FailingRuns` = 3 times in a row; on the hub, an agent unreachable or
+  unwell), still a 200; `unhealthy` (the store unusable), the only 503,
+  because that is what Docker's check and autoheal restart on. The hub
+  reports the fleet but is unhealthy only for its own trouble. duva does not
+  notify about its own health: a monitor reads `/healthz`.
 - **No check at startup.** A deploy or restart used to be a full check of
   every registry; a check now is the schedule, Check…, or Run now. The
   integration suites ask v5 for one through `/v1/check-all`.
