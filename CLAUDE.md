@@ -243,7 +243,7 @@ one never releases the other. As in homebrew-hemma (`ui-vX.Y.Z`).
 | product | tag you push | workflow | publishes |
 |---|---|---|---|
 | docker pin | `cli-vX.Y.Z` | `release.yml` | GitHub release "cli vX.Y.Z", Homebrew formula, debs on Cloudsmith |
-| duva | `duva-vX.Y.Z` | `duva-release.yml` | `ghcr.io/miista/duva:X.Y.Z` and `:latest`; no GitHub release |
+| duva | `duva-vX.Y.Z` | `duva-release.yml` | `ghcr.io/miista/duva:X.Y.Z` and `:latest`; GitHub release "duva vX.Y.Z" (notes only, no files) |
 
 - **The open-source GoReleaser reads only plain semver,** so each workflow
   strips its prefix and passes the bare version as `GORELEASER_CURRENT_TAG`.
@@ -252,8 +252,12 @@ one never releases the other. As in homebrew-hemma (`ui-vX.Y.Z`).
   formula's download URLs are built from it. A tag pushed with the workflow's
   token starts no workflow, so it cannot release twice; a bare `v*` pushed
   by hand releases nothing.
-- **duva has no GitHub release:** the image is the release, so the releases
-  page stays the CLI's.
+- **duva's GitHub release is notes only:** the image on ghcr.io is the
+  artifact. The workflow writes the notes itself (the commits since the
+  previous `duva-vX.Y.Z` tag, filtered like the CLI's changelog, and a
+  compare link) and creates the release on the `duva-v` tag with `gh`;
+  GoReleaser cannot, since the only tag it can parse is the bare version,
+  which is not in git.
 - **A manual run of either workflow is a dry run:** it builds with the
   version given and publishes nothing.
 - Older tags (`vX.Y.Z` before `cli-`, `duva-v4/vX.Y`, `duva-v5/v5.0`) stay as

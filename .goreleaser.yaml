@@ -81,6 +81,17 @@ brews:
     test: |
       system "#{lib}/docker/cli-plugins/docker-pin", "docker-cli-plugin-metadata"
 
+# The CLI is released on the bare v<X.Y.Z> tag that release.yml makes from the
+# cli-v<X.Y.Z> tag you push; duva is released on duva-v<X.Y.Z> tags (and was
+# on duva-v4/vX.Y and duva-v5/vX.Y). None of the prefixed tags is a CLI
+# release: without this, the changelog could take one of them as "the
+# previous release" (GoReleaser picks the nearest reachable tag, whatever its
+# name).
+git:
+  ignore_tags:
+    - "cli-*"
+    - "duva-*"
+
 # The release says which product it is: this repo also releases duva, under
 # duva-v<X.Y.Z> tags, with no GitHub release of its own.
 release:
