@@ -96,3 +96,18 @@ git:
 # duva-v<X.Y.Z> tags, with no GitHub release of its own.
 release:
   name_template: "cli {{ .Tag }}"
+
+# Drop what is not a user-facing change from the changelog: chore/docs/test/ci
+# commits, the formula bump GoReleaser itself pushes each release, and merge
+# commits ('Merge: <title> (#N)' here).
+changelog:
+  use: git
+  sort: asc
+  filters:
+    exclude:
+      - "^chore:"
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+      - "^Brew formula update"
+      - "^Merge[: ]"
