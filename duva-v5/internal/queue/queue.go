@@ -54,6 +54,10 @@ type Entry struct {
 	// Source is where the image says its source lives, for a link to the
 	// release notes; empty when it does not say. See SourceOf.
 	Source string `json:"source,omitempty"`
+	// Release is which release the new image says it is (its
+	// org.opencontainers.image.version label); empty when it does not say.
+	// What a digest move's release notes link by. See ReleaseOf.
+	Release string `json:"release,omitempty"`
 }
 
 // Pending is what is waiting: the queue's rows in the store.
@@ -107,7 +111,7 @@ func (q *Pending) fail(err error) {
 // columns is every entry column, in the order scan reads them.
 const columns = `e.id, s.name, s.container, e.file, COALESCE(e.image, i.repo), e.from_ref, e.to_ref, e.tag,
 	COALESCE(e.digest, ''), COALESCE(e.kind, ''), e.auto, e.why, e.found_at,
-	COALESCE(e.published_at, ''), COALESCE(e.release_at, ''), COALESCE(e.source, '')`
+	COALESCE(e.published_at, ''), COALESCE(e.release_at, ''), COALESCE(e.source, ''), COALESCE(e.release, '')`
 
 const fromEntries = ` FROM queue_entries e
 	JOIN services s ON s.id = e.service_id
@@ -122,7 +126,7 @@ func scan(row scanner) (Entry, error) {
 	var e Entry
 	var kind, auto string
 	err := row.Scan(&e.ID, &e.Service, &e.Container, &e.File, &e.Image, &e.From, &e.To, &e.Tag,
-		&e.Digest, &kind, &auto, &e.Why, &e.FirstSeen, &e.Published, &e.ReleaseAt, &e.Source)
+		&e.Digest, &kind, &auto, &e.Why, &e.FirstSeen, &e.Published, &e.ReleaseAt, &e.Source, &e.Release)
 	e.Kind, e.Auto = version.Kind(kind), Auto(auto)
 	return e, err
 }
@@ -225,10 +229,10 @@ func (q *Pending) put(e Entry, now time.Time) (Entry, bool) {
 		}
 		res, err := tx.Exec(`INSERT INTO queue_entries
 			(service_id, file, image, from_ref, to_ref, tag, digest, kind, auto, why,
-			 published_at, found_at, release_at, source, status)
-			VALUES (?, ?, ?, ?, ?, ?, NULLIF(?, ''), NULLIF(?, ''), ?, ?, NULLIF(?, ''), ?, NULLIF(?, ''), NULLIF(?, ''), 'waiting')`,
+			 published_at, found_at, release_at, source, release, status)
+			VALUES (?, ?, ?, ?, ?, ?, NULLIF(?, ''), NULLIF(?, ''), ?, ?, NULLIF(?, ''), ?, NULLIF(?, ''), NULLIF(?, ''), NULLIF(?, ''), 'waiting')`,
 			serviceID, e.File, e.Image, e.From, e.To, e.Tag, e.Digest, string(e.Kind), string(e.Auto), e.Why,
-			e.Published, e.FirstSeen, e.ReleaseAt, e.Source)
+			e.Published, e.FirstSeen, e.ReleaseAt, e.Source, e.Release)
 		if err != nil {
 			return err
 		}

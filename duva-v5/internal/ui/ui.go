@@ -503,7 +503,7 @@ func toRow(e Hosted) row {
 // notesLink is a row's release notes link: through this page, which finds
 // the release when it is followed. Empty when the image names no source.
 func notesLink(e Hosted) string {
-	if len(queue.ReleaseNotes(e.Source, e.To, isDigestMove(e.Entry))) == 0 {
+	if len(queue.ReleaseNotes(e.Source, e.To, isDigestMove(e.Entry), e.Release)) == 0 {
 		return ""
 	}
 	return fmt.Sprintf("/notes/%s/%d", url.PathEscape(e.Host), e.ID)
@@ -540,7 +540,7 @@ func (s *Server) notes(w http.ResponseWriter, r *http.Request) {
 		if e.Host != host || e.ID != entry {
 			continue
 		}
-		places := queue.ReleaseNotes(e.Source, e.To, isDigestMove(e.Entry))
+		places := queue.ReleaseNotes(e.Source, e.To, isDigestMove(e.Entry), e.Release)
 		if len(places) == 0 {
 			break
 		}

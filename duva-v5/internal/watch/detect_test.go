@@ -123,12 +123,13 @@ func TestAFindingCarriesItsReleasesSource(t *testing.T) {
 	}
 	asked := map[string]bool{}
 	r := reg.registry()
-	r.TagSource = func(_, tag string) (string, error) {
+	r.TagLabels = func(_, tag string) (map[string]string, error) {
 		asked[tag] = true
 		if tag == "1.2.0" {
-			return "", errors.New("registry down")
+			return nil, errors.New("registry down")
 		}
-		return "https://github.com/example/app", nil
+		return map[string]string{"org.opencontainers.image.source": "https://github.com/example/app",
+			"org.opencontainers.image.version": tag + "-ls1"}, nil
 	}
 	res, err := collect(svc("1.0.0", `^\d`, ""), cutoff, r)
 	if err != nil {
@@ -137,8 +138,8 @@ func TestAFindingCarriesItsReleasesSource(t *testing.T) {
 	if len(res) != 2 {
 		t.Fatalf("got %d findings, want 2: %+v", len(res), res)
 	}
-	if res[0].Source != "https://github.com/example/app" {
-		t.Errorf("1.1.0 source = %q", res[0].Source)
+	if res[0].Source != "https://github.com/example/app" || res[0].Version != "1.1.0-ls1" {
+		t.Errorf("1.1.0 source %q, version %q", res[0].Source, res[0].Version)
 	}
 	// A registry that cannot say costs the link, not the finding.
 	if res[1].Tag != "1.2.0" || res[1].Source != "" {

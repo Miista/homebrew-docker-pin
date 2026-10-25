@@ -266,7 +266,7 @@ func run(log zerolog.Logger, only string, back time.Duration, opts Options) (err
 		TagDigest: registry.RemoteDigest,
 		// The release's own source label, for the finding it is reported
 		// with: the running container carries the previous release's.
-		TagSource: registry.TagSource,
+		TagLabels: registry.TagLabels,
 	}
 
 	report := opts.Report

@@ -46,7 +46,7 @@ func PreferSource(release, running string) string {
 // so a search for 2.14.1 finds every later release that mentions it. A
 // digest move has no version, so only the newest releases. Elsewhere, the
 // repository itself. None when the image names no source.
-func ReleaseNotes(source, version string, moved bool) []string {
+func ReleaseNotes(source, version string, moved bool, release string) []string {
 	if source == "" {
 		return nil
 	}
@@ -58,9 +58,17 @@ func ReleaseNotes(source, version string, moved bool) []string {
 		return []string{source}
 	}
 	base := strings.TrimSuffix(source, "/")
-	newest := base + "/releases"
-	if moved || version == "" {
-		return []string{newest}
+	// The release GitHub marks Latest, not the releases list: the list is
+	// newest first, and a publisher that also releases develop builds puts
+	// one of those on top.
+	latest := base + "/releases/latest"
+	// A digest move has no version of its own: the image's own word for
+	// which release it is, when it says.
+	if moved {
+		version = release
+	}
+	if version == "" {
+		return []string{latest}
 	}
 	tags := []string{version}
 	if bare, ok := strings.CutPrefix(version, "v"); ok {
@@ -72,5 +80,23 @@ func ReleaseNotes(source, version string, moved bool) []string {
 	for _, t := range tags {
 		out = append(out, base+"/releases/tag/"+url.PathEscape(t))
 	}
-	return append(out, newest)
+	return append(out, latest)
+}
+
+// ReleaseOf is an image's version label as a release to link by: a tag-like
+// string -- letters, digits, ".", "-", "_", "+" -- of a sensible length, else
+// empty. A label is the image's own say, and ends up in a URL.
+func ReleaseOf(label string) string {
+	label = strings.TrimSpace(label)
+	if label == "" || len(label) > 128 {
+		return ""
+	}
+	for _, r := range label {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.', r == '-', r == '_', r == '+':
+		default:
+			return ""
+		}
+	}
+	return label
 }
