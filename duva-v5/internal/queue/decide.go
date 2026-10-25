@@ -212,7 +212,7 @@ func tagChange(n Notice, svc Service, newTag string) Verdict {
 	// answer is what put `ofelia 0.3.22 -> a573727` on the page.
 	//
 	// Derived from the tag the file already declares, so the ordinary case
-	// needs no label. diun.include_tags remains the override for when this
+	// needs no label. duva.include_tags remains the override for when this
 	// cannot tell -- which it says rather than guesses.
 	if ok, why := version.SameScheme(svc.Tag, newTag); !ok {
 		v.Outcome = Ignore

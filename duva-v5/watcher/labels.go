@@ -10,16 +10,15 @@ import (
 
 // tagRules reads which tags a service considers candidates.
 //
-// It reads **diun's** labels, not duva's, and that is deliberate. Every
-// service on both hosts already carries `diun.include_tags` /
-// `diun.exclude_tags` -- around forty-five of them -- because diun has been
-// the watcher here for a long time. Reading duva's namespace instead would
-// mean a migration that changes nothing about what the constraints say, and
-// would leave every service unconstrained until it was done.
+// They are duva's own labels, `duva.include_tags` and `duva.exclude_tags`. The
+// same two rules were once read from diun's names, `diun.include_tags` and
+// `diun.exclude_tags`, because diun was the watcher and the services already
+// carried them; those are no longer read, and a service that still has only
+// the old name is refused by name (see renamed) rather than watched without
+// the constraint it was given.
 //
-// It is also the right namespace on the merits: these are detection rules,
-// and this is the watcher. Policy -- what may be applied unattended -- is a
-// different question, lives on `duva.auto`, and is the gate's to read.
+// Policy -- what may be applied unattended -- is a different question, lives
+// on `duva.auto`, and is the gate's to read.
 func tagRules(composeFile, service string) (include, exclude *regexp.Regexp, err error) {
 	labels, err := compose.Labels(composeFile, service)
 	if err != nil {
@@ -46,21 +45,41 @@ func rulesFrom(labels map[string]string) (include, exclude *regexp.Regexp, err e
 		return nil, nil, fmt.Errorf("duva.ignore: %q is not true or false", labels["duva.ignore"])
 	}
 
-	if raw := labels["diun.include_tags"]; raw != "" {
-		include, err = regexp.Compile(raw)
-		if err != nil {
-			// A pattern that does not compile is an error, not something to
-			// ignore. Ignoring it would widen what qualifies rather than
-			// narrow it, which is the dangerous direction: the operator
-			// wrote a constraint and would get none.
-			return nil, nil, fmt.Errorf("diun.include_tags %q does not compile: %w", raw, err)
-		}
+	if include, err = tagRule(labels, "include_tags"); err != nil {
+		return nil, nil, err
 	}
-	if raw := labels["diun.exclude_tags"]; raw != "" {
-		exclude, err = regexp.Compile(raw)
-		if err != nil {
-			return nil, nil, fmt.Errorf("diun.exclude_tags %q does not compile: %w", raw, err)
-		}
+	if exclude, err = tagRule(labels, "exclude_tags"); err != nil {
+		return nil, nil, err
 	}
 	return include, exclude, nil
+}
+
+// tagRule reads one tag rule from duva's label.
+//
+// An empty value is no value. A pattern that does not compile is an error, not
+// something to ignore: ignoring it would widen what qualifies rather than
+// narrow it, which is the dangerous direction -- the operator wrote a
+// constraint and would get none.
+//
+// The same holds for the old name. diun's label with no duva one beside it is
+// a constraint somebody wrote that nothing would read, so it is an error that
+// says what to rename, not a service quietly watched without it. A duva label
+// beside a leftover diun one is fine: the duva one is the rule, and the other
+// is only clutter.
+func tagRule(labels map[string]string, name string) (*regexp.Regexp, error) {
+	duvaKey, diunKey := "duva."+name, "diun."+name
+
+	raw := labels[duvaKey]
+	if raw == "" {
+		if old := labels[diunKey]; old != "" {
+			return nil, fmt.Errorf("%s is no longer read; rename it %s (it says %q)", diunKey, duvaKey, old)
+		}
+		return nil, nil
+	}
+
+	re, err := regexp.Compile(raw)
+	if err != nil {
+		return nil, fmt.Errorf("%s %q does not compile: %w", duvaKey, raw, err)
+	}
+	return re, nil
 }

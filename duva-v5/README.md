@@ -135,9 +135,18 @@ labels:
   duva.auto: patch        # none (default), digest, patch, minor, major
   duva.defer: 3d          # how old a release must be before its next action
   duva.ignore: "true"     # never follow this service; its pin stays as it is
-  diun.include_tags: '^1\.\d+\.\d+$'
-  diun.exclude_tags: '-rc'
+  duva.include_tags: '^1\.\d+\.\d+$'   # only tags matching this are candidates
+  duva.exclude_tags: '-rc'             # tags matching this never are
 ```
+
+`diun.include_tags` and `diun.exclude_tags` were the names for the two tag rules
+when diun was the watcher here. **They are no longer read.** A service that has
+one with no `duva.*` label beside it is refused, with an error naming the label
+to rename, and is not checked until it is: a constraint somebody wrote that
+nothing reads would otherwise be a service quietly watched without it. A
+`duva.*` label beside a leftover `diun.*` one is simply the rule. Remember that
+a label is fixed when a container is created, so a renamed label reaches a
+running service only when it is recreated.
 
 **Policy is read from the running container, not the compose file.** A label
 edited and committed takes effect when the container is recreated -- by
@@ -252,7 +261,7 @@ confirmed, every service on every host, since the last check. Its folded
 not -- and choose how far back: since the last check, or the past day, week
 or month. Since the last check finds what is new. Further back
 also finds what an earlier check passed over -- a tag a since-changed
-`diun.include_tags` filtered out, a release dropped from the queue -- and
+`duva.include_tags` filtered out, a release dropped from the queue -- and
 offers it again; blocked releases stay blocked, and anything older than what
 runs is not an update. Each service looks back to whichever is earlier, its
 own last check or the chosen time, so a longer look never sees less.

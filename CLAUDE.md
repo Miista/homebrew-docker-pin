@@ -163,6 +163,15 @@ v4's components in one process: `duva serve`. Released as one image,
   and the handler turns its findings away with a 2xx. The page only lists
   ignored services; nothing there changes them. Held by
   `TestATickDropsWhatWaitsForAnIgnoredService`.
+- **Tag rules are `duva.include_tags` and `duva.exclude_tags`, read from the
+  running container like the rest of policy.** diun's names for them
+  (`diun.include_tags`, `diun.exclude_tags`) are not read: a service that has
+  one with no `duva.*` label beside it is refused by name in the log, because
+  ignoring it would watch the service without a constraint somebody wrote. A
+  `duva.*` label beside a leftover `diun.*` one is simply the rule. Held by
+  `TestDiunsNamesAreRefusedNotIgnored` and `TestADuvaLabelWinsOverALeftoverDiunOne`.
+  A rename reaches a container only when it is recreated, so renaming the labels
+  in compose does nothing until then.
 - **`/healthz` has three levels:** `ok`; `degraded` (a job failed
   `queue.FailingRuns` = 3 times in a row; on the hub, an agent unreachable or
   unwell), still a 200; `unhealthy` (the store unusable), the only 503,
