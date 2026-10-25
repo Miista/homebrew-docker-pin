@@ -47,22 +47,24 @@ type Registry struct {
 	// following a moving tag, which is the one case where the answer is the
 	// finding rather than a detail of it.
 	TagDigest func(baseImage, tag string) (string, error)
-	// TagSource is the org.opencontainers.image.source label of a tag's
-	// image, empty when it does not say. Optional: nil, or an error, leaves a
-	// finding without one, which only costs it the release-notes link.
+	// TagLabels is a tag's image's labels: org.opencontainers.image.source
+	// and .version, for the release notes. Optional: nil, or an error, leaves
+	// a finding without them, which only costs it the release-notes link.
 	// Called for the findings that are reported and no others, so a
 	// repository with hundreds of tags does not cost hundreds of calls.
-	TagSource func(baseImage, tag string) (string, error)
+	TagLabels func(baseImage, tag string) (map[string]string, error)
 }
 
-// sourceOf is what the image behind a finding says about where its source
-// lives. A registry that cannot say is not a reason to withhold the finding.
+// sourceOf is what the image behind a finding says about itself: where its
+// source lives, and which release it is. A registry that cannot say is not a
+// reason to withhold the finding.
 func (r Registry) sourceOf(f Finding) Finding {
-	if r.TagSource == nil {
+	if r.TagLabels == nil {
 		return f
 	}
-	if src, err := r.TagSource(f.Image, f.Tag); err == nil {
-		f.Source = src
+	if labels, err := r.TagLabels(f.Image, f.Tag); err == nil {
+		f.Source = labels["org.opencontainers.image.source"]
+		f.Version = labels["org.opencontainers.image.version"]
 	}
 	return f
 }
@@ -128,6 +130,10 @@ type Finding struct {
 	// the registry for the release itself. Empty when it does not say or the
 	// registry could not be asked.
 	Source string
+	// Version is the image's org.opencontainers.image.version label, read the
+	// same way: which release the image says it is. What a digest move, which
+	// has no version of its own, links its release notes by.
+	Version string
 }
 
 // A failure is returned rather than reported as an absence: a registry that

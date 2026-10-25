@@ -216,18 +216,26 @@ func ociTagCreated(client *http.Client, baseURL, repo, tag string) (time.Time, e
 // two more requests per tag; it reports none, and the caller falls back to
 // what the running container says.
 func TagSource(baseImage, tag string) (string, error) {
+	labels, err := TagLabels(baseImage, tag)
+	return labels["org.opencontainers.image.source"], err
+}
+
+// TagLabels returns the labels a tag's image carries, read from its config:
+// org.opencontainers.image.source and .version among them. Nil from Docker
+// Hub, for the reason TagSource gives.
+func TagLabels(baseImage, tag string) (map[string]string, error) {
 	if isDockerHub(baseImage) {
-		return "", nil
+		return nil, nil
 	}
 	host, repo := splitRegistryRepo(baseImage)
 	if host == "" {
-		return "", fmt.Errorf("could not determine registry host from %q", baseImage)
+		return nil, fmt.Errorf("could not determine registry host from %q", baseImage)
 	}
 	cfg, err := ociTagConfig(httpClient(), "https://"+host, repo, tag)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	return cfg.Labels["org.opencontainers.image.source"], nil
+	return cfg.Labels, nil
 }
 
 // tagConfig is the part of an image config this package reads.

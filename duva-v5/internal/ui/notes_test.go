@@ -61,14 +61,15 @@ func TestReleaseNotesFindTheTagTheRepositoryUses(t *testing.T) {
 	}
 }
 
-// With no release by either form, the newest releases: always there.
-func TestReleaseNotesFallBackToTheNewest(t *testing.T) {
+// With no release by either form, the release GitHub marks Latest: always
+// there, and never a develop build topping the releases list.
+func TestReleaseNotesFallBackToTheLatest(t *testing.T) {
 	withGitHub(t)
 	e := entry("app", "1.0", "1.1", version.KindMinor)
 	e.ID, e.Source = 3, "https://github.com/example/app"
 	rec := notesFor(t, e, "/notes/optiplex/3")
-	if got := rec.Header().Get("Location"); got != "https://github.com/example/app/releases" {
-		t.Errorf("Location = %q, want the newest releases", got)
+	if got := rec.Header().Get("Location"); got != "https://github.com/example/app/releases/latest" {
+		t.Errorf("Location = %q, want the release marked Latest", got)
 	}
 }
 

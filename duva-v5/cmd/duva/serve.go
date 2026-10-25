@@ -213,6 +213,7 @@ func hand(g handler, f watch.Finding) bool {
 		Digest:    f.Digest,
 		Published: f.Published,
 		Source:    f.Source,
+		Release:   f.Version,
 	})
 	return res.Status < http.StatusInternalServerError
 }
