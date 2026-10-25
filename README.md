@@ -437,21 +437,38 @@ There is currently no cap or warning on this walk.
 
 ## Release & distribution
 
-This repo is the Homebrew tap. Pushing a `vX.Y.Z` tag triggers a GoReleaser workflow that:
+Two products, each with its own version numbers and its own tag. Tagging one
+never releases the other, and tagging is a deliberate, manual step: the tag is
+the approval. (The same scheme as homebrew-hemma's `cli-v` / `ui-v`.)
 
-1. Builds `docker-pin` and `docker-unpin` for `linux/darwin` × `amd64/arm64`
-2. Creates a GitHub release with archives, `.deb` packages, and a checksum file
-3. Commits an updated `Formula/docker-pin.rb` back to this repo
-4. Publishes the `.deb`s to the shared [Cloudsmith](https://cloudsmith.io) apt
-   repository (`guldmund/stable`), which indexes and signs them server-side.
-   Each tool pushes only its own artifacts — there is no shared build step.
+| Product | Tag you push | Workflow | What it publishes |
+| --- | --- | --- | --- |
+| `docker pin` CLI | `cli-vX.Y.Z` | `release.yml` | GitHub release "cli vX.Y.Z" with archives for `linux/darwin` × `amd64/arm64`, `.deb`s and checksums; `Formula/docker-pin.rb` committed back to this repo (the tap); the `.deb`s to the [Cloudsmith](https://cloudsmith.io) apt repo `guldmund/stable`, which indexes and signs them server-side |
+| duva image | `duva-vX.Y.Z` | `duva-release.yml` | `ghcr.io/miista/duva:X.Y.Z` and `:latest` for amd64 and arm64; a GitHub release "duva vX.Y.Z" with notes only (the commits since the previous `duva-v` tag, the pull command, a compare link) |
 
-duva's four images version independently, under `duva-v4/vX.Y` tags handled by
-`.github/workflows/duva-v4-release.yml` and its own `.goreleaser.duva-v4.yaml`.
-A queue fix should not wait on a CLI release, and a CLI release should not
-force a rebuild of four images that did not change — so the tag namespaces are
-deliberately separate, and the `duva-v4/` prefix is what keeps these tags out
-of the CLI workflow's `v*` trigger.
+```sh
+git tag -a cli-v0.17.0 -m "…" && git push origin cli-v0.17.0
+git tag -a duva-v5.5.0 -m "…" && git push origin duva-v5.5.0
+```
+
+How it works, for when something looks odd:
+
+- **The CLI workflow creates the bare `vX.Y.Z` tag itself**, on the same
+  commit, before running GoReleaser on it. Go's module proxy and
+  `go install …@vX.Y.Z` read only plain semver tags, and the formula's download
+  URLs are built from that tag. A tag pushed with the workflow's own token
+  starts no workflow, so it cannot release twice; a bare `v…` pushed by hand
+  releases nothing. Never push one yourself.
+- **The duva workflow writes its release notes with `gh`**, not GoReleaser.
+  GoReleaser only accepts a plain semver tag, so it is handed the bare version
+  with validation skipped, and that tag does not exist in git; it cannot
+  compute "since the previous release" from it. The GitHub release for duva
+  therefore has no files: the image on ghcr.io is the artifact.
+- **A manual run of either workflow is a dry run.** It builds with the version
+  you type and publishes nothing.
+- Older tags (`vX.Y.Z` up to v0.16.0, `duva-v4/vX.Y`, `duva-v5/v5.0`) stay as
+  they are; duva v4's images were released under `duva-v4/` tags by their own
+  workflow and config, which still exist for that line.
 
 ## License
 
