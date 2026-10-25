@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -15,13 +16,14 @@ import (
 type localQueue struct {
 	pending  []queue.Entry
 	ignored  []queue.IgnoredService
+	health   queue.Health
 	approved []string
 	refuse   string
 	acted    []string
 }
 
 func (l *localQueue) Snapshot() queue.Snapshot {
-	return queue.Snapshot{Host: "self", Pending: l.pending, CanApply: true, Ignored: l.ignored}
+	return queue.Snapshot{Host: "self", Pending: l.pending, CanApply: true, Ignored: l.ignored, Health: l.health}
 }
 
 func (l *localQueue) Approve(service, actor string) string {
@@ -142,5 +144,32 @@ func TestTheIgnoredServicesReachThePage(t *testing.T) {
 	checks := c.LastChecks()
 	if len(checks) != 1 || len(checks[0].Ignored) != 1 || checks[0].Ignored[0].Service != "paperless-broker" {
 		t.Errorf("checks = %+v", checks)
+	}
+}
+
+// The hub's /healthz is the fleet's: its own host's health as it is, every
+// other host's at most degraded. Restarting the hub mends nothing elsewhere.
+func TestTheHubsHealthIsTheFleets(t *testing.T) {
+	hub := &localQueue{health: queue.Health{Status: queue.HealthOK}}
+	pi := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(queue.Snapshot{Host: "pi",
+			Health: queue.Health{Status: queue.HealthUnhealthy, Reasons: []string{"store: reading: disk I/O error"}}})
+	}))
+	defer pi.Close()
+	c := NewCollector([]Upstream{{Host: "optiplex", Local: hub}, {Host: "pi", URL: pi.URL},
+		{Host: "gone", URL: "http://127.0.0.1:1"}})
+
+	h := c.Health()
+	if h.Status != queue.HealthDegraded {
+		t.Errorf("status = %q, want degraded: pi's trouble is not the hub's", h.Status)
+	}
+	if got := strings.Join(h.Reasons, "; "); !strings.Contains(got, "pi: store: reading") || !strings.Contains(got, "gone: not answering") {
+		t.Errorf("reasons = %q", got)
+	}
+
+	hub.health = queue.Health{Status: queue.HealthUnhealthy, Reasons: []string{"store: writing: database is locked"}}
+	c.stale()
+	if h := c.Health(); h.Status != queue.HealthUnhealthy {
+		t.Errorf("status = %q, want unhealthy: the hub's own store is broken", h.Status)
 	}
 }

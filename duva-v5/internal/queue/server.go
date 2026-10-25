@@ -77,10 +77,12 @@ type Server struct {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
-	// Open: the thing most likely to call it is a container runtime, which
-	// carries no credential.
+	// Open: the things most likely to call it are a container runtime and a
+	// monitor, which carry no credential. It names jobs and reasons, nothing
+	// a token guards. 503 only when unhealthy: that is what a runtime restarts
+	// on; degraded is a 200 a monitor reads the body of.
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("ok\n"))
+		WriteHealth(w, s.Health())
 	})
 
 	mux.HandleFunc("/v1/snapshot", s.guard(s.snapshot))
@@ -169,6 +171,8 @@ type Snapshot struct {
 	Applying []string `json:"applying,omitempty"`
 	// Jobs is what this host runs on its own, with the last run of each.
 	Jobs []jobs.Status `json:"jobs,omitempty"`
+	// Health is this host's, for the hub's page and its /healthz.
+	Health Health `json:"health"`
 	// Ignored is the services labelled duva.ignore: true, which duva does
 	// not follow. Reported for the page to list; nothing changes them but
 	// their label.
@@ -220,6 +224,7 @@ func (s *Server) Snapshot() Snapshot {
 		Applying:  s.applying(),
 		Jobs:      s.jobs(),
 		Ignored:   s.Queue.Ignored(),
+		Health:    s.Health(),
 	}
 }
 
@@ -333,6 +338,17 @@ func (s *Server) Stream(service string, w http.ResponseWriter, r *http.Request) 
 	w.Header().Set("Cache-Control", "no-store")
 	s.Applier.Stream(service, w, r)
 	return nil
+}
+
+// WriteHealth answers a health check: the level and its reasons as JSON, with
+// 503 only for unhealthy.
+func WriteHealth(w http.ResponseWriter, h Health) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	if h.Status == HealthUnhealthy {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}
+	json.NewEncoder(w).Encode(h)
 }
 
 func writeMessage(w http.ResponseWriter, message string) {

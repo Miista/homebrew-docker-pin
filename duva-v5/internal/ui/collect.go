@@ -124,6 +124,8 @@ type snapshot struct {
 	jobs []jobs.Status
 	// ignored is that host's services labelled duva.ignore: true.
 	ignored []queue.IgnoredService
+	// health is that host's own, as it reported it.
+	health queue.Health
 	// err is the transport failure, when the queue could not be asked.
 	//
 	// Kept rather than dropped because an unreachable queue must render as
@@ -163,7 +165,7 @@ func (c *Collector) Collect() {
 			results[i] = snapshot{queue: snap.Pending, soaking: snap.Soaking, upcoming: snap.Upcoming, blocks: snap.Blocks,
 				lastCheck: snap.LastCheck, services: snap.Services, canApply: snap.CanApply,
 				blocker: string(snap.Blocker), whyNot: snap.WhyNot,
-				applying: applying, jobs: snap.Jobs, ignored: snap.Ignored, err: err}
+				applying: applying, jobs: snap.Jobs, ignored: snap.Ignored, health: snap.Health, err: err}
 		}(i, d)
 	}
 	wg.Wait()
@@ -337,6 +339,40 @@ func (c *Collector) Unreachable() []Problem {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Host < out[j].Host })
 	return out
+}
+
+// Health is the fleet's, for the hub's /healthz: its own host's health as it
+// is, and every other host's at most degraded, named.
+//
+// Only this host's own trouble is unhealthy. The 503 that says so is what a
+// container runtime restarts this process on, and restarting the hub mends
+// nothing on an agent -- an agent unreachable, or unhealthy itself, is worth
+// a look from here, and its own /healthz is what restarts it.
+func (c *Collector) Health() queue.Health {
+	c.fresh()
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	h := queue.Health{Status: queue.HealthOK}
+	for _, d := range c.Upstreams {
+		s, ok := c.cache[d.Host]
+		if !ok {
+			continue
+		}
+		if s.err != nil {
+			h.Status = queue.Worse(h.Status, queue.HealthDegraded)
+			h.Reasons = append(h.Reasons, d.Host+": not answering: "+why(s.err))
+			continue
+		}
+		level := s.health.Status
+		if d.Local == nil && level == queue.HealthUnhealthy {
+			level = queue.HealthDegraded
+		}
+		h.Status = queue.Worse(h.Status, level)
+		for _, r := range s.health.Reasons {
+			h.Reasons = append(h.Reasons, d.Host+": "+r)
+		}
+	}
+	return h
 }
 
 // Approve routes an approval to the queue that owns the service.

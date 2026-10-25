@@ -155,6 +155,30 @@ Anything but `true` or `false` is refused rather than guessed at.
 
 ## Operating
 
+### Health
+
+`/healthz` (on the API port, and on the hub's page port) answers with one of
+three levels, as JSON with the reasons:
+
+| level | means | HTTP |
+|---|---|---|
+| `ok` | nothing to look at | 200 |
+| `degraded` | worth a look, proves nothing alone: a job failed 3 or more times in a row; on the hub, an agent not answering or unwell | 200 |
+| `unhealthy` | duva itself not working: its store cannot be read or written | 503 |
+
+```json
+{ "status": "degraded", "reasons": ["check: failed 4 times in a row (last: …)"] }
+```
+
+Only `unhealthy` is a 503, because that is what Docker's health check -- and
+autoheal behind it -- restarts on, and a restart mends a stuck process, not a
+registry. A monitor such as Gatus alerts on both with
+`[STATUS] == 200` and `[BODY].status == ok`. The hub's page reports the whole
+fleet, but only its own trouble makes it unhealthy: restarting the hub mends
+nothing on an agent.
+
+duva sends no notification about its own health -- that is the monitor's job.
+
 ### An uncommitted edit, or a rate-limited registry
 
 Applying rewrites and commits one compose file, so duva will not start an

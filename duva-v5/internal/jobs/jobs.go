@@ -42,6 +42,10 @@ type Run struct {
 type Status struct {
 	Job  string `json:"job"`
 	Last *Run   `json:"last,omitempty"`
+	// FailedInARow is how many of its latest runs failed, back to the last
+	// one that did not. One failure says little -- a registry or a network
+	// had a moment -- so health only counts a run of them.
+	FailedInARow int `json:"failed_in_a_row,omitempty"`
 	// Next is when it runs on its own next; zero when that is not known.
 	Next time.Time `json:"next"`
 }
@@ -54,9 +58,10 @@ var Tick = []string{Sync, Reconcile, Release}
 // Statuses is every job, in the order they are listed, with its last run.
 func Statuses(st *store.Store, nextCheck, nextTick time.Time) []Status {
 	last := Last(st)
+	streaks := failedInARow(st)
 	out := []Status{}
 	for _, job := range append([]string{Check}, Tick...) {
-		s := Status{Job: job, Next: nextTick}
+		s := Status{Job: job, Next: nextTick, FailedInARow: streaks[job]}
 		if job == Check {
 			s.Next = nextCheck
 		}
@@ -65,6 +70,33 @@ func Statuses(st *store.Store, nextCheck, nextTick time.Time) []Status {
 			s.Last = &r
 		}
 		out = append(out, s)
+	}
+	return out
+}
+
+// failedInARow is, per job, how many of its latest runs failed in a row.
+func failedInARow(st *store.Store) map[string]int {
+	out := map[string]int{}
+	if st == nil {
+		return out
+	}
+	rows, err := st.DB().Query(`SELECT job, failed FROM job_runs ORDER BY job, id DESC`)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	done := map[string]bool{}
+	for rows.Next() {
+		var job string
+		var failed int
+		if rows.Scan(&job, &failed) != nil || done[job] {
+			continue
+		}
+		if failed == 0 {
+			done[job] = true
+			continue
+		}
+		out[job]++
 	}
 	return out
 }
