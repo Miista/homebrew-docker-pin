@@ -101,6 +101,10 @@ type Options struct {
 	Labels func(container string) (map[string]string, bool, error)
 	// Store is where the cutoffs and held findings are kept.
 	Store *store.Store
+	// Checked, when set, hears of each service as its check ends: nil for
+	// one looked at, the error for one that could not be. It is how a check
+	// a person asked for says what it did.
+	Checked func(service string, err error)
 }
 
 // NextCheck is when the scheduled check runs next. Zero when the schedule
@@ -278,7 +282,7 @@ func run(log zerolog.Logger, only string, back time.Duration, opts Options) (err
 	// hand on before it hears anything new.
 	handHeld(mem, report, log)
 
-	found, failed := checkAll(services, mem, reg, report, log)
+	found, failed := checkAll(services, mem, reg, report, opts.Checked, log)
 
 	log.Info().Msgf("check complete: %d new tag(s) across %d service(s), %d could not be checked",
 		found, len(services), failed)

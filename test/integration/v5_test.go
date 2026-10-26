@@ -228,6 +228,51 @@ func TestV5PolicyComesFromTheRunningContainer(t *testing.T) {
 	}
 }
 
+// A check a person asks for says what it found and what became of it, which
+// is what the page's toast reads. Start asks for one the way "Check…" does.
+func TestV5AnAskedCheckSaysWhatBecameOfARelease(t *testing.T) {
+	s := Up(t, "duva-v5/within-policy")
+	s.PushUpdates()
+	s.Pin("app")
+	s.Start()
+
+	run := s.CheckRun()
+	if run.Error != "" || len(run.Failed) != 0 {
+		t.Errorf("the check reports trouble: %+v", run)
+	}
+	if run.Checked == 0 {
+		t.Errorf("the check says it looked at nothing: %+v", run)
+	}
+	if len(run.Findings) != 1 {
+		t.Fatalf("findings = %+v, want the one patch", run.Findings)
+	}
+	if f := run.Findings[0]; f.Service != "app" || f.Label != "1.0.1" || f.Fate != "applying" {
+		t.Errorf("finding = %+v, want app 1.0.1 applying", f)
+	}
+}
+
+// What a person asked for is on their screen, so nobody is announced to as
+// well: the patch is waiting for them, and the notifier says nothing. The gap
+// this leaves is accepted -- a release found by an asked check is not news to
+// the schedule afterwards.
+func TestV5AnAskedCheckDoesNotAnnounce(t *testing.T) {
+	s := Up(t, "duva-v5/policy-from-container")
+	s.PushUpdates()
+	s.Pin("app")
+	s.Start()
+
+	if row := s.Pending("app"); row.Candidate != "1.0.1" {
+		t.Fatalf("the patch was not queued for a person: %+v\n%s", row, s.Logs("duva"))
+	}
+	run := s.CheckRun()
+	if len(run.Findings) != 1 || run.Findings[0].Fate != "waiting" {
+		t.Errorf("findings = %+v, want the patch waiting for a person", run.Findings)
+	}
+	if got := s.Notifications(); len(got) != 0 {
+		t.Errorf("announced for a check somebody asked for:\n  %v", got)
+	}
+}
+
 // A blocked release is never applied: not as found, and not when a rescan
 // finds it again and its digest is only learned on pulling it.
 func TestV5ABlockedReleaseIsNeverApplied(t *testing.T) {

@@ -1181,6 +1181,7 @@ createApp({
       blocks: initial.blocks || [],
       checks: initial.checks || [],
       checking: false,  // a check-all was just asked for
+      awaiting: null,   // the check whose answer is being waited for
       unreachable: initial.unreachable || [],
       blocked: initial.blocked || [],
       canApply: initial.can_apply,
@@ -1823,6 +1824,7 @@ createApp({
         this.slideClose(document.getElementById("check"))
         this.checking = true
         const refused = []
+        const base = this.runSeqs()
         for (const key of picked) {
           const [host, name] = key.split("/")
           const res = await fetch("/api/check/" + encodeURIComponent(host) + "/" + encodeURIComponent(name), {
@@ -1835,9 +1837,84 @@ createApp({
         this.result = refused.length
           ? { service: "Check", level: "error", message: refused.join("; ") }
           : { service: "Check", level: "ok", message: "looking for new releases of " + label +
-              (back ? ", over " + back : "") + "; anything found will appear here" }
-        setTimeout(() => this.poll(), 3000)
-        setTimeout(() => { this.checking = false; this.poll() }, 15000)
+              (back ? ", over " + back : "") + "…" }
+        if (refused.length) { this.checking = false; return }
+        this.awaitCheck([...new Set(picked.map(k => k.split("/")[0]))], base, label)
+      },
+
+      // Each host's latest asked check, by its number.
+      runSeqs() {
+        return Object.fromEntries(this.checks.map(c => [c.host, c.run ? c.run.seq : 0]))
+      },
+
+      // Wait for the check just asked of these hosts to end, then say what it
+      // found. The hosts say it on the snapshot this page already polls: a
+      // run numbered past the one seen before asking, and done. A newer
+      // check asked meanwhile takes over, and an hour-long wait is not one.
+      async awaitCheck(hosts, base, label) {
+        const mine = this.awaiting = {}
+        const until = Date.now() + 10 * 60 * 1000
+        while (this.awaiting === mine) {
+          await new Promise(r => setTimeout(r, 2000))
+          if (this.awaiting !== mine) return
+          await this.poll()
+          const runs = hosts.map(h => {
+            const c = this.checks.find(c => c.host === h)
+            return c && c.run && c.run.seq > (base[h] || 0) ? { host: h, ...c.run } : null
+          })
+          if (runs.every(r => r && r.done)) {
+            this.checking = false
+            this.result = this.checkSummary(runs, label)
+            return
+          }
+          if (Date.now() > until) {
+            this.checking = false
+            this.result = { service: "Check", level: "ok",
+              message: "still looking; whatever it finds will appear in the lists" }
+            return
+          }
+        }
+      },
+
+      // What a finished check says, for a toast: what was found and what
+      // became of it, or that nothing was, or why it could not look.
+      checkSummary(runs, label) {
+        const problems = [], found = [], skipped = []
+        for (const r of runs) {
+          if (r.error) problems.push(r.host + ": " + r.error)
+          for (const f of r.failed || []) problems.push(f.service + ": " + f.error)
+          for (const f of r.findings || []) {
+            if (f.fate === "rejected") problems.push(f.service + ": " + f.message)
+            else if (f.fate === "skipped") skipped.push(f)
+            else found.push(f)
+          }
+        }
+        const each = f => {
+          const what = f.service + (f.label ? " " + f.label : "")
+          return {
+            applying: what + ": applying it now…",
+            "apply-later": what + ": applies automatically on " + this.when(f.until),
+            held: what + ": comes to you on " + this.when(f.until),
+            waiting: what + ": waiting for you in the Queue",
+          }[f.fate] || what
+        }
+        const words = { applying: "applying", "apply-later": "applying later", held: "held for you", waiting: "waiting for you" }
+        let message
+        if (found.length === 1) {
+          message = "Found " + each(found[0])
+        } else if (found.length > 1) {
+          const by = {}
+          for (const f of found) by[f.fate] = (by[f.fate] || 0) + 1
+          message = "Found " + found.length + " releases: " +
+            Object.keys(words).filter(k => by[k]).map(k => by[k] + " " + words[k]).join(", ")
+        } else if (skipped.length) {
+          message = "Found " + (skipped.length === 1 ? "a release" : skipped.length + " releases") +
+            ", nothing to do: " + skipped[0].service + " " + skipped[0].message
+        } else {
+          message = "Checked " + label + ": nothing new"
+        }
+        if (problems.length) message += "; could not check " + problems.join("; ")
+        return { service: "Check", level: problems.length ? "error" : "ok", message }
       },
 
       // Every host looks for new releases now, at least as far back as was
@@ -1847,6 +1924,7 @@ createApp({
         const since = this.since
         this.slideClose(document.getElementById("check"))
         this.checking = true
+        const base = this.runSeqs()
         const res = await fetch("/api/check-all", {
           method: "POST", body: since ? new URLSearchParams({ since }) : undefined })
         if (res.status === 401) { location.reload(); return }
@@ -1855,9 +1933,9 @@ createApp({
         this.result = message
           ? { service: "Check", level: "error", message }
           : { service: "Check", level: "ok", message: "looking for new releases on every host" +
-              (back ? ", over " + back : "") + "; anything found will appear here" }
-        setTimeout(() => this.poll(), 3000)
-        setTimeout(() => { this.checking = false; this.poll() }, 15000)
+              (back ? ", over " + back : "") + "…" }
+        if (message) { this.checking = false; return }
+        this.awaitCheck(this.checks.map(c => c.host), base, "every host")
       },
 
       // The side menu: to a section, under the sticky header.

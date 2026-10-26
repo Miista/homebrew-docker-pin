@@ -64,10 +64,61 @@ type Result struct {
 	Message string
 	// Status is the HTTP status a webhook caller should see.
 	Status int
+	// Fate is what became of the release, in the words a person asking for a
+	// check is told. Outcome is the verdict; this is what was done about it.
+	Fate Fate
+	// Label names the release: its version, or for a moving tag, the tag.
+	Label string
+	// Until is when a deferred release is due, RFC 3339.
+	Until string
+}
+
+// Fate is what became of one release a check found.
+type Fate string
+
+const (
+	// FateApplying: policy allows it and the updater was started.
+	FateApplying Fate = "applying"
+	// FateApplyLater: policy allows it, after its duva.defer.
+	FateApplyLater Fate = "apply-later"
+	// FateHeld: it will come to a person, after its duva.defer.
+	FateHeld Fate = "held"
+	// FateWaiting: it is waiting for a person now.
+	FateWaiting Fate = "waiting"
+	// FateSkipped: nothing to do about it; Message says why.
+	FateSkipped Fate = "skipped"
+	// FateRejected: it could not be matched to anything, or handled.
+	FateRejected Fate = "rejected"
+)
+
+// releaseLabel names what an entry offers: a version, or the moving tag that
+// now points somewhere else.
+func releaseLabel(e Entry) string {
+	if e.Kind == "" {
+		return e.Tag + " (new build)"
+	}
+	return e.To
 }
 
 // Handle decides about one notice and acts on the decision.
 func (h *Handler) Handle(n Notice) Result {
+	r := h.handle(n)
+	if r.Fate == "" {
+		switch r.Outcome {
+		case Ignore:
+			r.Fate = FateSkipped
+		case Reject:
+			r.Fate = FateRejected
+		}
+	}
+	return r
+}
+
+func (h *Handler) handle(n Notice) Result {
+	announce := h.Announce
+	if n.Quiet {
+		announce = nil
+	}
 	svc, found, err := h.Lookup.Service(n.Container)
 	if err != nil {
 		// A compose file that cannot be read is not a reason to say nothing
@@ -165,11 +216,12 @@ func (h *Handler) Handle(n Notice) Result {
 			// No updater configured: queue it rather than lose it. A queue
 			// that decided to apply and then dropped the decision would be
 			// worse than one that never decided.
-			if added && h.Announce != nil {
-				h.Announce(e)
+			if added && announce != nil {
+				announce(e)
 			}
 			h.logf("%s: %s -> %s would apply (%s), but nothing is configured to apply it", svc.Name, v.From, v.To, v.Why)
-			return Result{Outcome: Queue, Service: svc.Name, Message: "queued: nothing is configured to apply it", Status: http.StatusOK}
+			return Result{Outcome: Queue, Service: svc.Name, Message: "queued: nothing is configured to apply it", Status: http.StatusOK,
+				Fate: FateWaiting, Label: releaseLabel(e)}
 		}
 		// Policy allows it, but not yet: it waits out the soak in the queue,
 		// where a person can see it and approve it early, and the reconciler
@@ -182,7 +234,8 @@ func (h *Handler) Handle(n Notice) Result {
 			if added {
 				h.logf("%s: %s -> %s is allowed (%s), delayed until %s", svc.Name, v.From, v.To, v.Why, e.ReleaseAt)
 			}
-			return Result{Outcome: Queue, Service: svc.Name, Message: "delayed until " + e.ReleaseAt, Status: http.StatusOK}
+			return Result{Outcome: Queue, Service: svc.Name, Message: "delayed until " + e.ReleaseAt, Status: http.StatusOK,
+				Fate: FateApplyLater, Label: releaseLabel(e), Until: e.ReleaseAt}
 		}
 		// What is started is the entry as stored, with its row, so the
 		// applier can settle that entry and no other. A release older than
@@ -194,16 +247,18 @@ func (h *Handler) Handle(n Notice) Result {
 		if err := h.Applier.StartUnattended(e); err != nil {
 			// Failing to start is not failing to queue. It stays queued, so
 			// the next notice tries again and a person can see it waiting.
-			if added && h.Announce != nil {
-				h.Announce(e)
+			if added && announce != nil {
+				announce(e)
 			}
 			h.logf("%s: could not start applying: %v", svc.Name, err)
-			return Result{Outcome: Queue, Service: svc.Name, Message: err.Error(), Status: http.StatusOK}
+			return Result{Outcome: Queue, Service: svc.Name, Message: err.Error(), Status: http.StatusOK,
+				Fate: FateWaiting, Label: releaseLabel(e)}
 		}
 		// Applying is not "applied". The updater says when it is done, and
 		// the entry stays queued until it says so successfully.
 		h.logf("%s: applying %s -> %s (%s)", svc.Name, v.From, v.To, v.Why)
-		return Result{Outcome: Apply, Service: svc.Name, Message: v.Why, Status: http.StatusOK}
+		return Result{Outcome: Apply, Service: svc.Name, Message: v.Why, Status: http.StatusOK,
+			Fate: FateApplying, Label: releaseLabel(e)}
 
 	default: // Queue
 		e := EntryFrom(v, svc, digestFor(v, n))
@@ -218,12 +273,14 @@ func (h *Handler) Handle(n Notice) Result {
 			if _, added := h.Queue.PutEntry(e, h.now()); added {
 				h.logf("%s: %s -> %s is held until %s, then waits for approval (%s)", svc.Name, v.From, v.To, e.ReleaseAt, v.Why)
 			}
-			return Result{Outcome: Queue, Service: svc.Name, Message: "held until " + e.ReleaseAt, Status: http.StatusOK}
+			return Result{Outcome: Queue, Service: svc.Name, Message: "held until " + e.ReleaseAt, Status: http.StatusOK,
+				Fate: FateHeld, Label: releaseLabel(e), Until: e.ReleaseAt}
 		}
-		if h.enqueue(e) {
+		if h.enqueue(e, announce) {
 			h.logf("%s: %s -> %s is available, waiting for approval (%s)", svc.Name, v.From, v.To, v.Why)
 		}
-		return Result{Outcome: Queue, Service: svc.Name, Message: v.Why, Status: http.StatusOK}
+		return Result{Outcome: Queue, Service: svc.Name, Message: v.Why, Status: http.StatusOK,
+			Fate: FateWaiting, Label: releaseLabel(e)}
 	}
 }
 
@@ -232,10 +289,10 @@ func (h *Handler) Handle(n Notice) Result {
 // New is also when anyone is told. Put already distinguishes a fresh candidate
 // from the same one arriving again, so the announcement rides on that rather
 // than on a second notion of newness that could disagree with the queue.
-func (h *Handler) enqueue(e Entry) bool {
+func (h *Handler) enqueue(e Entry, announce func(Entry)) bool {
 	added := h.Queue.Put(e, h.now())
-	if added && h.Announce != nil {
-		h.Announce(e)
+	if added && announce != nil {
+		announce(e)
 	}
 	return added
 }

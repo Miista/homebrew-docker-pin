@@ -73,7 +73,7 @@ func checkPublishing(t *testing.T, services []watch.Service, reg watch.Registry,
 	before = lines(mem, services)
 
 	handHeld(mem, report, zerolog.Nop())
-	found, failed = checkAll(services, mem, reg, report, zerolog.Nop())
+	found, failed = checkAll(services, mem, reg, report, nil, zerolog.Nop())
 	if err := mem.save(); err != nil {
 		t.Fatalf("save: %v", err)
 	}

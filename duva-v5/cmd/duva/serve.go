@@ -96,8 +96,13 @@ func serve() error {
 		Labels: dockerapi.Labels,
 		// A person's "Check…", and the lookup a block of a version change
 		// needs: the watcher's, and its registry client's.
-		Check: func(service string, back time.Duration) error {
-			return watcher.Check(watchLog, service, back, watching)
+		Check: func(service string, back time.Duration, rec *q.CheckRecorder) error {
+			// What a person asked for tells them what it found, and is
+			// quiet: the answer is on their screen, so nobody is announced to.
+			asked := watching
+			asked.Report = func(f watch.Finding) bool { return handFor(queue, f, rec) }
+			asked.Checked = rec.Checked
+			return watcher.Check(watchLog, service, back, asked)
 		},
 		Resolve: registry.RemoteDigest,
 		// For the page's "last checked".
@@ -202,12 +207,17 @@ func follow(ctx context.Context, log zerolog.Logger, watch func(context.Context,
 // What the webhook did, as a call. A finding the queue could not take -- its
 // compose file unreadable for a moment -- is held by the watcher and offered
 // again next run, exactly as a failed POST was.
-func hand(g handler, f watch.Finding) bool {
+func hand(g handler, f watch.Finding) bool { return handFor(g, f, nil) }
+
+// handFor is hand for a check a person asked for: the finding is not
+// announced, and what became of it is recorded in rec.
+func handFor(g handler, f watch.Finding, rec *q.CheckRecorder) bool {
 	if f.Container == "" || f.Image == "" || f.Tag == "" {
 		// Nothing to match it to. Taken, so it is not held forever.
 		return true
 	}
 	res := g.Handle(q.Notice{
+		Quiet:     rec != nil,
 		Container: f.Container,
 		Image:     f.Image + ":" + f.Tag,
 		Digest:    f.Digest,
@@ -215,6 +225,7 @@ func hand(g handler, f watch.Finding) bool {
 		Source:    f.Source,
 		Release:   f.Version,
 	})
+	rec.Found(res)
 	return res.Status < http.StatusInternalServerError
 }
 

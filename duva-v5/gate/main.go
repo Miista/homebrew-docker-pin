@@ -106,7 +106,7 @@ type Options struct {
 	// "", and at least back far back, for the queue API's "Check…". Resolve
 	// is what a tag points at now, for blocking a version change. Nil leaves
 	// each action unavailable.
-	Check   func(service string, back time.Duration) error
+	Check   func(service string, back time.Duration, rec *q.CheckRecorder) error
 	Resolve func(image, tag string) (string, error)
 	// LastChecked is when the watcher last looked for new tags, for the
 	// page. Nil: not reported.

@@ -50,6 +50,9 @@ type Notice struct {
 	// the watcher read it from the registry. Empty when it did not say, which
 	// leaves the running container's. Not trusted: see SourceOf.
 	Source string
+	// Quiet is set for a finding from a check a person asked for: they are
+	// looking at the answer, so nobody is announced to as well.
+	Quiet bool
 }
 
 // Service is what the compose file declares for one service: the tag it

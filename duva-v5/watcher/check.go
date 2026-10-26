@@ -41,6 +41,7 @@ func checkAll(
 	mem *memory,
 	reg watch.Registry,
 	hand func(watch.Finding) bool,
+	checked func(service string, err error),
 	log zerolog.Logger,
 ) (found, failed int) {
 	for _, svc := range services {
@@ -102,12 +103,18 @@ func checkAll(
 			// reported. Only this service's line is held.
 			failed++
 			log.Error().Msgf("%s: could not check it — %v", svc.Name, err)
+			if checked != nil {
+				checked(svc.Name, err)
+			}
 			continue
 		}
 		if found == before {
 			log.Debug().Msgf("%s: nothing published since the last check", svc.Name)
 		}
 		mem.Checked(svc.Name, startedAt)
+		if checked != nil {
+			checked(svc.Name, nil)
+		}
 	}
 	return found, failed
 }
