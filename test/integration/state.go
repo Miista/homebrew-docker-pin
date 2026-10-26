@@ -314,6 +314,39 @@ func (s *Scenario) EntryID(service string) int64 {
 	return s.state()[service].ID
 }
 
+// CheckRunInfo is what the latest check asked of duva reported, as the page
+// reads it from the snapshot.
+type CheckRunInfo struct {
+	Seq      int
+	Done     bool
+	Error    string
+	Checked  int
+	Failed   []struct{ Service, Error string }
+	Findings []struct{ Service, Label, Fate, Message string }
+}
+
+// CheckRun is the latest check asked of a v5 duva, once it has ended.
+func (s *Scenario) CheckRun() CheckRunInfo {
+	s.t.Helper()
+	var run CheckRunInfo
+	s.waitFor("the asked check to report that it ended", 60*time.Second,
+		func() bool {
+			out, err := s.compose("exec", "-T", "duva", "wget", "-qO-",
+				"--header", "Authorization: Bearer "+v5Token, "http://127.0.0.1:8080/v1/snapshot")
+			if err != nil {
+				return false
+			}
+			var snap struct{ Check *CheckRunInfo }
+			if json.Unmarshal([]byte(out), &snap) != nil || snap.Check == nil {
+				return false
+			}
+			run = *snap.Check
+			return run.Done
+		},
+		func() string { return s.Logs("duva") })
+	return run
+}
+
 // Queue fetches duva's approval queue over HTTP.
 //
 // The page is what an operator actually sees, and it is served from the same

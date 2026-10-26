@@ -53,8 +53,9 @@ type Server struct {
 
 	// Check asks the watcher to look now: at one service, or every one for
 	// "", and at least back far back (zero: since each one's last check).
-	// Nil: the action is not offered.
-	Check func(service string, back time.Duration) error
+	// Nil: the action is not offered. rec is where the check says what it
+	// found and what became of it.
+	Check func(service string, back time.Duration, rec *CheckRecorder) error
 	// Resolve is what a tag points at now, for blocking a version change
 	// whose digest the queue has not learned. Nil: only entries that carry
 	// a digest can be blocked.
@@ -71,6 +72,32 @@ type Server struct {
 
 	cooldownMu sync.Mutex
 	lastAsked  map[string]time.Time
+
+	runMu   sync.Mutex
+	runs    int
+	lastRun *CheckRecorder
+}
+
+// beginRun starts recording a check a person asked for. It replaces the
+// last one: a page waits for the run numbered after the one it saw.
+func (s *Server) beginRun(service string) *CheckRecorder {
+	s.runMu.Lock()
+	defer s.runMu.Unlock()
+	s.runs++
+	s.lastRun = newCheckRecorder(s.runs, service)
+	return s.lastRun
+}
+
+// checkRun is the latest asked check, nil before the first.
+func (s *Server) checkRun() *CheckRun {
+	s.runMu.Lock()
+	rec := s.lastRun
+	s.runMu.Unlock()
+	if rec == nil {
+		return nil
+	}
+	r := rec.Run()
+	return &r
 }
 
 // Handler returns the routes.
@@ -173,6 +200,9 @@ type Snapshot struct {
 	Jobs []jobs.Status `json:"jobs,omitempty"`
 	// Health is this host's, for the hub's page and its /healthz.
 	Health Health `json:"health"`
+	// Check is the latest check a person asked for here, for the page to
+	// tell them what it found. Nil before the first.
+	Check *CheckRun `json:"check,omitempty"`
 	// Ignored is the services labelled duva.ignore: true, which duva does
 	// not follow. Reported for the page to list; nothing changes them but
 	// their label.
@@ -225,6 +255,7 @@ func (s *Server) Snapshot() Snapshot {
 		Jobs:      s.jobs(),
 		Ignored:   s.Queue.Ignored(),
 		Health:    s.Health(),
+		Check:     s.checkRun(),
 	}
 }
 
@@ -562,8 +593,11 @@ func (s *Server) ask(service, actor string, back time.Duration) string {
 		what += ", " + watch.FormatLookBack(back) + " back"
 	}
 	s.Queue.Asked(service, what, actor, time.Now())
+	rec := s.beginRun(service)
 	go func() {
-		if err := s.Check(service, back); err != nil {
+		err := s.Check(service, back, rec)
+		rec.finish(err)
+		if err != nil {
 			s.Queue.fail(fmt.Errorf("checking %s: %w", of, err))
 		}
 	}()

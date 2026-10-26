@@ -105,7 +105,9 @@ func (s *Scenario) settled(service string) {
 		func() bool {
 			out, err := s.compose("exec", "-T", service, "wget", "-qO-",
 				"--header", "Authorization: Bearer "+v5Token, "http://127.0.0.1:8080/v1/snapshot")
-			return err == nil && !strings.Contains(out, `"applying"`)
+			// The key, not the word: an asked check's finding says
+			// "fate":"applying" long after the apply has ended.
+			return err == nil && !strings.Contains(out, `"applying":`)
 		},
 		func() string { return s.Logs(service) })
 }

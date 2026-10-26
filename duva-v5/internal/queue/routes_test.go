@@ -29,7 +29,7 @@ func newActionServer(t *testing.T) *actionServer {
 	a := &actionServer{q: NewPending()}
 	s := &Server{
 		Queue: a.q, Applier: &fakeApplier{}, Token: "s3cret",
-		Check: func(svc string, back time.Duration) error {
+		Check: func(svc string, back time.Duration, _ *CheckRecorder) error {
 			if svc == "" {
 				svc = "*"
 			}
