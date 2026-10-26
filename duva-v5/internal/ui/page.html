@@ -362,6 +362,16 @@
   .fold-head svg { transition: transform .15s; }
   .fold-head[aria-expanded="true"] svg { transform: rotate(90deg); }
   .fold-body { display: flex; flex-direction: column; gap: 16px; padding: 6px 0 2px; }
+  /* A wide screen has the room: the services beside how far back to look,
+     half each, rather than one above the other. */
+  @media (min-width: 45.01rem) {
+    #check { width: min(760px, calc(100% - 48px)); }
+    #check .fold-body { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: auto 1fr;
+                       gap: 16px 24px; align-items: start; }
+    #check .fold-body .field { grid-column: 1; grid-row: 1 / span 2; }
+    #check .fold-body .choose { grid-column: 2; grid-row: 1; }
+    #check .fold-body > .hint { grid-column: 2; grid-row: 2; }
+  }
   .field { display: flex; flex-direction: column; gap: 6px; }
   .pick { display: flex; align-items: center; justify-content: space-between; gap: 10px;
           height: 40px; padding: 0 12px; border: 1px solid var(--edge); border-radius: 9px;
@@ -980,7 +990,7 @@
         </div>
         <div class="fold">
           <button type="button" class="fold-head" :aria-expanded="checkOpts ? 'true' : 'false'"
-                  @click="checkOpts = !checkOpts">
+                  @click="toggleOpts()">
             <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M4.5 3L7.5 6L4.5 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
             Options
           </button>
@@ -1774,6 +1784,15 @@ createApp({
         this.pickOpen = false
         this.checkOpts = false
         document.getElementById("check").showModal()
+      },
+
+      // Unfolding the options. Where they sit in two columns the services
+      // list is open already: there is room for it, and it is what most
+      // people unfold them for: whatever is not a phone, by the width the
+      // stylesheet uses.
+      toggleOpts() {
+        this.checkOpts = !this.checkOpts
+        if (this.checkOpts && !matchMedia("(max-width: 45rem)").matches) this.pickOpen = true
       },
 
       // What Check will do, in a sentence: said whether the options are
