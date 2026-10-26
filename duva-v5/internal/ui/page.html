@@ -693,7 +693,7 @@
         </button>
         <div class="menu wide" role="menu" v-if="top">
           <!-- The dots say a dialog follows: it asks how far back to look. -->
-          <button role="menuitem" class="checkitem" v-if="actions" :disabled="checking"
+          <button role="menuitem" class="checkitem" v-if="actions" :disabled="checking || lostSince"
                   title="Look for new releases on every host" @click="openCheck()">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true" :class="checking ? 'spin' : ''"><path d="M13.5 8a5.5 5.5 0 0 1-9.4 3.9M2.5 8a5.5 5.5 0 0 1 9.4-3.9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M12.2 1.6v2.6H9.6M3.8 14.4v-2.6h2.6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
             {{ checking ? "Checking…" : "Check…" }}
@@ -742,7 +742,7 @@
           <span class="acts" data-pop>
             <button class="apply" v-if="canApply" data-arm
                     :class="armed === armKey(r) ? 'armed' : ''"
-                    :disabled="!r.can_apply || running(r.key) || busyHost(r.host)"
+                    :disabled="!r.can_apply || lostSince || running(r.key) || busyHost(r.host)"
                     :title="buttonReason(r)"
                     @click="press(r)">{{ running(r.key) ? "Updating…" : armed === armKey(r) ? "Confirm?" : "Update" }}</button>
             <button class="more" title="Release notes, block" aria-haspopup="menu"
@@ -803,7 +803,7 @@
           <span class="acts" data-pop>
             <button class="apply" v-if="canApply" data-arm
                     :class="armed === armKey(r) ? 'armed' : ''"
-                    :disabled="!r.can_apply || running(r.key) || busyHost(r.host)"
+                    :disabled="!r.can_apply || lostSince || running(r.key) || busyHost(r.host)"
                     :title="buttonReason(r) || 'Update now, without waiting out the deferral'"
                     @click="press(r)">{{ running(r.key) ? "Updating…" : armed === armKey(r) ? "Confirm?" : "Update now" }}</button>
             <button class="more" title="Release notes, block" aria-haspopup="menu"
@@ -858,7 +858,7 @@
           <span class="acts" data-pop>
             <button class="apply" v-if="canApply" data-arm
                     :class="armed === armKey(r) ? 'armed' : ''"
-                    :disabled="!r.can_apply || running(r.key) || busyHost(r.host)"
+                    :disabled="!r.can_apply || lostSince || running(r.key) || busyHost(r.host)"
                     :title="buttonReason(r) || 'Update now, without waiting out the deferral'"
                     @click="press(r)">{{ running(r.key) ? "Updating…" : armed === armKey(r) ? "Confirm?" : "Update now" }}</button>
             <button class="more" title="Release notes, block" aria-haspopup="menu"
@@ -1131,6 +1131,12 @@
        on its own; a refusal stays until it is dismissed, as it is the one
        that must be read. -->
   <div class="toasts">
+    <!-- First, and not dismissible: it is gone when duva answers. Nothing
+         below it can be acted on while it shows. -->
+    <div class="toast toast-standing toast-wait" v-if="lostSince" role="status">
+      <span class="who"><svg class="spin" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true" style="vertical-align: -2px; margin-right: 6px"><path d="M13.5 8a5.5 5.5 0 0 1-9.4 3.9M2.5 8a5.5 5.5 0 0 1 9.4-3.9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M12.2 1.6v2.6H9.6M3.8 14.4v-2.6h2.6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>Lost the connection. Reconnecting…</span>
+      <span class="why">{{ lostFor() }}</span>
+    </div>
     <div class="toast toast-standing" v-for="b in blocked" :key="standingKey(b)"
          v-show="!dismissed[standingKey(b)]" :data-key="standingKey(b)" role="status"
          :class="b.kind === 'actor-not-ready' ? 'toast-wait' : 'toast-note'"
@@ -1192,6 +1198,9 @@ createApp({
       checks: initial.checks || [],
       checking: false,  // a check-all was just asked for
       awaiting: 0,      // the latest check whose answer is being waited for
+      lostSince: 0,     // when the page lost duva, ms; 0 while in touch
+      lostNow: 0,       // the clock the toast's "trying for" reads, ticked while lost
+      interrupted: [],  // applies cut off by the loss, settled once back
       unreachable: initial.unreachable || [],
       blocked: initial.blocked || [],
       canApply: initial.can_apply,
@@ -1339,6 +1348,9 @@ createApp({
           // The sign-in gate answers 401 once the session has ended; a
           // reload sends the browser back through sign-in.
           if (r.status === 401) { location.reload(); return }
+          // A proxy in front of a duva that is being replaced answers 502 or
+          // 503: that is not the page's state, it is duva not being there.
+          if (!r.ok) throw new Error("status " + r.status)
           const s = await r.json()
           this.rows = s.rows || []
           this.soaking = s.soaking || []
@@ -1350,11 +1362,81 @@ createApp({
           this.canApply = s.can_apply
           this.actions = s.actions
           this.resume()
+          this.recovered()
+          return true
         } catch (e) {
-          // A failed poll is not worth reporting: the next one is 15s away,
-          // and a UI that cannot reach itself has nothing useful to say from
-          // inside itself.
+          // Not in touch: say so, and keep trying until it answers.
+          this.markLost()
+          return false
         }
+      },
+
+      // The page has lost duva, whether a poll failed or an apply's stream was
+      // cut. Said at once, with how long it has been, and retried with a
+      // growing pause until something answers. It never turns into a failure
+      // by itself: a self-update takes duva away for as long as it takes.
+      markLost() {
+        if (this.lostSince) return
+        this.lostSince = this.lostNow = Date.now()
+        this.lostTimer = setInterval(() => { this.lostNow = Date.now() }, 1000)
+        this.reconnect()
+      },
+
+      async reconnect() {
+        let wait = 2000
+        while (this.lostSince) {
+          await new Promise(r => setTimeout(r, wait))
+          wait = Math.min(Math.round(wait * 1.5), 10000)
+          if (!this.lostSince) return
+          await this.poll()
+        }
+      },
+
+      // What the toast says about the wait.
+      lostFor() {
+        const s = Math.max(0, Math.round((this.lostNow - this.lostSince) / 1000))
+        return "Trying for " + (s < 60 ? s + "s" : Math.floor(s / 60) + "m " + (s % 60) + "s") + "." +
+          (this.interrupted.length ? " An update was running; this will say how it ended." : "")
+      },
+
+      // A poll got through. Whatever was running when the connection dropped
+      // is settled from what the queue now says.
+      recovered() {
+        if (!this.lostSince) return
+        clearInterval(this.lostTimer)
+        this.lostSince = 0
+        this.result = { service: "duva", level: "ok", message: "reconnected" }
+        const keys = this.interrupted
+        this.interrupted = []
+        keys.forEach(k => this.settle(k))
+      },
+
+      // How an apply that was cut ended. Its row is gone -- applied, and the
+      // process that replaced duva has dropped the entry -- or it is applying
+      // still, and its stream is read again; or it is still waiting, which
+      // is given a few ticks, since the new process drops a satisfied entry
+      // on its first reconcile, and then said plainly.
+      async settle(key) {
+        for (let i = 0; i < 15; i++) {
+          if (this.lostSince) { this.interrupted = [...this.interrupted, key]; return }
+          const row = this.rows.find(r => r.key === key)
+          if (!row) {
+            const { [key]: _s, ...steps } = this.steps
+            const { [key]: _f, ...finished } = this.finished
+            this.steps = steps
+            this.finished = finished
+            this.result = { service: key.split("/").pop(), level: "ok", message: "updated" }
+            return
+          }
+          if (row.applying) {
+            this.steps = { ...this.steps, [key]: [] }
+            this.watch(key)
+            return
+          }
+          await new Promise(r => setTimeout(r, 2000))
+          await this.poll()
+        }
+        this.finished = { ...this.finished, [key]: "failed: duva is back, but the update did not complete" }
       },
 
       // Rows by host, in a stable order, for a card each.
@@ -2158,7 +2240,17 @@ createApp({
             }
           }
         } catch (e) {
-          this.finished = { ...this.finished, [key]: "failed: lost the connection while it ran" }
+          // Said below: a stream that ends without a verdict ended the same way
+          // whether it threw or was closed.
+        }
+        // A stream always ends with its verdict. One that did not was cut: the
+        // updater replaced duva itself, or the network dropped. That is not a
+        // failure, and nobody knows yet how it ended -- so the panel stays, and
+        // once the page is back in touch the queue says what happened.
+        if (!this.finished[key]) {
+          if (!this.interrupted.includes(key)) this.interrupted = [...this.interrupted, key]
+          this.markLost()
+          return
         }
         // The queue has changed underneath: an applied entry has left it.
         await this.poll()
