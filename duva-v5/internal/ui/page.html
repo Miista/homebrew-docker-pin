@@ -1133,7 +1133,13 @@
   <div class="toasts">
     <!-- First, and not dismissible: it is gone when duva answers. Nothing
          below it can be acted on while it shows. -->
-    <div class="toast toast-standing toast-wait" v-if="lostSince" role="status">
+    <div class="toast toast-standing toast-error" v-if="lostSince && gaveUp" role="alert">
+      <span class="who">Couldn't reach duva for 5 minutes</span>
+      <span class="why">Stopped trying. It is still checked every 15 seconds in the background, and this clears if it answers.
+        <button class="act" type="button" style="margin-left: 8px; height: 26px; padding: 0 10px"
+                @click="tryAgain()">Try again</button></span>
+    </div>
+    <div class="toast toast-standing toast-wait" v-if="lostSince && !gaveUp" role="status">
       <span class="who"><svg class="spin" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true" style="vertical-align: -2px; margin-right: 6px"><path d="M13.5 8a5.5 5.5 0 0 1-9.4 3.9M2.5 8a5.5 5.5 0 0 1 9.4-3.9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M12.2 1.6v2.6H9.6M3.8 14.4v-2.6h2.6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>Lost the connection. Reconnecting…</span>
       <span class="why">{{ lostFor() }}</span>
     </div>
@@ -1200,6 +1206,7 @@ createApp({
       awaiting: 0,      // the latest check whose answer is being waited for
       lostSince: 0,     // when the page lost duva, ms; 0 while in touch
       lostNow: 0,       // the clock the toast's "trying for" reads, ticked while lost
+      gaveUp: false,    // five minutes without an answer: not retrying any more
       interrupted: [],  // applies cut off by the loss, settled once back
       unreachable: initial.unreachable || [],
       blocked: initial.blocked || [],
@@ -1384,12 +1391,34 @@ createApp({
 
       async reconnect() {
         let wait = 2000
-        while (this.lostSince) {
+        while (this.lostSince && !this.gaveUp) {
           await new Promise(r => setTimeout(r, wait))
           wait = Math.min(Math.round(wait * 1.5), 10000)
           if (!this.lostSince) return
           await this.poll()
+          // A self-update takes about a minute, so five leaves room for a slow
+          // pull or a reboot; past that something is wrong, and spinning on
+          // says nothing true.
+          if (this.lostSince && Date.now() - this.lostSince > 5 * 60 * 1000) this.giveUp()
         }
+      },
+
+      // Stop retrying. The regular poll goes on, so a duva that comes back by
+      // itself is still noticed. What was cut off is not called a failure: from
+      // here nobody can tell whether it finished.
+      giveUp() {
+        clearInterval(this.lostTimer)
+        this.gaveUp = true
+        for (const key of this.interrupted) {
+          this.finished = { ...this.finished,
+            [key]: "unknown: couldn't reach duva, so can't tell whether it finished. Check the host" }
+        }
+      },
+
+      tryAgain() {
+        this.lostSince = 0
+        this.gaveUp = false
+        this.markLost()
       },
 
       // What the toast says about the wait.
@@ -1405,6 +1434,7 @@ createApp({
         if (!this.lostSince) return
         clearInterval(this.lostTimer)
         this.lostSince = 0
+        this.gaveUp = false
         this.result = { service: "duva", level: "ok", message: "reconnected" }
         const keys = this.interrupted
         this.interrupted = []
@@ -1429,6 +1459,8 @@ createApp({
             return
           }
           if (row.applying) {
+            const { [key]: _f, ...finished } = this.finished // an "unknown" from giving up
+            this.finished = finished
             this.steps = { ...this.steps, [key]: [] }
             this.watch(key)
             return
