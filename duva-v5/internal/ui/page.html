@@ -1181,7 +1181,7 @@ createApp({
       blocks: initial.blocks || [],
       checks: initial.checks || [],
       checking: false,  // a check-all was just asked for
-      awaiting: null,   // the check whose answer is being waited for
+      awaiting: 0,      // the latest check whose answer is being waited for
       unreachable: initial.unreachable || [],
       blocked: initial.blocked || [],
       canApply: initial.can_apply,
@@ -1852,7 +1852,7 @@ createApp({
       // run numbered past the one seen before asking, and done. A newer
       // check asked meanwhile takes over, and an hour-long wait is not one.
       async awaitCheck(hosts, base, label) {
-        const mine = this.awaiting = {}
+        const mine = ++this.awaiting
         const until = Date.now() + 10 * 60 * 1000
         while (this.awaiting === mine) {
           await new Promise(r => setTimeout(r, 2000))
@@ -1864,7 +1864,7 @@ createApp({
           })
           if (runs.every(r => r && r.done)) {
             this.checking = false
-            this.result = this.checkSummary(runs, label)
+            this.result = this.checkOutcome(runs, label)
             return
           }
           if (Date.now() > until) {
@@ -1878,7 +1878,7 @@ createApp({
 
       // What a finished check says, for a toast: what was found and what
       // became of it, or that nothing was, or why it could not look.
-      checkSummary(runs, label) {
+      checkOutcome(runs, label) {
         const problems = [], found = [], skipped = []
         for (const r of runs) {
           if (r.error) problems.push(r.host + ": " + r.error)
@@ -1910,10 +1910,15 @@ createApp({
         } else if (skipped.length) {
           message = "Found " + (skipped.length === 1 ? "a release" : skipped.length + " releases") +
             ", nothing to do: " + skipped[0].service + " " + skipped[0].message
-        } else {
+        } else if (!problems.length) {
           message = "Checked " + label + ": nothing new"
         }
-        if (problems.length) message += "; could not check " + problems.join("; ")
+        // What went wrong goes last, and stands alone when nothing was found:
+        // "nothing new" about a service that could not be looked at is false.
+        if (problems.length) {
+          const wrong = "could not check " + problems.join("; ")
+          message = message ? message + "; " + wrong : wrong[0].toUpperCase() + wrong.slice(1)
+        }
         return { service: "Check", level: problems.length ? "error" : "ok", message }
       },
 
