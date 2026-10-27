@@ -505,6 +505,36 @@ func TestAnUnattendedDeferralIsRetried(t *testing.T) {
 	}
 }
 
+// Nobody is watching an unattended apply, so what put it off is said on the
+// entry's row, and is gone once the next attempt begins.
+func TestADeferralIsSaidOnTheEntry(t *testing.T) {
+	reason := "media.yaml has uncommitted changes; will try again once they are committed"
+	s := &stubActor{lines: []string{update.Terminal(update.Deferred, reason)}}
+	q := queue.NewPending()
+	a := newTestApplierOver(t, s, q)
+	e, _ := q.PutEntry(entryFor("app"), time.Now())
+
+	if err := a.Start(e); err != nil {
+		t.Fatal(err)
+	}
+	waitIdle(t, a)
+
+	got, ok := q.Get("app")
+	if !ok || got.Note != reason {
+		t.Fatalf("note = %q (queued %v), want %q", got.Note, ok, reason)
+	}
+
+	// The next attempt clears it before it does anything else.
+	s.lines = []string{update.Terminal(update.Completed, "")}
+	if err := a.Start(got); err != nil {
+		t.Fatal(err)
+	}
+	waitIdle(t, a)
+	if again, ok := q.Get("app"); ok && again.Note != "" {
+		t.Errorf("note = %q after the next attempt, want it cleared", again.Note)
+	}
+}
+
 // A person who clicked is watching, and clicks again when ready. Retrying
 // behind their back would apply something they may since have decided against.
 func TestAManualDeferralIsNotRetried(t *testing.T) {

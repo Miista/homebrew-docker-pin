@@ -134,6 +134,12 @@ func (a *applier) apply(e queue.Entry, l *live, unattended bool, attempt int) {
 	ctx, cancel := context.WithTimeout(context.Background(), a.timeout)
 	defer cancel()
 
+	// A new attempt is under way, so what the last one said is no longer
+	// what is true.
+	if a.queue != nil && e.Note != "" {
+		a.queue.SetNote(e, "")
+	}
+
 	acc, err := a.client.Apply(ctx, update.Request{
 		Service: e.Service,
 		Image:   e.Image,
@@ -169,6 +175,11 @@ func (a *applier) apply(e queue.Entry, l *live, unattended bool, attempt int) {
 		// and the entry stays queued. Unattended work is offered again after
 		// a pause; a manual click is not.
 		a.log.Warn().Msgf("%s: deferred — %s", e.Service, reason)
+		// Said on the row too: an unattended apply has no panel, and the log
+		// is not where anyone looks.
+		if a.queue != nil {
+			a.queue.SetNote(e, reason)
+		}
 		if unattended {
 			a.retryLater(e, attempt)
 		}

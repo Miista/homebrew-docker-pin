@@ -58,6 +58,9 @@ type Entry struct {
 	// org.opencontainers.image.version label); empty when it does not say.
 	// What a digest move's release notes link by. See ReleaseOf.
 	Release string `json:"release,omitempty"`
+	// Note is what the last attempt to apply it said when it was put off and
+	// will be tried again, for the row to show; empty otherwise.
+	Note string `json:"note,omitempty"`
 }
 
 // Pending is what is waiting: the queue's rows in the store.
@@ -111,7 +114,7 @@ func (q *Pending) fail(err error) {
 // columns is every entry column, in the order scan reads them.
 const columns = `e.id, s.name, s.container, e.file, COALESCE(e.image, i.repo), e.from_ref, e.to_ref, e.tag,
 	COALESCE(e.digest, ''), COALESCE(e.kind, ''), e.auto, e.why, e.found_at,
-	COALESCE(e.published_at, ''), COALESCE(e.release_at, ''), COALESCE(e.source, ''), COALESCE(e.release, '')`
+	COALESCE(e.published_at, ''), COALESCE(e.release_at, ''), COALESCE(e.source, ''), COALESCE(e.release, ''), COALESCE(e.note, '')`
 
 const fromEntries = ` FROM queue_entries e
 	JOIN services s ON s.id = e.service_id
@@ -126,7 +129,7 @@ func scan(row scanner) (Entry, error) {
 	var e Entry
 	var kind, auto string
 	err := row.Scan(&e.ID, &e.Service, &e.Container, &e.File, &e.Image, &e.From, &e.To, &e.Tag,
-		&e.Digest, &kind, &auto, &e.Why, &e.FirstSeen, &e.Published, &e.ReleaseAt, &e.Source, &e.Release)
+		&e.Digest, &kind, &auto, &e.Why, &e.FirstSeen, &e.Published, &e.ReleaseAt, &e.Source, &e.Release, &e.Note)
 	e.Kind, e.Auto = version.Kind(kind), Auto(auto)
 	return e, err
 }

@@ -407,8 +407,10 @@ func TestAFinishedApplyIsNotStillRunning(t *testing.T) {
 }
 
 // A failed apply keeps its panel: the entry is still pending and that panel is
-// the only account of what went wrong. A succeeded one is cleared, because its
-// row has already left the queue.
+// the only account of what went wrong. So does a deferred one, whose entry
+// also stays and whose reason ("media.yaml has uncommitted changes") is said
+// nowhere else a person clicking is looking. A succeeded one is cleared,
+// because its row has already left the queue.
 func TestOnlyASucceededApplyClearsItsPanel(t *testing.T) {
 	s := &Server{
 		Source:   &fakeSource{pending: []Hosted{entry("authelia", "4.39.20", "4.39.26", version.KindPatch)}},
@@ -416,8 +418,8 @@ func TestOnlyASucceededApplyClearsItsPanel(t *testing.T) {
 	}
 	_, body := get(t, s, "/")
 
-	if !strings.Contains(body, `if ((this.finished[key] || "").startsWith("failed")) return`) {
-		t.Error("a failed apply does not keep its panel, so its explanation is thrown away")
+	if !strings.Contains(body, `if (/^(failed|deferred)/.test(this.finished[key] || "")) return`) {
+		t.Error("a failed or deferred apply does not keep its panel, so its explanation is thrown away")
 	}
 }
 

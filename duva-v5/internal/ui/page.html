@@ -306,6 +306,8 @@
   .steps li { padding: .05rem 0; overflow-wrap: anywhere; }
   .steps .ok { color: var(--ok); font-weight: 600; }
   .steps .bad { color: var(--danger); font-weight: 600; }
+  .rows .note { grid-column: 1 / -1; margin: 8px 0 0; font-size: 13px; color: var(--wait);
+                overflow-wrap: anywhere; }
 
   /* ---------- empty ---------- */
   .empty { margin-top: 18px; padding: 48px 20px; text-align: center;
@@ -768,6 +770,9 @@
             <li :class="finished[r.key] && finished[r.key].startsWith('failed') ? 'bad' : 'ok'"
                 v-if="finished[r.key]">{{ finished[r.key] }}</li>
           </ul>
+          <!-- Put off, and will be tried again: said here because an apply
+               duva made itself has no panel above. -->
+          <p class="note" v-if="r.note && !steps[r.key] && !finished[r.key]">{{ r.note }}</p>
         </li>
       </ul>
     </div>

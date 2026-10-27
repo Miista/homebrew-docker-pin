@@ -230,6 +230,8 @@ type row struct {
 	Applying  bool   `json:"applying"`
 	Kind      string `json:"kind"`
 	Why       string `json:"why"`
+	// Note is why the last attempt to apply it was put off, when it was.
+	Note      string `json:"note,omitempty"`
 	FirstSeen string `json:"first_seen"`
 	// Published is when the release appeared upstream, RFC 3339; empty when
 	// the registry does not say.
@@ -493,6 +495,7 @@ func toRow(e Hosted) row {
 		Applying:   e.Applying,
 		Kind:       kindLabel(e.Entry),
 		Why:        e.Why,
+		Note:       e.Note,
 		FirstSeen:  e.FirstSeen,
 		Published:  e.Published,
 		Auto:       string(e.Auto),

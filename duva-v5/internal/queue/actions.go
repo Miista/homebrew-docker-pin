@@ -241,6 +241,18 @@ func (q *Pending) MarkBlocked(e Entry, reason string, now time.Time) {
 	}))
 }
 
+// SetNote records what an attempt to apply the entry said when it was put off,
+// for its row to show; "" clears it. Not an event: a deferral retried every
+// half hour would fill the history with the same sentence.
+func (q *Pending) SetNote(e Entry, note string) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.fail(q.st.Tx(func(tx *sql.Tx) error {
+		_, err := tx.Exec(`UPDATE queue_entries SET note = NULLIF(?, '') WHERE id = ?`, note, e.ID)
+		return err
+	}))
+}
+
 // Asked records that a person asked for a check: of one service, or of every
 // one for "". What it found arrives in the queue as any finding does.
 func (q *Pending) Asked(service, what, actor string, now time.Time) {
