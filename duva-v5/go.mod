@@ -12,7 +12,7 @@
 // Each binary has its own Dockerfile; see the Makefile here.
 module github.com/Miista/homebrew-docker-pin/duva-v5
 
-go 1.27.0
+go 1.27.3
 
 require (
 	github.com/Miista/homebrew-docker-pin v0.0.0
