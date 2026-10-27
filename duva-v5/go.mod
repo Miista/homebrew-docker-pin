@@ -19,7 +19,7 @@ require (
 	github.com/Miista/homebrew-docker-pin/compose v0.0.0
 	github.com/Miista/homebrew-docker-pin/dockerapi v0.0.0
 	github.com/Miista/homebrew-docker-pin/oci v0.0.0
-	github.com/miista/authy v0.1.2
+	github.com/miista/authy v0.1.3
 	github.com/miista/configy v0.0.0-20261011101459-b0f6bc5d0dcb
 	github.com/rs/zerolog v1.35.1
 	modernc.org/sqlite v1.60.1

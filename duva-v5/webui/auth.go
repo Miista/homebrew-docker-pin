@@ -56,14 +56,15 @@ func newGate(ctx context.Context, setting func(key string) string) (*authy.Gate,
 }
 
 // signedIn names the person a request is from, for the record of what they
-// did: their username if the provider gave one, else their email, else the
-// provider's ID for them.
+// did: their username if the provider gave one, else their name, else their
+// email, else the provider's ID for them. It is the login handle, not the
+// display name, because an audit record should name who signed in.
 func signedIn(r *http.Request) string {
 	u, ok := authy.UserFrom(r)
 	if !ok {
 		return ""
 	}
-	for _, name := range []string{u.Name, u.Email, u.Subject} {
+	for _, name := range []string{u.Username, u.DisplayName, u.Email, u.Subject} {
 		if name != "" {
 			return name
 		}
