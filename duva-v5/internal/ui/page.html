@@ -1006,9 +1006,8 @@
               </button>
               <div class="picker" v-if="pickOpen">
                 <input class="pick-q" type="search" v-model="pickQ" placeholder="Filter services"
-                       @keydown.down.prevent="pickMove($event, 1)">
-                <div class="pick-list" @keydown.down.prevent="pickMove($event, 1)"
-                     @keydown.up.prevent="pickMove($event, -1)">
+                       @keydown="pickKey($event)">
+                <div class="pick-list" @keydown="pickKey($event)">
                   <label class="pick-all">
                     <input type="checkbox" :checked="!picked.length" @change="picked = []">
                     <span>All services</span>
@@ -1953,7 +1952,12 @@ createApp({
       // Arrow keys walk from the filter box through the checkboxes, so a
       // search is picked from without the mouse; space ticks natively. Up
       // from the first one returns to the filter.
-      pickMove(e, step) {
+      // The key is checked here: petite-vue's key modifiers want the
+      // hyphenated name (`.arrow-down`), and `.down` silently matches nothing.
+      pickKey(e) {
+        const step = { ArrowDown: 1, ArrowUp: -1 }[e.key]
+        if (!step) return
+        e.preventDefault()
         const picker = e.currentTarget.closest(".picker")
         const boxes = [...picker.querySelectorAll(".pick-list input")]
         const at = boxes.indexOf(document.activeElement)
