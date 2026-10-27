@@ -1005,8 +1005,10 @@
                 <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
               </button>
               <div class="picker" v-if="pickOpen">
-                <input class="pick-q" type="search" v-model="pickQ" placeholder="Filter services">
-                <div class="pick-list">
+                <input class="pick-q" type="search" v-model="pickQ" placeholder="Filter services"
+                       @keydown.down.prevent="pickMove($event, 1)">
+                <div class="pick-list" @keydown.down.prevent="pickMove($event, 1)"
+                     @keydown.up.prevent="pickMove($event, -1)">
                   <label class="pick-all">
                     <input type="checkbox" :checked="!picked.length" @change="picked = []">
                     <span>All services</span>
@@ -1946,6 +1948,18 @@ createApp({
         return this.checks
           .map(c => ({ host: c.host, services: (c.services || []).filter(n => !q || n.toLowerCase().includes(q)) }))
           .filter(h => h.services.length)
+      },
+
+      // Arrow keys walk from the filter box through the checkboxes, so a
+      // search is picked from without the mouse; space ticks natively. Up
+      // from the first one returns to the filter.
+      pickMove(e, step) {
+        const picker = e.currentTarget.closest(".picker")
+        const boxes = [...picker.querySelectorAll(".pick-list input")]
+        const at = boxes.indexOf(document.activeElement)
+        const next = at + step
+        if (next < 0) return picker.querySelector(".pick-q").focus()
+        if (next < boxes.length) boxes[next].focus()
       },
 
       togglePick(key) {
