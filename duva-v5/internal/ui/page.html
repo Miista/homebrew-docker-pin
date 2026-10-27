@@ -2314,8 +2314,10 @@ createApp({
         // A succeeded apply has left the queue, so the poll above already took
         // its row away. A failed one has not: the entry is still pending, and
         // its panel is the only account of what went wrong, so that stays
-        // until the person does something about it.
-        if ((this.finished[key] || "").startsWith("failed")) return
+        // until the person does something about it. A deferred one is the
+        // same: its entry stays, and the panel is the only place that says
+        // why ("media.yaml has uncommitted changes").
+        if (/^(failed|deferred)/.test(this.finished[key] || "")) return
         const { [key]: _s, ...steps } = this.steps
         const { [key]: _f, ...finished } = this.finished
         this.steps = steps
