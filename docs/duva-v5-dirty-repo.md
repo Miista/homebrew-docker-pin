@@ -84,6 +84,35 @@ hemma solved the same thing for deploys. `syncWithOrigin` in
    The second is smaller. The first is what a person would expect from a
    greyed button.
 
+## Same file, other service (2026-10-29)
+
+Per-file was still too coarse: on optiplex an uncommitted edit to `bookshelf`
+in `media/media.yml` held back radarr, which is in the same file. Done:
+
+- **The question is about the service.** `serviceUntouched` (`isolate.go`)
+  compares the service as decoded from HEAD and from the working file, image
+  left out (`compose.ServiceBlock`), plus its image line, plus its `env_file`
+  entries and `extends` file (`compose.ServiceFiles`) against `git status`.
+  Decoded, so a comment, key order or quoting is not an edit, and an anchor
+  the service borrows from is (checked by
+  `TestServiceBlock_SeesAnEditToASharedAnchor`). Asked even when the compose
+  file is clean, since an env_file edit does not dirty it.
+- **The commit is built from HEAD.** `commitPinOnly` takes HEAD's file,
+  replaces the one image line, and commits it through a temporary
+  `GIT_INDEX_FILE`, so the real index and the working file are untouched.
+  `git commit` still runs, so the commit-msg hook does. Afterwards
+  `git reset -- :(top)<path>` catches the real index up. Paths are from the
+  repository root while git runs in the file's directory, which a first
+  version got wrong (`--full-tree` and `:(top)`).
+- **Waits, whole file:** untracked, or staged changes in it (the reset would
+  undo them); the service not in HEAD.
+- **No worktree.** A second checkout would make the file duva writes and the
+  file the sync and recreate read two different things. Here there is one
+  file, and a failed recreate still leaves a dirty image line in it, which is
+  what blocks the next apply of that service.
+- **Not covered:** `include:`d files the service does not itself read, and
+  values from `.env` (compared unexpanded).
+
 ## What still holds
 
 - **"`IsClean` then blocks the next apply" (CLAUDE.md, duva v4/v5)** after a

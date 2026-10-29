@@ -190,10 +190,17 @@ duva sends no notification about its own health -- that is the monitor's job.
 
 ### An uncommitted edit, or a rate-limited registry
 
-Applying rewrites and commits one compose file, so duva will not start an
-apply while *that file* has uncommitted changes, or while git holds its index
-lock. Edits to other files are left alone: an apply to a service elsewhere goes
-ahead, and its commit holds only its own file, never anything you staged. With
+Applying rewrites and commits one service's image line, so duva will not start
+an apply while *that service* has an uncommitted change, or while git holds its
+index lock. "That service" is everything it declares (compared as parsed YAML,
+so comments, blank lines and key order do not count, and an edit to an anchor
+it borrows from does), its own image line, and the files it reads: its
+`env_file` entries and the file of an `extends`. Edits to other services, even
+in the same file, and to other files, are left alone: the apply goes ahead, and
+its commit is built from the committed file with only the new image line
+changed, so it holds nothing of yours. What you staged stays staged, and what you
+were editing stays in the working file. A file git has never seen, or with
+changes staged in it, is waited for whole. With
 `git.push` on, the pull before the push carries your edits across with
 `--autostash`, unless origin's new commits change one of the same files; then
 nothing is pulled and the files are named. The refusal is not a failure:

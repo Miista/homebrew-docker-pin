@@ -1,0 +1,69 @@
+# The receiver that stands in for ntfy, shared by every scenario that asserts
+# on what was announced.
+include:
+  - common/ntfy.yml
+
+# Two services in one compose file, one of them being edited.
+#
+# `app` has a patch available and duva.auto allows patches. `other` is the
+# service somebody is changing: a test leaves an edit to it, or to `app`'s own
+# block, or to the env_file `app` reads, uncommitted in this file, and the
+# question is whether the update to `app` goes ahead.
+#
+# The images carry no digest: the suite pins them with docker pin before any
+# of this runs, so the starting state is produced the same way a real stack's
+# is. Each has its own repository and container_name: a container_name is
+# global to the daemon.
+services:
+  app:
+    image: localhost:5555/shared-app:1.0.0
+    container_name: shared-app
+    env_file: app.env
+    labels:
+      duva.include: '^1\.0\.\d+$'
+      duva.auto: patch
+
+  other:
+    image: localhost:5555/shared-other:1.0.0
+    container_name: shared-other
+    labels:
+      duva.include: '^1\.0\.\d+$'
+      duva.auto: patch
+
+  # duva v5: watch, queue and updater in one process. The only one with any
+  # privilege, so it runs as the user that owns the repository and in the
+  # docker group -- written to .env by the harness, because a fixture cannot
+  # know either.
+  duva:
+    image: duva:integration
+    command: ["serve"]
+    user: "${UID}:${GID}"
+    group_add:
+      - "${DOCKER_GID}"
+    environment:
+      DUVA_SETTING_HOST: integration
+      # serve checks once at startup, so restarting it is how a test asks
+      # for a check; this schedule never fires.
+      DUVA_SETTING_SCHEDULE: "0 3 * * *"
+      DUVA_SETTING_LOG_LEVEL: debug
+      DUVA_SETTING_API_TOKEN: integration-token
+      # The receiver stands in for ntfy, so a test can assert on what was
+      # announced rather than on what a log line said.
+      DUVA_SETTING_NTFY_ENDPOINT: http://ntfy:8080
+      DUVA_SETTING_NTFY_TOPIC: duva
+      # The project, mounted at the path it has on the host, so a relative
+      # bind in it resolves to a path the daemon can also find.
+      DUVA_SETTING_REPO: ${PROJECT_DIR}
+      DUVA_SETTING_COMMIT_TEMPLATE: "pin {{.Container}} to {{if eq .OldVersion .NewVersion}}{{.NewDigest}}{{else}}{{.NewVersion}}{{end}}"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${PROJECT_DIR}:${PROJECT_DIR}
+      # Every component's state, which a test reads from here.
+      - ./data:/data
+      # Only here because the suite's registry is self-signed.
+      - ./certs/cert.pem:/etc/ssl/certs/ca-certificates.crt:ro
+    extra_hosts:
+      # The images are localhost:5555/..., and that name has to mean the
+      # registry both here, where tags are listed, and on the host's daemon,
+      # where the pull happens.
+      - localhost:host-gateway

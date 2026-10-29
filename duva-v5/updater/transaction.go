@@ -68,6 +68,14 @@ type Git struct {
 	// file being rewritten: an edit somewhere else in the repository is
 	// somebody's, and is neither committed with this nor in its way.
 	IsClean func(dir, file string) (bool, error)
+	// ServiceUntouched and CommitPin let a service be updated in a file that
+	// has an edit to some other service. The first says whether the edit
+	// leaves this service alone (its image line, the rest of its block, and
+	// the files it reads), and what is wrong if not; the second commits only
+	// the new image line, built from HEAD. Both nil: a dirty file is refused
+	// whole.
+	ServiceUntouched func(dir, file, service string) (ok bool, why string, err error)
+	CommitPin        func(dir, file, service, newRaw, message string) error
 }
 
 var realDocker = Docker{
@@ -97,6 +105,10 @@ var realGit = Git{
 	PullRebase:  pullRebase,
 	RebaseAbort: func(dir string) error { return runGit(gitCmd(dir, "rebase", "--abort")) },
 	Push:        func(dir string) error { return runGit(gitCmd(dir, "push")) },
+
+	ServiceUntouched: serviceUntouched,
+	CommitPin:        commitPinOnly,
+
 	IsClean: func(dir, file string) (bool, error) {
 		cmd := gitCmd(dir, "status", "--porcelain", "--", file)
 		var stderr strings.Builder
@@ -255,6 +267,7 @@ func transaction(req update.Request, step func(string, ...any), d Docker, g Git,
 	// A clean file is a precondition, not a setting: this rewrites and commits
 	// it, and doing that on top of someone's half-finished edit is never
 	// wanted. Only this file: an edit to another one is not in the way.
+	pinApart := false
 	if g.IsClean != nil {
 		clean, err := g.IsClean(dir, file)
 		if errors.Is(err, errRepoBusy) {
@@ -265,8 +278,27 @@ func transaction(req update.Request, step func(string, ...any), d Docker, g Git,
 		if err != nil {
 			return update.Failed, fmt.Sprintf("checking the repository: %v", err)
 		}
-		if !clean {
+		if !clean && (g.ServiceUntouched == nil || g.CommitPin == nil) {
 			return update.Deferred, fmt.Sprintf("%s has uncommitted changes; will try again once they are committed", filepath.Base(file))
+		}
+		// An edit somewhere else in the file is not in this service's way, and
+		// is left exactly as it is: the pin is committed on its own. An edit to
+		// the service itself, or to a file it reads, waits. That is asked even
+		// when the compose file is clean, because an env_file edit does not
+		// make it dirty.
+		if g.ServiceUntouched != nil {
+			ok, why, err := g.ServiceUntouched(dir, file, req.Service)
+			if errors.Is(err, errRepoBusy) {
+				return update.Deferred, "the repository was busy; will try again"
+			}
+			if err != nil {
+				return update.Failed, fmt.Sprintf("checking the repository: %v", err)
+			}
+			if !ok {
+				return update.Deferred, fmt.Sprintf("%s has uncommitted changes, and %s %s; will try again once they are committed",
+					filepath.Base(file), req.Service, why)
+			}
+			pinApart = !clean
 		}
 	}
 
@@ -386,10 +418,17 @@ func transaction(req update.Request, step func(string, ...any), d Docker, g Git,
 		return done(step, "the change is live but the commit message could not be built: %v", err)
 	}
 	step("committing")
-	if err := g.Add(dir, file); err != nil {
-		return done(step, "the change is live but could not be staged: %v", err)
+	// With somebody else's edit in the file the commit is built from HEAD and
+	// holds the pin alone, so there is nothing to stage: the real index is not
+	// what it commits.
+	commit := func() error { return g.CommitPin(dir, file, req.Service, out.NewRaw, msg) }
+	if !pinApart {
+		if err := g.Add(dir, file); err != nil {
+			return done(step, "the change is live but could not be staged: %v", err)
+		}
+		commit = func() error { return g.Commit(dir, file, msg) }
 	}
-	if err := g.Commit(dir, file, msg); err != nil {
+	if err := commit(); err != nil {
 		// Not undone, and deliberately not tidied either.
 		//
 		// The container is running the new image, so a rollback would tear

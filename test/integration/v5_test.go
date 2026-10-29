@@ -430,3 +430,134 @@ func TestV5DuvaUpdatesItself(t *testing.T) {
 		}
 	})
 }
+
+// A compose file holds many services, and an edit to one of them is not a
+// reason to leave another alone. Here `other` is being changed -- uncommitted,
+// in the very file `app` is declared in -- and `app`'s patch goes through,
+// committed on its own with the edit left exactly where it was.
+func TestV5AnEditToAnotherServiceInTheSameFileDoesNotBlockAnApply(t *testing.T) {
+	s := Up(t, "duva-v5/shared-file")
+	s.PushUpdates()
+	s.Pin("app", "other")
+	s.editCompose("    container_name: shared-other\n", "    container_name: shared-other\n    restart: unless-stopped\n")
+	otherBefore := s.RunningImage("shared-other")
+	s.Start()
+
+	t.Run("the update is applied", func(t *testing.T) {
+		if got := s.RunningImage("shared-app"); !strings.Contains(got, "1.0.1") {
+			t.Errorf("1.0.0 -> 1.0.1 was not applied:\n  got %s\n%s", got, s.Logs("duva"))
+		}
+	})
+
+	t.Run("the commit holds the pin and not the edit", func(t *testing.T) {
+		if got := s.Log(); !strings.Contains(got, "pin app to 1.0.1") {
+			t.Fatalf("the change was not committed:\n  got %s", got)
+		}
+		committed := s.git("show", "HEAD:docker-compose.yml")
+		if !strings.Contains(committed, "shared-app:1.0.0@sha256:") && !strings.Contains(committed, "shared-app:1.0.1@sha256:") {
+			t.Errorf("the commit has no pin for app:\n%s", committed)
+		}
+		if strings.Contains(committed, "restart: unless-stopped") {
+			t.Errorf("somebody's edit to other was committed with the pin:\n%s", committed)
+		}
+	})
+
+	t.Run("the edit is still there, and is all that is left", func(t *testing.T) {
+		if got := s.statusWithoutState(); got != "M docker-compose.yml" {
+			t.Errorf("want only the compose file modified, got %q", got)
+		}
+		diff := s.git("diff", "-U0", "--", "docker-compose.yml")
+		if !strings.Contains(diff, "restart: unless-stopped") {
+			t.Errorf("the edit is gone from the working file:\n%s", diff)
+		}
+		if strings.Contains(diff, "shared-app") {
+			t.Errorf("the pin still shows as uncommitted:\n%s", diff)
+		}
+	})
+
+	t.Run("the service being edited is left running as it was", func(t *testing.T) {
+		if got := s.RunningImage("shared-other"); got != otherBefore {
+			t.Errorf("other was touched:\n  before %s\n  after  %s", otherBefore, got)
+		}
+	})
+}
+
+// The other half: an edit to the service about to be replaced, or to a file it
+// reads, is somebody part way through changing it. That waits, and nothing is
+// pulled, written, recreated or committed.
+func TestV5AnEditToTheServiceItselfWaits(t *testing.T) {
+	for name, tc := range map[string]struct {
+		edit func(s *Scenario)
+		want string
+	}{
+		"its own block": {
+			edit: func(s *Scenario) {
+				s.editCompose("    container_name: shared-app\n", "    container_name: shared-app\n    restart: always\n")
+			},
+			want: "app has an edit",
+		},
+		"its image line": {
+			edit: func(s *Scenario) {
+				// Still a pinned reference, so duva does see the service; only
+				// not the one that was committed.
+				s.editCompose("shared-app:1.0.0@sha256:", "shared-app:1.0.0@sha256:0")
+			},
+			want: "app has an edit",
+		},
+		"the env_file it reads": {
+			edit: func(s *Scenario) { s.writeFile(filepath.Join(s.Dir, "app.env"), "GREETING=goodbye\n") },
+			want: "app.env",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := Up(t, "duva-v5/shared-file")
+			s.PushUpdates()
+			s.Pin("app", "other")
+			head := s.git("rev-parse", "HEAD")
+			tc.edit(s)
+			status := s.statusWithoutState()
+			s.Start()
+
+			line := s.WaitForLine("duva", "app: deferred")
+			if !strings.Contains(line, tc.want) {
+				t.Errorf("the log should say why, naming %q:\n  %s", tc.want, line)
+			}
+			if got := s.RunningImage("shared-app"); strings.Contains(got, "1.0.1") {
+				t.Errorf("a service somebody is editing was updated:\n  got %s", got)
+			}
+			if got := s.git("rev-parse", "HEAD"); got != head {
+				t.Errorf("a commit was made:\n  %s", s.Log())
+			}
+			if got := s.statusWithoutState(); got != status {
+				t.Errorf("duva changed the working tree:\n  before %q\n  after  %q", status, got)
+			}
+		})
+	}
+}
+
+// statusWithoutState is git status minus duva's own state directory, which is
+// untracked in these fixtures and is not what a test is asking about.
+func (s *Scenario) statusWithoutState() string {
+	var kept []string
+	for _, line := range strings.Split(s.Status(), "\n") {
+		if line != "?? data/" {
+			kept = append(kept, line)
+		}
+	}
+	return strings.Join(kept, "\n")
+}
+
+// editCompose changes the project's compose file without committing, as
+// somebody part way through an edit has.
+func (s *Scenario) editCompose(old, new string) {
+	s.t.Helper()
+	path := filepath.Join(s.Dir, "docker-compose.yml")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	if !strings.Contains(string(b), old) {
+		s.t.Fatalf("%q is not in the compose file:\n%s", old, b)
+	}
+	s.writeFile(path, strings.Replace(string(b), old, new, 1))
+}

@@ -1,0 +1,5 @@
+# The newer version the watcher should find: a patch for the service that is
+# updated. The other service, which is edited, has none.
+updates:
+  shared-app:
+    - 1.0.1

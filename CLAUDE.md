@@ -195,12 +195,21 @@ v4's components in one process: `duva serve`. Released as one image,
   with `agent.<host>.token` each; an agent refuses the hub's settings
   (`settings.ModeOf`). An old name refuses to start
   (`settings.CheckRenamed`). configy needs Go 1.27.
-- **An uncommitted edit blocks only its own file.** v4's whole-repo `IsClean`
+- **An uncommitted edit blocks only its own service.** v4's whole-repo `IsClean`
   stopped every apply on a host while one compose file was being edited. v5
-  asks about the file it would rewrite, commits with `-- <file>` so staged
-  work is never swept in, and pulls with `--autostash` unless origin changes
-  an edited file (hemma's rule). A failed recreate still blocks that service.
-  Held by `TestV5AnEditElsewhereDoesNotBlockAnApply`.
+  asks about the service it would rewrite: its decoded block (anchors
+  expanded, image left out), its image line, and its `env_file` and `extends`
+  files. An edit to another service in the same file does not block; the
+  commit is then built from HEAD with only the image line replaced, through a
+  temporary index (`isolate.go`), so nothing of the edit is committed and the
+  real index is untouched. A file git does not track, or with staged changes
+  in it, is waited for whole. A clean file is committed the usual way (`--
+  <file>`, so staged work elsewhere is never swept in), and the pull uses
+  `--autostash` unless origin changes an edited file (hemma's rule). A failed
+  recreate leaves the pin written and uncommitted, which blocks that service
+  and no other. Held by `TestV5AnEditElsewhereDoesNotBlockAnApply`,
+  `TestV5AnEditToAnotherServiceInTheSameFileDoesNotBlockAnApply` and
+  `TestV5AnEditToTheServiceItselfWaits`. See `docs/duva-v5-dirty-repo.md`.
 - An image that declares `VOLUME` broke two things in `dockerapi`, both fixed:
   `containerID` must match `/containers/<id>/`, not any 64-hex string, and
   `createSpec` must not bind what compose already put in `HostConfig.Mounts`.
