@@ -26,3 +26,6 @@ coverage.out
 
 # Editor and sed leftovers.
 *.bak
+
+# ui-mount installs playwright here.
+node_modules/

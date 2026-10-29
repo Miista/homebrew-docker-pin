@@ -283,6 +283,15 @@ one never releases the other. As in homebrew-hemma (`ui-vX.Y.Z`).
 
 ## Conventions
 
+- **Every UI change is backed by a mount check of all pages and tabs.**
+  `make test-ui` loads the Queue, Automatic, Deferred and Jobs views of
+  `cmd/uipreview` in headless Chromium, desktop and phone width, and fails on
+  a page error, a console error, or `{{ }}` left on the page. Run it before
+  committing a change to `page.html` or anything it renders, and before tagging
+  a duva release; it is part of `make test`. A new page or tab goes into
+  `VIEWS` in `hack/ui-mount/mount.mjs` in the same change. The unit tests do
+  not run the page in a browser: 5.7.5 and 5.7.6 shipped a template petite-vue
+  could not place, and the live page showed raw `{{ }}`.
 - **A release is something someone puts out there; an update is something
   you choose to take.** A release is upstream: an image's new version or
   digest, there whether anyone runs it or not. What is found, and what is

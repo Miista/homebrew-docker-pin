@@ -1,0 +1,9 @@
+{
+  "name": "ui-mount",
+  "private": true,
+  "type": "module",
+  "description": "Loads every page and tab of duva's UI in a browser and fails if one does not mount",
+  "devDependencies": {
+    "playwright": "^1.50.0"
+  }
+}

@@ -6,7 +6,7 @@ BINARIES     := docker-pin docker-unpin
 # only shares certain host paths -- /tmp is not one of them.
 COVER_DIR   := $(HOME)/.cache/docker-pin-cover
 
-.PHONY: all build install clean test test-unit test-integration cover cover-html cover-html-v4 conditions
+.PHONY: all build install clean test test-unit test-integration test-ui cover cover-html cover-html-v4 conditions
 
 all: build
 
@@ -27,7 +27,7 @@ install: build
 # They run sequentially: the suites share a registry port, and duva does not
 # run several copies of itself in production either.
 
-test: test-unit test-integration
+test: test-unit test-integration test-ui
 
 # Each module is tested on its own, and their coverage is deliberately not
 # pooled. oci in particular is the one part of this repo whose correctness is
@@ -42,6 +42,13 @@ test-unit:
 	cd oci && go test -shuffle=on ./...
 	cd duva-v4 && go test -shuffle=on ./...
 	cd duva-v5 && go test -shuffle=on ./...
+
+# Loads every page and tab of duva's UI in a browser, against cmd/uipreview,
+# and fails if one does not mount. The unit tests do not run the page in a
+# browser, which is how a template petite-vue could not place shipped in
+# duva 5.7.5 and 5.7.6. Needs node, and downloads Chromium on first use.
+test-ui:
+	cd hack/ui-mount && npm ci && npx playwright install chromium && node mount.mjs
 
 # -p 1 keeps packages sequential: the suites share a registry port and a
 # testbed, and duva does not run several copies of itself in production
