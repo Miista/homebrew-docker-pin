@@ -2,10 +2,12 @@ package updater
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Miista/homebrew-docker-pin/duva-v5/internal/update"
 )
@@ -34,14 +36,22 @@ services:
 // absolute path, and dir is the directory the updater runs git in.
 func sharedRepo(t *testing.T) (root, dir, file string) {
 	t.Helper()
-	_, root = repo(t)
+	_, root, dir, file = sharedRepoWithOrigin(t)
+	return root, dir, file
+}
+
+// sharedRepoWithOrigin is sharedRepo with the bare origin the checkout pushes
+// to, for what happens when git.push is on.
+func sharedRepoWithOrigin(t *testing.T) (origin, root, dir, file string) {
+	t.Helper()
+	origin, root = repo(t)
 	dir = filepath.Join(root, "media")
 	file = filepath.Join(dir, "media.yml")
 	write(t, file, sharedFile)
 	write(t, filepath.Join(dir, "radarr.env"), "A=1\n")
 	git(t, root, "add", ".")
 	git(t, root, "commit", "-q", "-m", "media")
-	return root, dir, file
+	return origin, root, dir, file
 }
 
 func edit(t *testing.T, file, old, new string) {
@@ -571,4 +581,171 @@ func TestAFailedRecreateStillBlocksItsOwnServiceOnly(t *testing.T) {
 			t.Errorf("the commit should hold bookshelf's pin and not radarr's failed one:\n%s", got)
 		}
 	})
+}
+
+// --- the repository's index is locked by somebody else ---
+
+func TestIsRepoBusy(t *testing.T) {
+	for stderr, want := range map[string]bool{
+		"fatal: Unable to create '/r/.git/index.lock': File exists.": true,
+		"fatal: Another git process seems to be running":             true,
+		"fatal: not a git repository":                                false,
+		"":                                                           false,
+	} {
+		if got := isRepoBusy(stderr); got != want {
+			t.Errorf("isRepoBusy(%q) = %v, want %v", stderr, got, want)
+		}
+	}
+}
+
+// pinned is a repository with radarr's pin written to the working file and an
+// edit to bookshelf beside it, ready for commitPinOnly.
+func pinned(t *testing.T) (root, dir, file string) {
+	t.Helper()
+	root, dir, file = sharedRepo(t)
+	edit(t, file, "unless-stopped", "always")
+	edit(t, file, "sha256:old", "sha256:new")
+	return root, dir, file
+}
+
+const radarrPinned = "example.com/radarr:1.0.0@sha256:new"
+
+// Somebody else's git command holds the index for a moment. The commit is made
+// without the real index, so the lock only matters for the step that catches
+// it up -- and that waits it out.
+func TestCommitPinOnly_WaitsOutALockOnTheIndex(t *testing.T) {
+	root, dir, file := pinned(t)
+	lock := filepath.Join(root, ".git", "index.lock")
+	write(t, lock, "")
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		os.Remove(lock)
+	}()
+
+	if err := commitPinOnly(dir, file, "radarr", radarrPinned, "radarr: pinned"); err != nil {
+		t.Fatalf("a lock that clears should not fail the commit: %v", err)
+	}
+	if got := git(t, root, "status", "--porcelain"); got != "M media/media.yml" {
+		t.Errorf("the index should be level with HEAD, leaving only the edit: %q", got)
+	}
+}
+
+// A lock that does not clear. The commit is there and the update is true; what
+// is not done is bringing the index level, and the error says exactly that
+// rather than that the commit failed.
+func TestCommitPinOnly_SaysWhatIsLeftWhenTheLockStays(t *testing.T) {
+	root, dir, file := pinned(t)
+	prevRetries, prevWait := indexRetries, indexWait
+	indexRetries, indexWait = 3, time.Millisecond
+	t.Cleanup(func() { indexRetries, indexWait = prevRetries, prevWait })
+	write(t, filepath.Join(root, ".git", "index.lock"), "")
+
+	err := commitPinOnly(dir, file, "radarr", radarrPinned, "radarr: pinned")
+	if !errors.Is(err, errIndexBehind) || !strings.Contains(err.Error(), "media/media.yml") {
+		t.Fatalf("want errIndexBehind naming the file, got %v", err)
+	}
+	if got := git(t, root, "log", "-1", "--format=%s"); got != "radarr: pinned" {
+		t.Errorf("the commit should exist: %q", got)
+	}
+
+	t.Run("and one `git reset` puts it right", func(t *testing.T) {
+		os.Remove(filepath.Join(root, ".git", "index.lock"))
+		git(t, root, "reset", "-q", "--", "media/media.yml")
+		if got := git(t, root, "status", "--porcelain"); got != "M media/media.yml" {
+			t.Errorf("status = %q", got)
+		}
+	})
+}
+
+func TestABehindIndexIsReportedAsCommittedNotAsFailed(t *testing.T) {
+	w := newWorld(t, versionPin)
+	var pinnedCalls []string
+	g := w.apart(true, "", &pinnedCalls)
+	g.CommitPin = func(dir, file, service, newRaw, msg string) error {
+		return fmt.Errorf("%w: docker-compose.yml: fatal: index.lock", errIndexBehind)
+	}
+	step, lines := steps()
+	status, reason := transaction(versionRequest(), step, w.docker(), g, true, "")
+	if status != update.Completed {
+		t.Errorf("status = %q, want completed: the update is live", status)
+	}
+	if !strings.Contains(reason, "committed") || !strings.Contains(reason, "git reset") || strings.Contains(reason, "could not be committed") {
+		t.Errorf("reason = %q: it should say the commit is there and what is left", reason)
+	}
+	if w.pushed != 0 {
+		t.Error("it pushed with the repository in a half-level state")
+	}
+	if !strings.Contains(strings.Join(*lines, "\n"), "git reset") {
+		t.Errorf("the stream never said what to do: %v", *lines)
+	}
+}
+
+// --- git.push on, with a pin committed apart ---
+
+// With push on, the pull before the push carries somebody's uncommitted edit
+// across with --autostash when origin's new commits leave it alone.
+func TestTransaction_RealGitPushesAPinCommittedApart(t *testing.T) {
+	origin, root, _, file := sharedRepoWithOrigin(t)
+	git(t, root, "push", "-q", "origin", "HEAD:main")
+	pushFromElsewhere(t, origin, "b/compose.yml", "b: from another host\n")
+	edit(t, file, "unless-stopped", "always")
+
+	w := newWorld(t, "services:\n  app:\n    image: x\n")
+	resolveFile = func(string) (string, error) { return file, nil }
+	w.digest = "sha256:new"
+	req := update.Request{Service: "radarr", Image: "example.com/radarr", Tag: "1.0.0", Digest: "sha256:new", From: "sha256:old", To: "sha256:new"}
+	step, lines := steps()
+
+	status, reason := transaction(req, step, w.docker(), realGit, true, "radarr: pinned")
+	if status != update.Completed || reason != "" {
+		t.Fatalf("status = %q, reason = %q\n%v", status, reason, *lines)
+	}
+	if got := git(t, origin, "log", "-1", "--format=%s", "main"); got != "radarr: pinned" {
+		t.Errorf("origin's newest commit = %q: the pin was not pushed", got)
+	}
+	if got := git(t, origin, "show", "main:media/media.yml"); strings.Contains(got, "always") || !strings.Contains(got, "sha256:new") {
+		t.Errorf("origin should have the pin and not the edit:\n%s", got)
+	}
+	if got := git(t, root, "log", "--format=%s", "-3"); !strings.Contains(got, "elsewhere") {
+		t.Errorf("origin's commit from the other host should have been pulled in:\n%s", got)
+	}
+	if got := git(t, root, "status", "--porcelain"); got != "M media/media.yml" {
+		t.Errorf("status = %q, want only the edit left", got)
+	}
+	if b, _ := os.ReadFile(file); !strings.Contains(string(b), "always") {
+		t.Error("the edit is gone from the working file")
+	}
+}
+
+// When origin changes the very file somebody is editing, nothing is pulled and
+// nothing is pushed. The commit is local, the update is live, and the reason
+// says what is left.
+func TestTransaction_RealGitDoesNotPullOverTheFileBeingEdited(t *testing.T) {
+	origin, root, _, file := sharedRepoWithOrigin(t)
+	git(t, root, "push", "-q", "origin", "HEAD:main")
+	pushFromElsewhere(t, origin, "media/media.yml", sharedFile+"# added elsewhere\n")
+	edit(t, file, "unless-stopped", "always")
+
+	w := newWorld(t, "services:\n  app:\n    image: x\n")
+	resolveFile = func(string) (string, error) { return file, nil }
+	w.digest = "sha256:new"
+	req := update.Request{Service: "radarr", Image: "example.com/radarr", Tag: "1.0.0", Digest: "sha256:new", From: "sha256:old", To: "sha256:new"}
+	step, _ := steps()
+
+	status, reason := transaction(req, step, w.docker(), realGit, true, "radarr: pinned")
+	if status != update.Completed || !strings.Contains(reason, "could not rebase before pushing") || !strings.Contains(reason, "media/media.yml") {
+		t.Fatalf("status = %q, reason = %q", status, reason)
+	}
+	if got := git(t, root, "log", "-1", "--format=%s"); got != "radarr: pinned" {
+		t.Errorf("the pin should be committed locally: %q", got)
+	}
+	if got := git(t, origin, "log", "-1", "--format=%s", "main"); got == "radarr: pinned" {
+		t.Error("it pushed past a file somebody was editing")
+	}
+	if b, _ := os.ReadFile(file); !strings.Contains(string(b), "always") {
+		t.Error("the edit is gone from the working file")
+	}
+	if got := git(t, root, "status", "--porcelain"); got != "M media/media.yml" {
+		t.Errorf("status = %q", got)
+	}
 }

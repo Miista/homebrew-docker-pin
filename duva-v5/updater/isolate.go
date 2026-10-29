@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"time"
 
 	"github.com/Miista/homebrew-docker-pin/compose"
 )
@@ -177,8 +178,34 @@ func commitPinOnly(dir, file, service, newRaw, message string) error {
 	// read as a staged change reversing the pin. Nothing of a person's was
 	// staged here (serviceUntouched refused that), so this only catches the
 	// index up with HEAD.
-	return runGit(gitCmd(dir, "reset", "-q", "--", ":(top)"+rel))
+	//
+	// The one step that takes the real index's lock, so the one that can meet
+	// somebody else holding it. The commit is made by now, so this waits the
+	// lock out a few seconds rather than report a commit that happened as one
+	// that did not; past that it says what is left to do.
+	for i := 0; i < indexRetries; i++ {
+		if err = runGit(gitCmd(dir, "reset", "-q", "--", ":(top)"+rel)); err == nil || !isRepoBusy(err.Error()) {
+			break
+		}
+		time.Sleep(indexWait)
+	}
+	if err != nil {
+		return fmt.Errorf("%w: %s: %v", errIndexBehind, rel, err)
+	}
+	return nil
 }
+
+// errIndexBehind is a pin that was committed, with the repository's own index
+// not yet level with it: git shows the pin as a staged change reversing it,
+// until `git reset -- <file>` is run.
+var errIndexBehind = errors.New("committed, but the index could not be brought level with it")
+
+// How long commitPinOnly waits for the index lock. Variables so a test need
+// not wait the full time.
+var (
+	indexRetries = 25
+	indexWait    = 200 * time.Millisecond
+)
 
 // repoPath is file's path from the repository root, or "" when git does not
 // track it.

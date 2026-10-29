@@ -428,7 +428,12 @@ func transaction(req update.Request, step func(string, ...any), d Docker, g Git,
 		}
 		commit = func() error { return g.Commit(dir, file, msg) }
 	}
-	if err := commit(); err != nil {
+	if err := commit(); errors.Is(err, errIndexBehind) {
+		// The commit exists; only the repository's own index is behind it.
+		// Not "could not be committed", which would send somebody looking for
+		// a commit that is there.
+		return done(step, "%v -- run `git reset -- <file>` once nothing else is using the repository", err)
+	} else if err != nil {
 		// Not undone, and deliberately not tidied either.
 		//
 		// The container is running the new image, so a rollback would tear
