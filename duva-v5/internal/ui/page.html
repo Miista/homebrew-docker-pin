@@ -42,7 +42,7 @@
      height. It picked up a stray scroll as the toolbars came and went, a swipe
      saved that as the tab's scroll, and the next visit restored it with the
      title under the header. */
-  main { max-width: 1120px; margin: 0 auto; padding: 16px 32px 40px; min-height: 100vh; min-height: 100svh;
+  main { max-width: 1120px; margin: 0 auto; padding: 0 32px 40px; min-height: 100vh; min-height: 100svh;
          display: flex; flex-direction: column;
          --cols: minmax(160px, 1fr) minmax(264px, 1fr) 150px 146px; }
   code, .mono { font-family: var(--mono); }
@@ -89,7 +89,7 @@
      the glow still shows through that. The pane is the window's width, not
      the header's: the header is only as wide as the page's column. */
   .top { position: sticky; top: 0; z-index: 30; display: flex; align-items: center;
-         gap: 16px; flex-wrap: wrap; padding: 12px 0; }
+         gap: 16px; flex-wrap: wrap; padding: 28px 0 12px; }
   /* The blur fades with the rest. Not transitioned, it snapped off while the
      background was still fading, and going to a tab at the top -- where the
      frost comes off -- flickered. */
