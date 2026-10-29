@@ -928,7 +928,7 @@
         </li>
       </ul>
     </div>
-    <template v-for="c in checks" :key="c.host"><p class="lead" v-if="!c.jobs.length">{{ c.host }} does not report its jobs: it runs an older duva.</p></template>
+    <p class="lead" v-if="silentHosts.length">{{ silentHosts.join(", ") }} does not report its jobs: it runs an older duva.</p>
   </section>
 
   <!-- The phone's way in: a row opens this, with everything the desktop
@@ -2147,6 +2147,11 @@ createApp({
           by[j.job].hosts.push({ host: c.host, j })
         }
         return order.map(k => by[k])
+      },
+
+      // The hosts with no jobs to show: they run a duva that does not say.
+      get silentHosts() {
+        return this.checks.filter(c => !c.jobs.length).map(c => c.host)
       },
 
       jobName(job) {
