@@ -105,7 +105,8 @@ type Actions interface {
 	Check(host, service, actor string, back time.Duration) error
 	Unblock(host, image, digest, actor string) error
 	CheckAll(actor string, back time.Duration) error
-	RunJob(host, job, actor string) error
+	// RunJob runs a job now on every host.
+	RunJob(job, actor string) error
 }
 
 // BlockSource is a Source that also reports what is blocked.
@@ -166,9 +167,7 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("/api/check/", s.action("/api/check/", s.check))
 		mux.HandleFunc("/api/unblock/", s.unblock)
 		mux.HandleFunc("/api/check-all", s.checkAll)
-		mux.HandleFunc("/api/run/", s.action("/api/run/", func(host, job string, r *http.Request) error {
-			return s.Actions.RunJob(host, job, s.actor(r))
-		}))
+		mux.HandleFunc("/api/run/", s.runJob)
 	}
 	mux.HandleFunc("/", s.index)
 	return mux
@@ -681,6 +680,23 @@ func (s *Server) unblock(w http.ResponseWriter, r *http.Request) {
 	host := strings.TrimPrefix(r.URL.Path, "/api/unblock/")
 	message := ""
 	if err := s.Actions.Unblock(host, r.FormValue("image"), r.FormValue("digest"), s.actor(r)); err != nil {
+		message = err.Error()
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	json.NewEncoder(w).Encode(map[string]string{"message": message})
+}
+
+// runJob runs a job on every host now: POST /api/run/<job>.
+func (s *Server) runJob(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	job, err := url.PathUnescape(strings.TrimPrefix(r.URL.Path, "/api/run/"))
+	message := ""
+	if err != nil || job == "" {
+		message = "no such job"
+	} else if err := s.Actions.RunJob(job, s.actor(r)); err != nil {
 		message = err.Error()
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")

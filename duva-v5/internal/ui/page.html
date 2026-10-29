@@ -426,6 +426,7 @@
   .jobhead { display: grid; grid-template-columns: var(--cols); gap: 0 16px; padding: 10px 20px;
              border-bottom: 1px solid var(--divider); font-size: 11.5px; font-weight: 600;
              letter-spacing: .1em; text-transform: uppercase; color: var(--faint); }
+  .jobgroup { justify-content: space-between; gap: 16px; text-transform: none; letter-spacing: 0; }
   .jobrows > li { cursor: pointer; align-items: start; }
   .jobrows > li.open { background: var(--row-hover); }
   .jname { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
@@ -904,29 +905,30 @@
     <div class="intro">
       <a class="back" href="#">&larr; Queue</a>
       <h1>Jobs</h1>
-      <p class="lead">duva runs these on its own; running one by hand does not change its schedule.
+      <p class="lead">duva runs these on its own; running one by hand starts it on every host and does not change its schedule.
         Sync, reconcile and release run together, in that order, so running one runs all three.</p>
     </div>
 
-    <div class="group" v-for="c in checks" :key="c.host">
-      <div class="group-head">{{ c.host }}</div>
-      <div class="jobhead"><span>Job</span><span>Last run</span><span>Result</span><span>Next</span><span></span></div>
+    <div class="group" v-for="g in jobGroups" :key="g.job">
+      <div class="group-head jobgroup">
+        <span class="jname"><span class="n">{{ jobName(g.job) }}</span><span class="why">{{ jobWhy(g.job) }}</span></span>
+        <button class="act" type="button" v-if="actions" :disabled="runningJob === g.job"
+                @click="runJob(g.job)">{{ runningJob === g.job ? "Running…" : "Run now" }}</button>
+      </div>
+      <div class="jobhead"><span>Host</span><span>Last run</span><span>Result</span><span>Next</span><span></span></div>
       <ul class="rows jobrows">
-        <li v-for="j in c.jobs" :key="c.host + j.job" :class="openJob === c.host + '/' + j.job ? 'open' : ''"
-            @click="toggleJob(c.host, j)">
-          <span class="jname"><span class="n">{{ jobName(j.job) }}</span><span class="why">{{ jobWhy(j.job) }}</span></span>
-          <span class="jlast mono" :data-next="until(j.next)">{{ j.last ? ago(j.last.started) : "not yet" }}<span class="took" v-if="j.last">{{ took(j.last.took) }}</span></span>
-          <span class="jres" :class="j.last && j.last.failed ? 'bad' : ''">{{ j.last ? j.last.summary : "" }}</span>
-          <span class="jnext mono">{{ until(j.next) }}</span>
-          <span class="jact">
-            <button class="act" type="button" v-if="actions" :disabled="runningJob === c.host + '/' + j.job"
-                    @click.stop="runJob(c.host, j.job)">{{ runningJob === c.host + '/' + j.job ? "Running…" : "Run now" }}</button>
-          </span>
-          <pre class="jobout mono" v-if="openJob === c.host + '/' + j.job">{{ j.last && j.last.output && j.last.output.length ? j.last.output.join("\n") : "Nothing was said." }}</pre>
+        <li v-for="h in g.hosts" :key="h.host" :class="openJob === h.host + '/' + g.job ? 'open' : ''"
+            @click="toggleJob(h.host, h.j)">
+          <span class="jname"><span class="n">{{ h.host }}</span></span>
+          <span class="jlast mono" :data-next="until(h.j.next)">{{ h.j.last ? ago(h.j.last.started) : "not yet" }}<span class="took" v-if="h.j.last">{{ took(h.j.last.took) }}</span></span>
+          <span class="jres" :class="h.j.last && h.j.last.failed ? 'bad' : ''">{{ h.j.last ? h.j.last.summary : "" }}</span>
+          <span class="jnext mono">{{ until(h.j.next) }}</span>
+          <span class="jact"></span>
+          <pre class="jobout mono" v-if="openJob === h.host + '/' + g.job">{{ h.j.last && h.j.last.output && h.j.last.output.length ? h.j.last.output.join("\n") : "Nothing was said." }}</pre>
         </li>
-        <li class="none" v-if="!c.jobs.length">{{ c.host }} does not report its jobs: it runs an older duva.</li>
       </ul>
     </div>
+    <template v-for="c in checks" :key="c.host"><p class="lead" v-if="!c.jobs.length">{{ c.host }} does not report its jobs: it runs an older duva.</p></template>
   </section>
 
   <!-- The phone's way in: a row opens this, with everything the desktop
@@ -2136,6 +2138,17 @@ createApp({
         document.getElementById("blocks").showModal()
       },
 
+      // The jobs by name, each with the hosts that report it: one button runs
+      // a job everywhere.
+      get jobGroups() {
+        const by = {}, order = []
+        for (const c of this.checks) for (const j of c.jobs) {
+          if (!by[j.job]) { by[j.job] = { job: j.job, hosts: [] }; order.push(j.job) }
+          by[j.job].hosts.push({ host: c.host, j })
+        }
+        return order.map(k => by[k])
+      },
+
       jobName(job) {
         return { check: "Check for releases", sync: "Sync services",
                  reconcile: "Reconcile the queue", release: "Release deferred" }[job] || job
@@ -2156,15 +2169,15 @@ createApp({
         this.openJob = this.openJob === key ? "" : key
       },
 
-      async runJob(host, job) {
-        this.runningJob = host + "/" + job
+      async runJob(job) {
+        this.runningJob = job
         try {
-          const res = await fetch("/api/run/" + encodeURIComponent(host) + "/" + encodeURIComponent(job), { method: "POST" })
+          const res = await fetch("/api/run/" + encodeURIComponent(job), { method: "POST" })
           if (res.status === 401) { location.reload(); return }
           const { message } = await res.json()
           this.result = message
             ? { service: this.jobName(job), level: "error", message }
-            : { service: host, level: "ok", message: job === "check"
+            : { service: "every host", level: "ok", message: job === "check"
                 ? "checking for releases"
                 : "syncing, reconciling and releasing" }
           // A tick takes a moment and a check minutes; the list follows on

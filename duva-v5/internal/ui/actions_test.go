@@ -94,8 +94,8 @@ func (r *recordedActions) CheckAll(actor string, back time.Duration) error {
 	r.calls = append(r.calls, "check all "+back.String()+" "+actor)
 	return nil
 }
-func (r *recordedActions) RunJob(host, job, actor string) error {
-	r.calls = append(r.calls, "run "+host+" "+job+" "+actor)
+func (r *recordedActions) RunJob(job, actor string) error {
+	r.calls = append(r.calls, "run "+job+" "+actor)
 	return nil
 }
 func (r *recordedActions) Unblock(host, image, digest, actor string) error {

@@ -616,11 +616,22 @@ func (c *Collector) Check(host, service, actor string, back time.Duration) error
 		"/v1/check/"+url.PathEscape(service), sinceForm(back))
 }
 
-// RunJob runs one of host's jobs now.
-func (c *Collector) RunJob(host, job, actor string) error {
-	return c.act(host, actor,
-		func(l LocalQueue) string { return l.RunJob(job, actor) },
-		"/v1/run/"+url.PathEscape(job), nil)
+// RunJob runs one of the jobs now on every host. Every host is asked,
+// whatever another answers, and none is waited for: each runs it at its own
+// pace. The answer is each refusal, by host.
+func (c *Collector) RunJob(job, actor string) error {
+	var refused []string
+	for _, d := range c.Upstreams {
+		if err := c.act(d.Host, actor,
+			func(l LocalQueue) string { return l.RunJob(job, actor) },
+			"/v1/run/"+url.PathEscape(job), nil); err != nil {
+			refused = append(refused, d.Host+": "+err.Error())
+		}
+	}
+	if len(refused) > 0 {
+		return fmt.Errorf("%s", strings.Join(refused, "; "))
+	}
+	return nil
 }
 
 // sinceForm is a look-back as the queue API takes it: nothing for "since the
