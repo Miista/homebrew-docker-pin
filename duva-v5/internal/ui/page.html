@@ -266,6 +266,45 @@
   .when { display: flex; flex-direction: column; gap: 4px; white-space: nowrap; }
   .when .in { font-size: 13px; color: var(--soft); }
   .when .on { font-size: 12px; color: var(--faint); }
+  .when .rel { font-size: 12px; color: var(--faint); }
+  /* A service's later entry in a scheduled table: joined to the one above
+     rather than a row of its own, and without its name again. */
+  .rows > li.follow { border-top-style: dashed; padding-top: 12px; }
+  .svc.then { font-weight: 400; color: var(--faint); }
+  /* The end of a service's entries: a squiggle over the middle third of the
+     divider below the last one, in the arrows' accent, settling as it goes:
+     tallest in the middle, flattening onto the divider at both ends. It is
+     five tiles side by side, each a fifth of the third and four waves wide,
+     of heights 0.8, 2.4, 4, 2.4 and 0.8 (the control point's distance from
+     the divider; the crest is half that). Every tile starts and ends on the
+     divider, so the joins are seamless. The colour fades out toward both ends
+     as well, so it dissolves into the divider; the tiles are only the shape.
+     Not on the card's last row, which has no divider below it. */
+  .rows > li.group-last:not(:last-child) { position: relative;
+    --squiggle:
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 8' preserveAspectRatio='none'%3E%3Cpath d='M0 4Q4 3.2 8 4T16 4T24 4T32 4' fill='none' stroke='%23000' stroke-width='2'/%3E%3C/svg%3E") 0% 0 / 20% 100% no-repeat,
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 8' preserveAspectRatio='none'%3E%3Cpath d='M0 4Q4 1.6 8 4T16 4T24 4T32 4' fill='none' stroke='%23000' stroke-width='2'/%3E%3C/svg%3E") 25% 0 / 20% 100% no-repeat,
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 8' preserveAspectRatio='none'%3E%3Cpath d='M0 4Q4 0 8 4T16 4T24 4T32 4' fill='none' stroke='%23000' stroke-width='2'/%3E%3C/svg%3E") 50% 0 / 20% 100% no-repeat,
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 8' preserveAspectRatio='none'%3E%3Cpath d='M0 4Q4 1.6 8 4T16 4T24 4T32 4' fill='none' stroke='%23000' stroke-width='2'/%3E%3C/svg%3E") 75% 0 / 20% 100% no-repeat,
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 8' preserveAspectRatio='none'%3E%3Cpath d='M0 4Q4 3.2 8 4T16 4T24 4T32 4' fill='none' stroke='%23000' stroke-width='2'/%3E%3C/svg%3E") 100% 0 / 20% 100% no-repeat; }
+  .rows > li.group-last:not(:last-child)::after { content: ""; position: absolute; left: calc(100% / 3);
+                                                  width: calc(100% / 3); top: calc(100% - 4px); height: 8px;
+                                                  background: linear-gradient(90deg, transparent, var(--accent) 35%,
+                                                              var(--accent) 65%, transparent);
+                                                  pointer-events: none;
+                                                  -webkit-mask: var(--squiggle); mask: var(--squiggle); }
+  /* An arrow from the row above into this one, over the dashed divider: the
+     later entry follows the earlier. An outline, open at the top where it
+     leaves the row above, centred on the row. It lives in the rows' own
+     vertical padding, so it takes no width from the content: the shaft starts
+     11px above the divider and the tip is 15px below it. It is a mask, so the
+     colour stays the page's accent; the path is 28 by 26, two 2px strokes for
+     the shaft and a wider head, drawn at that size so the strokes stay crisp. */
+  .rows > li.follow { position: relative; }
+  .rows > li.follow::before { content: ""; position: absolute; left: calc(50% - 14px); top: -11px;
+                              width: 28px; height: 26px; background: var(--accent); pointer-events: none;
+                              -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 28 26'%3E%3Cpath d='M9 0V11H2L14 24L26 11H19V0' fill='none' stroke='%23000' stroke-width='2' stroke-linejoin='round'/%3E%3C/svg%3E") center / 100% 100% no-repeat;
+                              mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 28 26'%3E%3Cpath d='M9 0V11H2L14 24L26 11H19V0' fill='none' stroke='%23000' stroke-width='2' stroke-linejoin='round'/%3E%3C/svg%3E") center / 100% 100% no-repeat; }
 
   /* ---------- kind = severity ---------- */
   .kind { justify-self: start; display: inline-flex; align-items: center; gap: 6px;
@@ -571,7 +610,7 @@
        room. */
     .soak .jump { grid-column: 1 / span 2; }
     .soak .when { grid-column: 1 / span 2; grid-row: 3; justify-self: start;
-                  flex-direction: row; align-items: baseline; gap: 8px; }
+                  flex-direction: row; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
     .soak .acts { grid-row: 1 / span 3; }
     .empty { margin-top: 16px; padding: 40px 16px; border-radius: 14px; }
     .top .menu .version { padding: 10px 12px 6px; font-size: 12px; }
@@ -796,16 +835,17 @@
       <p class="lead">Updates applied automatically</p>
     </div>
 
-    <div class="group" v-for="g in groups(shownSoaking())" :key="g.host">
+    <div class="group" v-for="g in scheduledGroups(shownSoaking())" :key="g.host">
       <div class="group-head">{{ g.host || "this host" }}</div>
       <ul class="rows">
-        <li v-for="r in g.rows" :key="r.key + '#' + r.entry" :class="r.stale ? 'stale' : ''" @click="tap(r, $event)">
-          <span class="svc" :title="r.image">{{ r.service }}</span>
+        <li v-for="r in g.rows" :key="r.key + '#' + r.entry" :class="[r.stale ? 'stale' : '', r.nth > 1 ? 'follow' : '', r.of > 1 && r.nth === r.of ? 'group-last' : '']" @click="tap(r, $event)">
+          <!-- A service's later entries say "then" instead of its name again. -->
+          <span class="svc" :class="r.nth > 1 ? 'then' : ''" :title="r.image">{{ r.nth > 1 ? "then" : r.service }}</span>
 
           <span class="jump mono" v-if="r.moved"><span class="to">{{ r.tag }}</span></span>
           <span class="jump mono" v-else><span class="from">{{ r.current_tag }}</span><span class="arrow">&rarr;</span><span class="to">{{ r.candidate }}</span></span>
 
-          <span class="when" :title="r.why"><span class="in">{{ applies(r.release_at) }}</span><span class="on">on {{ when(r.release_at) }}</span></span>
+          <span class="when" :title="r.why"><span class="in">{{ applies(r.release_at) }}</span><span class="on">on {{ when(r.release_at) }}</span><span class="rel" v-if="r.published">released {{ ago(r.published) }}</span></span>
 
           <!-- Told apart by its entry: a service can be in both tables. -->
           <span class="acts" data-pop>
@@ -851,16 +891,17 @@
       <p class="lead">Updates deferred for later approval</p>
     </div>
 
-    <div class="group" v-for="g in groups(shownUpcoming())" :key="g.host">
+    <div class="group" v-for="g in scheduledGroups(shownUpcoming())" :key="g.host">
       <div class="group-head">{{ g.host || "this host" }}</div>
       <ul class="rows">
-        <li v-for="r in g.rows" :key="r.key + '#' + r.entry" :class="r.stale ? 'stale' : ''" @click="tap(r, $event)">
-          <span class="svc" :title="r.image">{{ r.service }}</span>
+        <li v-for="r in g.rows" :key="r.key + '#' + r.entry" :class="[r.stale ? 'stale' : '', r.nth > 1 ? 'follow' : '', r.of > 1 && r.nth === r.of ? 'group-last' : '']" @click="tap(r, $event)">
+          <!-- A service's later entries say "then" instead of its name again. -->
+          <span class="svc" :class="r.nth > 1 ? 'then' : ''" :title="r.image">{{ r.nth > 1 ? "then" : r.service }}</span>
 
           <span class="jump mono" v-if="r.moved"><span class="to">{{ r.tag }}</span></span>
           <span class="jump mono" v-else><span class="from">{{ r.current_tag }}</span><span class="arrow">&rarr;</span><span class="to">{{ r.candidate }}</span></span>
 
-          <span class="when" :title="r.why"><span class="in">{{ arrives(r.release_at) }}</span><span class="on">on {{ when(r.release_at) }}</span></span>
+          <span class="when" :title="r.why"><span class="in">{{ arrives(r.release_at) }}</span><span class="on">on {{ when(r.release_at) }}</span><span class="rel" v-if="r.published">released {{ ago(r.published) }}</span></span>
 
           <!-- Told apart by its entry: a service can be in both tables. -->
           <span class="acts" data-pop>
@@ -1489,6 +1530,25 @@ createApp({
       groups(list) {
         return [...new Set(list.map(r => r.host))].sort()
           .map(host => ({ host, rows: list.filter(r => r.host === host) }))
+      },
+
+      // Like groups, for the scheduled tables, where a service can have several
+      // entries, each on its own clock. A service's entries sit together, the
+      // soonest first, so the order they will apply in reads top to bottom;
+      // the service comes where its soonest entry would. nth and of say where
+      // an entry stands among its service's. Copies, so rows stay as the
+      // queue sent them.
+      scheduledGroups(list) {
+        const at = (a, b) => (a.release_at < b.release_at ? -1 : a.release_at > b.release_at ? 1 : 0)
+        return this.groups(list).map(g => {
+          const rows = [...g.rows].sort(at)
+          const out = []
+          for (const key of new Set(rows.map(r => r.key))) {
+            const mine = rows.filter(r => r.key === key)
+            mine.forEach((r, i) => out.push({ ...r, nth: i + 1, of: mine.length }))
+          }
+          return { host: g.host, rows: out }
+        })
       },
 
       // What the queue shows: the rows the filter allows.

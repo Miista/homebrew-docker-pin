@@ -111,7 +111,15 @@ func (s *source) Upcoming() []ui.Hosted {
 	up.ID += 1000
 	up.Service = "autobrr"
 	up.Auto = queue.AutoNone
-	return []ui.Hosted{up}
+	// Two digest moves of one tag, each on its own clock: what a moving tag
+	// does, and the case the page groups.
+	up.From, up.To, up.Tag, up.Kind = "sha256:4f1c0a9e", "sha256:9b2d77c1", "latest", ""
+	later := up
+	later.ID++
+	later.To = "sha256:c3e81d05"
+	later.ReleaseAt = time.Now().Add(56 * time.Hour).UTC().Format(time.RFC3339)
+	later.Published = time.Now().Add(-6 * time.Hour).UTC().Format(time.RFC3339)
+	return []ui.Hosted{later, up}
 }
 
 func (s *source) Pending() []ui.Hosted {
@@ -322,12 +330,14 @@ func main() {
 		en := e(id, svc, img, from, to, version.KindPatch, queue.AutoPatch,
 			"patch, within duva.auto: patch; delayed until "+at.Format("2006-01-02 15:04 MST"))
 		en.ReleaseAt = at.UTC().Format(time.RFC3339)
+		en.Published = time.Now().Add(-in / 2).UTC().Format(time.RFC3339)
 		return ui.Hosted{Entry: en, Host: host, CanApply: true}
 	}
 	src.soaking = []ui.Hosted{
 		soak(20, "authelia", "authelia/authelia", "4.39.24", "4.39.25", 9*time.Hour, "optiplex"),
 		soak(21, "paperless", "ghcr.io/paperless-ngx/paperless-ngx", "2.13.0", "2.13.1", 31*time.Hour, "optiplex"),
 		soak(22, "authelia", "authelia/authelia", "4.39.24", "4.39.27", 52*time.Hour, "optiplex"),
+		soak(24, "authelia", "authelia/authelia", "4.39.24", "4.39.28", 76*time.Hour, "optiplex"),
 		soak(23, "sonarr", "lscr.io/linuxserver/sonarr", "4.0.10", "4.0.11", 70*time.Hour, "pi"),
 	}
 	src.blocks = []ui.HostedBlock{
@@ -349,5 +359,11 @@ func main() {
 		addr = "127.0.0.1:8099"
 	}
 	log.Println("serving on http://" + addr)
-	log.Fatal(http.ListenAndServe(addr, s.Handler()))
+	// Never cached: this is looked at on a phone while the page changes, and a
+	// browser showing last round's page looks like the change did not land.
+	h := s.Handler()
+	log.Fatal(http.ListenAndServe(addr, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		h.ServeHTTP(w, r)
+	})))
 }

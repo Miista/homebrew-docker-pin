@@ -20,8 +20,16 @@ const expected = (text) => text.includes("auth/client.js") || text.includes("sta
 // Each view: a name, the hash to load, and what to do once there.
 const VIEWS = [
   { name: "queue", hash: "", expect: async (p) => p.locator("#sec-queue").waitFor() },
-  { name: "automatic", hash: "", go: "Automatic", expect: async (p) => p.locator("#sec-scheduled").waitFor() },
-  { name: "deferred", hash: "", go: "Deferred", expect: async (p) => p.locator("#sec-upcoming").waitFor() },
+  // The preview has a service with two entries in each: the second must say
+  // "then", not its name again.
+  { name: "automatic", hash: "", go: "Automatic", expect: async (p) => {
+      await p.locator("#sec-scheduled").waitFor()
+      await p.locator("#sec-scheduled .svc.then").first().waitFor()
+  } },
+  { name: "deferred", hash: "", go: "Deferred", expect: async (p) => {
+      await p.locator("#sec-upcoming").waitFor()
+      await p.locator("#sec-upcoming .svc.then").first().waitFor()
+  } },
   { name: "jobs", hash: "#jobs", expect: async (p) => {
       await p.locator(".jobspage .group").first().waitFor()
       const groups = await p.locator(".jobspage .group").count()
