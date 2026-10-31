@@ -34,6 +34,15 @@ const VIEWS = [
       await p.locator(".jobspage .group").first().waitFor()
       const groups = await p.locator(".jobspage .group").count()
       if (groups < 1) throw new Error("no job groups")
+      // A phone shows only each job's own row until it is tapped; a wide
+      // screen always shows the hosts.
+      const rows = p.locator(".jobspage .jobrows li").first()
+      const phone = p.viewportSize().width <= 720
+      if ((await rows.isVisible()) === phone) throw new Error(phone ? "hosts shown before the job is tapped" : "hosts hidden on a wide screen")
+      if (phone) {
+        await p.locator(".jobspage .jobgroup").first().click()
+        await rows.waitFor()
+      }
   } },
 ]
 const WIDTHS = [{ label: "desktop", width: 1600, height: 900 }, { label: "phone", width: 390, height: 844 }]

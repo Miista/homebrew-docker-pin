@@ -466,6 +466,13 @@
              border-bottom: 1px solid var(--divider); font-size: 11.5px; font-weight: 600;
              letter-spacing: .1em; text-transform: uppercase; color: var(--faint); }
   .jobgroup { justify-content: space-between; gap: 16px; text-transform: none; letter-spacing: 0; }
+  .jobgroup .chev { display: none; }
+  /* The ghost button is for the dark card; on the purple heading it vanishes.
+     Here it is a light fill, a clear edge and white text. */
+  .jobgroup .act { background: rgba(255, 255, 255, .14); border-color: rgba(255, 255, 255, .3);
+                   color: #fff; font-weight: 600; }
+  .jobgroup .act:hover:not(:disabled) { background: rgba(255, 255, 255, .24); }
+  .jobgroup .act:disabled { color: rgba(255, 255, 255, .6); }
   .jobrows > li { cursor: pointer; align-items: start; }
   .jobrows > li.open { background: var(--row-hover); }
   .jname { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
@@ -573,8 +580,15 @@
     .menu .checks .hostline { height: auto; padding: 4px 12px 0 36px; font-size: 12px; }
     /* One tab at a time: the bar at the bottom picks it. */
     .pane.off { display: none; }
-    /* Jobs: no column heads; the name beside Run now, the rest under it. */
+    /* Jobs: no column heads. Only the job's own row shows, name beside Run
+       now; a tap on it opens the hosts under it, the chevron saying so. */
     .jobhead { display: none; }
+    .jobgroup { cursor: pointer; }
+    .jobgroup .chev { display: block; flex: none; color: var(--bar-fg); opacity: .7;
+                      transition: transform .15s; }
+    .jobspage .group.open .jobgroup .chev { transform: rotate(180deg); }
+    .jobspage .group:not(.open) .jobrows { display: none; }
+    .jobspage .group:not(.open) .jobgroup { border-radius: 13px; }
     .jobspage .group { --cols: minmax(0, 1fr) auto; }
     .jobrows > li { grid-template-columns: var(--cols); gap: 6px 12px; padding: 14px 16px; }
     .jobrows .jname { grid-column: 1; grid-row: 1; }
@@ -950,11 +964,15 @@
         Sync, reconcile and release run together, in that order, so running one runs all three.</p>
     </div>
 
-    <div class="group" v-for="g in jobGroups" :key="g.job">
-      <div class="group-head jobgroup">
+    <div class="group" v-for="g in jobGroups" :key="g.job" :class="openGroups[g.job] ? 'open' : ''">
+      <!-- On a phone only this row shows, and a tap opens the hosts under it;
+           on a wide screen they are always there and the tap does nothing. -->
+      <div class="group-head jobgroup" role="button" tabindex="0" :aria-expanded="openGroups[g.job] ? 'true' : 'false'"
+           @click="toggleGroup(g.job)" @keydown.enter="toggleGroup(g.job)">
         <span class="jname"><span class="n">{{ jobName(g.job) }}</span><span class="why">{{ jobWhy(g.job) }}</span></span>
         <button class="act" type="button" v-if="actions" :disabled="runningJob === g.job"
-                @click="runJob(g.job)">{{ runningJob === g.job ? "Running…" : "Run now" }}</button>
+                @click.stop="runJob(g.job)">{{ runningJob === g.job ? "Running…" : "Run now" }}</button>
+        <svg class="chev" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </div>
       <div class="jobhead"><span>Host</span><span>Last run</span><span>Result</span><span>Next</span><span></span></div>
       <ul class="rows jobrows">
@@ -1280,6 +1298,7 @@ createApp({
       blocking: false,  // it closed because Block was pressed
       dismissed: {},    // standing toasts swiped away, by what they said
       openJob: "",      // "host/job" whose output is shown in Jobs
+      openGroups: {},   // job -> whether its hosts are shown on a phone
       runningJob: "",   // "host/job" being asked to run
       armed: "",        // the Update pressed once, waiting for its Confirm?
       since: "",        // how far back the check dialog will look; "" is since the last check
@@ -2227,6 +2246,12 @@ createApp({
           reconcile: "Drops what is waiting that no longer applies to what the compose file says.",
           release: "When a deferral is over, applies what duva.auto covers and brings the rest to you.",
         }[job] || ""
+      },
+
+      // Opens or closes a job's hosts on a phone. A new object, so the page
+      // sees the change.
+      toggleGroup(job) {
+        this.openGroups = { ...this.openGroups, [job]: !this.openGroups[job] }
       },
 
       toggleJob(host, j) {
