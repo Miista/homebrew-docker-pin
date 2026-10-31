@@ -802,7 +802,7 @@
                     :class="armed === armKey(r) ? 'armed' : ''"
                     :disabled="!r.can_apply || lostSince || running(r.key) || busyHost(r.host)"
                     :title="buttonReason(r)"
-                    @click="press(r)">{{ running(r.key) ? "Updating…" : armed === armKey(r) ? "Confirm?" : "Update" }}</button>
+                    @click="press(r)">{{ runningRow(r) ? "Updating…" : armed === armKey(r) ? "Confirm?" : "Update" }}</button>
             <button class="more" title="Release notes, block" aria-haspopup="menu"
                     :aria-expanded="open === r.key ? 'true' : 'false'"
                     @click="toggle(r.key)"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true"><circle cx="3" cy="7" r="1.2" fill="currentColor"/><circle cx="7" cy="7" r="1.2" fill="currentColor"/><circle cx="11" cy="7" r="1.2" fill="currentColor"/></svg></button>
@@ -819,14 +819,14 @@
             </span>
           </span>
 
-          <ul class="steps mono" v-if="steps[r.key] || finished[r.key]">
+          <ul class="steps mono" v-if="shows(r)">
             <li v-for="line in (steps[r.key] || [])">{{ line }}</li>
             <li :class="finished[r.key] && finished[r.key].startsWith('failed') ? 'bad' : 'ok'"
                 v-if="finished[r.key]">{{ finished[r.key] }}</li>
           </ul>
           <!-- Put off, and will be tried again: said here because an apply
                duva made itself has no panel above. -->
-          <p class="note" v-if="r.note && !steps[r.key] && !finished[r.key]">{{ r.note }}</p>
+          <p class="note" v-if="r.note && !shows(r)">{{ r.note }}</p>
         </li>
       </ul>
     </div>
@@ -867,7 +867,7 @@
                     :class="armed === armKey(r) ? 'armed' : ''"
                     :disabled="!r.can_apply || lostSince || running(r.key) || busyHost(r.host)"
                     :title="buttonReason(r) || 'Update now, without waiting out the deferral'"
-                    @click="press(r)">{{ running(r.key) ? "Updating…" : armed === armKey(r) ? "Confirm?" : "Update now" }}</button>
+                    @click="press(r)">{{ runningRow(r) ? "Updating…" : armed === armKey(r) ? "Confirm?" : "Update now" }}</button>
             <button class="more" title="Release notes, block" aria-haspopup="menu"
                     :aria-expanded="open === r.key + '#' + r.entry ? 'true' : 'false'"
                     @click="toggle(r.key + '#' + r.entry)"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true"><circle cx="3" cy="7" r="1.2" fill="currentColor"/><circle cx="7" cy="7" r="1.2" fill="currentColor"/><circle cx="11" cy="7" r="1.2" fill="currentColor"/></svg></button>
@@ -881,7 +881,7 @@
             </span>
           </span>
 
-          <ul class="steps mono" v-if="steps[r.key] || finished[r.key]">
+          <ul class="steps mono" v-if="shows(r)">
             <li v-for="line in (steps[r.key] || [])">{{ line }}</li>
             <li :class="finished[r.key] && finished[r.key].startsWith('failed') ? 'bad' : 'ok'"
                 v-if="finished[r.key]">{{ finished[r.key] }}</li>
@@ -923,7 +923,7 @@
                     :class="armed === armKey(r) ? 'armed' : ''"
                     :disabled="!r.can_apply || lostSince || running(r.key) || busyHost(r.host)"
                     :title="buttonReason(r) || 'Update now, without waiting out the deferral'"
-                    @click="press(r)">{{ running(r.key) ? "Updating…" : armed === armKey(r) ? "Confirm?" : "Update now" }}</button>
+                    @click="press(r)">{{ runningRow(r) ? "Updating…" : armed === armKey(r) ? "Confirm?" : "Update now" }}</button>
             <button class="more" title="Release notes, block" aria-haspopup="menu"
                     :aria-expanded="open === r.key + '#' + r.entry ? 'true' : 'false'"
                     @click="toggle(r.key + '#' + r.entry)"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true"><circle cx="3" cy="7" r="1.2" fill="currentColor"/><circle cx="7" cy="7" r="1.2" fill="currentColor"/><circle cx="11" cy="7" r="1.2" fill="currentColor"/></svg></button>
@@ -937,7 +937,7 @@
             </span>
           </span>
 
-          <ul class="steps mono" v-if="steps[r.key] || finished[r.key]">
+          <ul class="steps mono" v-if="shows(r)">
             <li v-for="line in (steps[r.key] || [])">{{ line }}</li>
             <li :class="finished[r.key] && finished[r.key].startsWith('failed') ? 'bad' : 'ok'"
                 v-if="finished[r.key]">{{ finished[r.key] }}</li>
@@ -1016,7 +1016,7 @@
       <p class="why" v-if="sheetRow().published || sheetRow().first_seen">{{ sheetRow().published ? "Released " + ago(sheetRow().published) : "Found " + ago(sheetRow().first_seen) }}</p>
       <p class="why" v-if="sheetRow().why && sheetRow().auto && sheetRow().auto !== 'none'">{{ sheetRow().why }}</p>
       <p class="why" v-if="buttonReason(sheetRow())">{{ buttonReason(sheetRow()) }}</p>
-      <ul class="steps mono" v-if="steps[sheetRow().key] || finished[sheetRow().key]">
+      <ul class="steps mono" v-if="shows(sheetRow())">
         <li v-for="line in (steps[sheetRow().key] || [])">{{ line }}</li>
         <li :class="finished[sheetRow().key] && finished[sheetRow().key].startsWith('failed') ? 'bad' : 'ok'"
             v-if="finished[sheetRow().key]">{{ finished[sheetRow().key] }}</li>
@@ -1312,6 +1312,7 @@ createApp({
         { value: "7d", label: "In the past week" },
         { value: "30d", label: "In the past month" },
       ],
+      applyingEntry: {}, // key -> the entry being applied, as a string
       steps: {},        // key -> lines so far
       finished: {},     // key -> terminal status
       result: {},       // the last apply's answer, when it refused
@@ -1328,6 +1329,7 @@ createApp({
       resume() {
         for (const r of this.rows) {
           if (r.applying && !this.steps[r.key] && !this.finished[r.key]) {
+            this.applyingEntry = { ...this.applyingEntry, [r.key]: String(r.entry) }
             this.steps = { ...this.steps, [r.key]: [] }
             this.watch(r.key)
           }
@@ -1621,8 +1623,25 @@ createApp({
         return this.rows.some(r => this.running(r.key) && r.host === host)
       },
 
+      // Progress is kept per service, since a service is applied one entry at a
+      // time; applyingEntry says which entry that is, so only its row shows
+      // progress. Unknown (a row seen before any apply) counts as this one.
+      mine(r) {
+        const e = this.applyingEntry[r.key]
+        return e === undefined || e === String(r.entry)
+      },
+      // This row is the one being applied.
+      runningRow(r) {
+        return this.running(r.key) && this.mine(r)
+      },
+      // This row has progress or an outcome to show.
+      shows(r) {
+        return this.mine(r) && (!!this.steps[r.key] || !!this.finished[r.key])
+      },
+
       buttonReason(r) {
         if (r.stale) return r.host + " is not answering, so this cannot be confirmed or applied"
+        if (this.running(r.key) && !this.mine(r)) return "Another update of " + r.service + " is being applied"
         if (this.busyHost(r.host) && !this.running(r.key)) {
           const busy = this.rows.find(o => this.running(o.key) && o.host === r.host)
           return r.host + " is applying " + (busy ? busy.service : "another service") +
@@ -2364,6 +2383,7 @@ createApp({
         // terminal status and call the new apply finished before it began.
         const { [r.key]: _done, ...others } = this.finished
         this.finished = others
+        this.applyingEntry = { ...this.applyingEntry, [r.key]: String(r.entry) }
         this.steps = { ...this.steps, [r.key]: [] }
         // By its entry: a service can have one scheduled and one waiting.
         const applied = await fetch("/api/apply/" + r.key + "?entry=" + r.entry, { method: "POST" })

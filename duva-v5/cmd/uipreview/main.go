@@ -170,8 +170,48 @@ func (s *source) Stream(key string, w http.ResponseWriter, r *http.Request) erro
 	}
 	fmt.Fprintln(w, "status: completed")
 	id, _ := approved.Load(key)
-	s.drop(func(h ui.Hosted) bool { return h.Host == host && h.Service == service && h.ID == id })
+	s.completed(host, service, id)
 	return nil
+}
+
+// completed is what the queue does when an apply finishes: the entry goes, and
+// so does every other open entry for that service that is not newer than it
+// (queue.Pending.Complete). A newer one stays.
+func (s *source) completed(host, service string, id any) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var applied *ui.Hosted
+	for _, list := range [][]ui.Hosted{s.rows, s.soaking} {
+		for i := range list {
+			if list[i].Host == host && list[i].Service == service && list[i].ID == id {
+				applied = &list[i]
+			}
+		}
+	}
+	if applied == nil {
+		return
+	}
+	newer := func(a, b ui.Hosted) bool {
+		if a.Kind != "" && b.Kind != "" {
+			if c := version.CompareVersions(a.To, b.To); c != 0 {
+				return c > 0
+			}
+		}
+		return a.ID > b.ID
+	}
+	keep := func(list []ui.Hosted) []ui.Hosted {
+		var out []ui.Hosted
+		for _, h := range list {
+			if h.Host == host && h.Service == service && (h.ID == applied.ID || !newer(h, *applied)) {
+				continue
+			}
+			out = append(out, h)
+		}
+		return out
+	}
+	a := *applied
+	applied = &a
+	s.rows, s.soaking = keep(s.rows), keep(s.soaking)
 }
 
 func copyRun(r *queue.CheckRun) *queue.CheckRun {

@@ -91,6 +91,46 @@ try {
     if (!ok) failed++
     await page.close()
   }
+
+  // An apply, last, because the preview plays it for real: when it finishes
+  // the service's entries are gone, as they are in the queue, and a view
+  // checked after it would find nothing to look at. Desktop width only: what
+  // is checked is which row the page puts progress on, not how it lays out.
+  const problems = []
+  const page = await browser.newPage({ viewport: { width: 1600, height: 900 } })
+  try {
+    await page.goto(base + "/")
+    await page.locator("nav.side button", { hasText: "Automatic" }).click()
+    // Applying the last of a service's entries shows progress on that row
+    // alone: the rows before it are the same service, but they are not what
+    // is being applied. Armed by the first press, applied by the second.
+    // Direct children only: a row's progress lines are <li>s of their own.
+    const all = await page.locator("#sec-scheduled .group").first().locator(".rows > li").all()
+    const then = []
+    for (const [i, li] of all.entries()) if (await li.locator(".svc.then").count()) then.push(i)
+    const last = then[then.length - 1]
+    const first = then[0] - 1 // the row that carries the service's name
+    await all[last].locator("button.apply").click()
+    await all[last].locator("button.apply").click()
+    await all[last].locator(".steps").waitFor()
+    for (const [i, li] of all.entries()) {
+      if (i === last) continue
+      if (await li.locator(".steps").count()) problems.push("progress shown on a row that is not being applied")
+      const button = li.locator("button.apply").first()
+      if ((await button.innerText()).includes("Updating")) problems.push("a row that is not being applied says Updating")
+      // The decider takes one apply per host at a time, so the service's
+      // other entries must not be pressable while one is in flight.
+      if (i >= first && i < last && !(await button.isDisabled())) problems.push("another entry of the service being applied can be pressed")
+    }
+    // And when it finishes, the whole of the service goes, not only that row.
+    await page.locator("#sec-scheduled .svc.then").first().waitFor({ state: "detached", timeout: 15000 })
+  } catch (e) {
+    problems.push(e.message.split("\n")[0])
+  }
+  const ok = problems.length === 0
+  console.log((ok ? "ok   " : "FAIL ") + "desktop apply" + (ok ? "" : "\n       " + [...new Set(problems)].join("\n       ")))
+  if (!ok) failed++
+  await page.close()
   await browser.close()
 } catch (e) {
   console.log("FAIL " + e.message)
