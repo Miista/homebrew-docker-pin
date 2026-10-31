@@ -226,9 +226,9 @@ type row struct {
 	// Applying is whether the queue is applying this row right now, however
 	// the apply began. The page resumes watching it rather than offering it
 	// again.
-	Applying  bool   `json:"applying"`
-	Kind      string `json:"kind"`
-	Why       string `json:"why"`
+	Applying bool   `json:"applying"`
+	Kind     string `json:"kind"`
+	Why      string `json:"why"`
 	// Note is why the last attempt to apply it was put off, when it was.
 	Note      string `json:"note,omitempty"`
 	FirstSeen string `json:"first_seen"`

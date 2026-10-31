@@ -344,8 +344,11 @@ func TestRunJobRoutesToTheJob(t *testing.T) {
 	var checked []string
 	ticks := 0
 	s := &Server{Queue: NewPending(),
-		Check: func(service string, back time.Duration, _ *CheckRecorder) error { checked = append(checked, "*"+service); return nil },
-		Tick:  func() { ticks++ }}
+		Check: func(service string, back time.Duration, _ *CheckRecorder) error {
+			checked = append(checked, "*"+service)
+			return nil
+		},
+		Tick: func() { ticks++ }}
 
 	if msg := s.RunJob("reconcile", "soren"); msg != "" || ticks != 1 {
 		t.Errorf("reconcile: %q, %d ticks", msg, ticks)
