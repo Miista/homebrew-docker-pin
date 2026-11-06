@@ -45,6 +45,35 @@ func TestEachEventIsReported(t *testing.T) {
 	}
 }
 
+// A pull is one response that streams until the image is there, so the API
+// calls' timeout would cut off any download slower than it. Shrunk here so the
+// pull outlasts it: the 2026-11-06 Home Assistant pull on the Pi failed at
+// exactly two minutes.
+func TestAPullOutlastsTheTimeoutOfOtherCalls(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for i := 0; i < 3; i++ {
+			w.Write([]byte(`{"status":"Downloading"}` + "\n"))
+			w.(http.Flusher).Flush()
+			time.Sleep(100 * time.Millisecond)
+		}
+		w.Write([]byte(`{"status":"Status: Downloaded newer image"}` + "\n"))
+	}))
+	t.Cleanup(srv.Close)
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "tcp", strings.TrimPrefix(srv.URL, "http://"))
+		},
+	}
+	oldAPI, oldPull := dockerHTTP, pullHTTP
+	dockerHTTP = &http.Client{Transport: transport, Timeout: 100 * time.Millisecond}
+	pullHTTP = &http.Client{Transport: transport, Timeout: oldPull.Timeout}
+	t.Cleanup(func() { dockerHTTP, pullHTTP = oldAPI, oldPull })
+
+	if err := Pull("example.org/app:1.0"); err != nil {
+		t.Errorf("a pull longer than the API timeout failed: %v", err)
+	}
+}
+
 // Being told to stop is not a failure.
 func TestStoppingIsNotAnError(t *testing.T) {
 	overDaemon(t, func(w http.ResponseWriter, r *http.Request) {

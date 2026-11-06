@@ -62,6 +62,14 @@ var dockerHTTP = &http.Client{
 	Timeout: 2 * time.Minute,
 }
 
+// pullHTTP is dockerHTTP with room for a download. A pull is one request whose
+// response streams until the daemon has every layer, so dockerHTTP's two
+// minutes was how long any pull could take: Home Assistant's image on the Pi
+// did not fit, and the apply failed with nothing changed (2026-11-06). Thirty
+// minutes is duva's default for a whole apply; a pull that takes longer is
+// stuck, not slow.
+var pullHTTP = &http.Client{Transport: dockerHTTP.Transport, Timeout: 30 * time.Minute}
+
 // apiVersion is pinned rather than negotiated: every call here is from the
 // long-stable part of the API, and a version the daemon predates would fail
 // loudly at the first request rather than subtly later.
@@ -402,7 +410,7 @@ func Pull(ref string) error {
 		req.Header.Set("X-Registry-Auth", auth)
 	}
 
-	resp, err := dockerHTTP.Do(req)
+	resp, err := pullHTTP.Do(req)
 	if err != nil {
 		return fmt.Errorf("pulling %s: %w", ref, err)
 	}
