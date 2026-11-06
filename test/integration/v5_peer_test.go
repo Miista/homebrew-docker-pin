@@ -130,7 +130,9 @@ func TestV5APeerApprovedRemotelyStaysReadyAndCompletes(t *testing.T) {
 	}
 
 	s.waitFor("the patch to be applied", 3*time.Minute,
-		func() bool { return strings.Contains(s.RunningImage("app"), "1.0.1") && strings.Contains(s.Log(), "pin app to 1.0.1") },
+		func() bool {
+			return strings.Contains(s.RunningImage("app"), "1.0.1") && strings.Contains(s.Log(), "pin app to 1.0.1")
+		},
 		func() string { return s.Logs("duva") })
 	// Past the apply: a reconcile or two after it, when a dropped entry or a
 	// stale readiness answer would also show.
