@@ -1,12 +1,15 @@
 package queue
 
 import (
+	"bytes"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/rs/zerolog"
 
 	"github.com/Miista/homebrew-docker-pin/oci/version"
 )
@@ -331,6 +334,54 @@ func TestHandleReportsAnUnreadableProject(t *testing.T) {
 	}
 	if res.Status != 500 {
 		t.Errorf("status = %d, want 500", res.Status)
+	}
+}
+
+// Jellyfin end to end: the labels it runs under, the tags linuxserver
+// publishes. Every release like this one was refused for a month.
+func TestHandleQueuesATagOnlyTheIncludeRuleCanOrder(t *testing.T) {
+	h, q := handlerOver(t, `
+services:
+  jellyfin:
+    image: lscr.io/linuxserver/jellyfin:12.1ubu2604-ls50@sha256:old
+    container_name: jellyfin
+`, &fakeApplier{})
+	h.Lookup.Labels = func(string) (map[string]string, bool, error) {
+		return map[string]string{
+			"duva.include_tags": `^\d+\.\d+ubu\d+-ls\d+$`,
+			"duva.exclude_tags": `^.*(alpha|beta|rc|dev|nightly|preview).*`,
+		}, true, nil
+	}
+
+	res := h.Handle(Notice{Container: "jellyfin", Image: "lscr.io/linuxserver/jellyfin:12.4ubu2604-ls60"})
+	if res.Outcome != Queue || res.Fate != FateWaiting {
+		t.Fatalf("outcome/fate = %s/%s, want queue/waiting (%s)", res.Outcome, res.Fate, res.Message)
+	}
+	e, ok := q.Get("jellyfin")
+	if !ok || e.To != "12.4ubu2604-ls60" || e.Kind != version.KindUnknown {
+		t.Errorf("entry = %+v, want 12.4ubu2604-ls60 waiting as unknown", e)
+	}
+}
+
+// A release found and not taken is said, at warn, naming the tag and why.
+// Before, it was dropped without a line, which is how Jellyfin went a month
+// without an update while the watcher reported every release.
+func TestARefusedReleaseIsLogged(t *testing.T) {
+	var buf bytes.Buffer
+	h, _ := handlerOver(t, pinnedProject, &fakeApplier{})
+	h.Log = zerolog.New(&buf)
+
+	h.Handle(Notice{Container: "my-app", Image: "example.com/app:a573727"})
+	out := buf.String()
+	if !strings.Contains(out, `"level":"warn"`) || !strings.Contains(out, "app: a573727 not taken") {
+		t.Errorf("log = %s, want a warning naming the refused tag", out)
+	}
+
+	// What it already runs is no news: said, but not as a warning.
+	buf.Reset()
+	h.Handle(Notice{Container: "my-app", Image: "example.com/app:1.0.0", Digest: "sha256:old"})
+	if out := buf.String(); !strings.Contains(out, `"level":"info"`) || !strings.Contains(out, "already on it") {
+		t.Errorf("log = %s, want an info line saying it is already on it", out)
 	}
 }
 

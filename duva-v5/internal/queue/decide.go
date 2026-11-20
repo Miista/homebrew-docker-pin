@@ -17,6 +17,7 @@ package queue
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -83,6 +84,21 @@ type Service struct {
 	Source string
 	// Ignored is duva.ignore: duva does not follow this service at all.
 	Ignored bool
+	// IncludeTags and ExcludeTags are duva.include_tags and duva.exclude_tags,
+	// the same rules the watcher picks candidates by. Nil when unset. Here
+	// they say which tags a person has declared to be one line, which is what
+	// lets a tag duva has no scheme for be ordered at all (see tagChange).
+	IncludeTags, ExcludeTags *regexp.Regexp
+}
+
+// oneLine reports whether the tag rules put both tags on one line: both
+// included, neither excluded. False without an include rule: an exclude rule
+// alone says what is unwanted, not what belongs together.
+func (s Service) oneLine(a, b string) bool {
+	if s.IncludeTags == nil || !s.IncludeTags.MatchString(a) || !s.IncludeTags.MatchString(b) {
+		return false
+	}
+	return s.ExcludeTags == nil || (!s.ExcludeTags.MatchString(a) && !s.ExcludeTags.MatchString(b))
 }
 
 // Pinned reports whether the service has opted in to being watched.
@@ -106,6 +122,10 @@ type Verdict struct {
 	From, To string
 	// Why says the reason in one clause, fit for a queue row or a log line.
 	Why string
+	// Routine marks an Ignore that is no news: the notice describes what the
+	// service already runs. Every other Ignore is a release that was found and
+	// not taken, which a person may be waiting for.
+	Routine bool
 }
 
 // Outcome is the decision itself.
@@ -160,7 +180,7 @@ func Decide(n Notice, svc Service, found bool) Verdict {
 	// This is the common case on a re-notify, and it is how "already handled"
 	// is answered without anyone keeping a flag.
 	if newTag == svc.Tag && n.Digest == svc.Digest {
-		return Verdict{Outcome: Ignore, Why: "already on it"}
+		return Verdict{Outcome: Ignore, Why: "already on it", Routine: true}
 	}
 
 	if newTag == svc.Tag {
@@ -175,6 +195,7 @@ func Decide(n Notice, svc Service, found bool) Verdict {
 			return Verdict{
 				Outcome: Ignore,
 				Why:     "the tag it already follows, with no new digest to move to",
+				Routine: true,
 			}
 		}
 		// Same tag, different digest: a moving tag moved. There is no
@@ -218,9 +239,30 @@ func tagChange(n Notice, svc Service, newTag string) Verdict {
 	// needs no label. duva.include_tags remains the override for when this
 	// cannot tell -- which it says rather than guesses.
 	if ok, why := version.SameScheme(svc.Tag, newTag); !ok {
-		v.Outcome = Ignore
-		v.Why = why
-		return v
+		if !svc.oneLine(svc.Tag, newTag) {
+			v.Outcome = Ignore
+			v.Why = why
+			return v
+		}
+		// Unless a person said these tags are one line. linuxserver's
+		// 12.1ubu2604-ls50 has no scheme duva reads, and its build number
+		// changes the suffix every week, so without this every Jellyfin release
+		// was refused here -- found by the watcher through the very include
+		// rule this reads. The rule says they belong together; the order
+		// comes from the tags' numbers, not from any scheme.
+		//
+		// Only ever reached where the line above refused, so nothing that
+		// passed the scheme check before is decided differently now.
+		if orderOnOneLine(newTag, svc.Tag) <= 0 {
+			v.Outcome = Ignore
+			v.Why = fmt.Sprintf("%s is not newer than %s", newTag, svc.Tag)
+			return v
+		}
+		// Ordered, but not sized: nothing says whether ls50 to ls61 is a
+		// rebuild or a major release. Unknown, which only duva.auto: major
+		// takes unattended.
+		kind = version.KindUnknown
+		v.Kind = kind
 	}
 
 	// Not every tag change is an upgrade. A watcher reporting an older tag,
@@ -253,6 +295,25 @@ func tagChange(n Notice, svc Service, newTag string) Verdict {
 	v.Why = fmt.Sprintf("%s exceeds duva.auto: %s", kind, svc.Auto)
 	return v
 }
+
+// orderOnOneLine orders two tags the include rule put on one line.
+//
+// CompareVersions when both lead with numbers: it compares the numbers
+// segment by segment, a missing one counting as 0, so 12.4.1ubu2604-ls61 is
+// after 12.4ubu2604-ls60. Run by run, NaturalCompare would put it before, at
+// the "." against "ubu". The rest of the tag is then compared in runs either
+// way, so ls100 is still after ls99. NaturalCompare for tags that do not lead
+// with numbers, where CompareVersions would fall back to a plain lexical
+// compare and put ls100 before ls99.
+func orderOnOneLine(a, b string) int {
+	if leadingNumber.MatchString(a) && leadingNumber.MatchString(b) {
+		return version.CompareVersions(a, b)
+	}
+	return version.NaturalCompare(a, b)
+}
+
+// leadingNumber is what CompareVersions reads as a version core.
+var leadingNumber = regexp.MustCompile(`^v?\d`)
 
 // tagOf returns the tag from a full image reference, defaulting to latest.
 //

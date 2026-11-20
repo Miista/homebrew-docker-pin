@@ -120,3 +120,27 @@ func TestCompareVersions_NumericSuffixRuns(t *testing.T) {
 		}
 	}
 }
+
+// Whole tags duva has no scheme for. The cases a lexical compare gets wrong
+// are the ones where a number gains a digit.
+func TestNaturalCompare(t *testing.T) {
+	tests := []struct {
+		a, b string
+		want int
+	}{
+		{"12.4ubu2604-ls61", "12.1ubu2604-ls50", 1},
+		{"12.4ubu2604-ls100", "12.4ubu2604-ls99", 1}, // lexical would say -1
+		{"10.0ubu2604-ls1", "9.9ubu2604-ls1", 1},     // lexical would say -1
+		{"12.4ubu2610-ls1", "12.4ubu2604-ls99", 1},
+		{"12.4ubu2604-ls60", "12.4ubu2604-ls60", 0},
+		{"12.4ubu2604-ls59", "12.4ubu2604-ls60", -1},
+		{"ls01", "ls1", 0}, // equal as numbers: not newer either way
+		{"dev", "dev", 0},  // no numbers at all: lexical
+		{"beta", "alpha", 1},
+	}
+	for _, tt := range tests {
+		if got := NaturalCompare(tt.a, tt.b); got != tt.want {
+			t.Errorf("NaturalCompare(%q, %q) = %d, want %d", tt.a, tt.b, got, tt.want)
+		}
+	}
+}

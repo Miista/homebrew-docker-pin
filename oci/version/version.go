@@ -167,6 +167,18 @@ func compareSuffixes(a, b string) int {
 	}
 }
 
+// NaturalCompare orders two whole tags the way compareSuffixes orders
+// suffixes: alternating numeric and non-numeric runs, numbers compared as
+// numbers. It knows nothing about versioning schemes, which is the point: it
+// orders tags duva cannot otherwise read, like linuxserver's
+// 12.1ubu2604-ls50, where 12.4ubu2604-ls100 must sort after 12.4ubu2604-ls99
+// and a plain lexical compare would put it before.
+//
+// Only meaningful between tags somebody has said belong to one line
+// (duva.include_tags). Between a release and a git SHA it still returns an
+// answer, and the answer means nothing. Returns -1, 0 or 1.
+func NaturalCompare(a, b string) int { return compareSuffixes(a, b) }
+
 // NewestMatching returns the highest tag (per CompareVersions) that matches
 // include and is strictly newer than current, or "" when no tag qualifies.
 

@@ -182,6 +182,15 @@ func (h *Handler) handle(n Notice) Result {
 		return Result{Outcome: Reject, Message: v.Why, Status: http.StatusUnprocessableEntity}
 
 	case Ignore:
+		// Said, not dropped. A release found and not taken looked exactly like
+		// nothing having been found: every Jellyfin release was refused here
+		// for a month, and the only trace was the watcher saying it found
+		// them. What the service already runs is no news, so that is quieter.
+		if v.Routine {
+			h.Log.Info().Msgf("%s: %s not taken — %s", svc.Name, tagOf(n.Image), v.Why)
+		} else {
+			h.logf("%s: %s not taken — %s", svc.Name, tagOf(n.Image), v.Why)
+		}
 		return Result{Outcome: Ignore, Service: svc.Name, Message: v.Why, Status: http.StatusOK}
 
 	case Apply:
@@ -241,6 +250,7 @@ func (h *Handler) handle(n Notice) Result {
 		// applier can settle that entry and no other. A release older than
 		// one already waiting is not started: it is not what the queue holds.
 		if stored.To != e.To || stored.From != e.From {
+			h.Log.Info().Msgf("%s: %s not taken — a newer release is already waiting", svc.Name, tagOf(n.Image))
 			return Result{Outcome: Ignore, Service: svc.Name, Message: "a newer release is already waiting", Status: http.StatusOK}
 		}
 		e = stored

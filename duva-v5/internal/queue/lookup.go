@@ -3,6 +3,7 @@ package queue
 import (
 	"errors"
 	"fmt"
+	"regexp"
 
 	"github.com/Miista/homebrew-docker-pin/compose"
 )
@@ -122,7 +123,29 @@ func (l Lookup) declared(container string, ref compose.ServiceRef) (Service, boo
 		Soak:      soak,
 		Source:    SourceOf(labels["org.opencontainers.image.source"]),
 		Ignored:   ignored,
+		// The watcher's rules, read from the same labels it reads them from.
+		IncludeTags: tagRule(labels["duva.include_tags"]),
+		ExcludeTags: tagRule(labels["duva.exclude_tags"]),
 	}, true, nil
+}
+
+// tagRule compiles one tag rule, nil when unset.
+//
+// Nil too when it does not compile, unlike duva.auto: the watcher already
+// refuses such a service by name and checks nothing for it, and the only use
+// here is to take a release the scheme check would refuse. Without the rule
+// that release is refused, as it always was -- the safe direction, where
+// failing the lookup would also stop what waits for the service from being
+// rechecked.
+func tagRule(raw string) *regexp.Regexp {
+	if raw == "" {
+		return nil
+	}
+	re, err := regexp.Compile(raw)
+	if err != nil {
+		return nil
+	}
+	return re
 }
 
 // ErrNoContainer is a service declared in the compose file with no container

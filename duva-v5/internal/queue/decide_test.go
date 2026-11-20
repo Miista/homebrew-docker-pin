@@ -1,6 +1,7 @@
 package queue
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
@@ -384,6 +385,149 @@ func TestAnUnknownCurrentSchemeSaysSo(t *testing.T) {
 	}
 	if !strings.Contains(v.Why, "a573727") {
 		t.Errorf("the reason does not name the tag in use: %q", v.Why)
+	}
+}
+
+// --- tags only the include rule can order -----------------------------------
+
+// linuxserver's Jellyfin tags, with the rule the service carries.
+func jellyfin(tag string, auto Auto) Service {
+	s := svc(tag, "sha256:old", auto)
+	s.IncludeTags = regexp.MustCompile(`^\d+\.\d+ubu\d+-ls\d+$`)
+	s.ExcludeTags = regexp.MustCompile(`^.*(alpha|beta|rc|dev|nightly|preview).*$`)
+	return s
+}
+
+// The case this exists for. 12.1ubu2604-ls50 follows no scheme duva reads, so
+// every release the watcher found through this very rule was refused -- for a
+// month, without a word. Both tags match the rule, the candidate sorts after,
+// so a person sees it; nothing says how big it is.
+func TestTheIncludeRuleOrdersTagsWithNoScheme(t *testing.T) {
+	v := Decide(notice("example.com/app:12.4ubu2604-ls61", ""), jellyfin("12.1ubu2604-ls50", AutoNone), true)
+	if v.Outcome != Queue {
+		t.Fatalf("outcome = %s, want %s (%s)", v.Outcome, Queue, v.Why)
+	}
+	if v.Kind != version.KindUnknown {
+		t.Errorf("kind = %q, want unknown: ordering is not sizing", v.Kind)
+	}
+	if v.From != "12.1ubu2604-ls50" || v.To != "12.4ubu2604-ls61" {
+		t.Errorf("from/to = %s/%s", v.From, v.To)
+	}
+}
+
+// Without the rule, nothing changed: the same tags are refused as before.
+func TestWithoutAnIncludeRuleTagsWithNoSchemeAreStillRefused(t *testing.T) {
+	v := Decide(notice("example.com/app:12.4ubu2604-ls61", ""), svc("12.1ubu2604-ls50", "sha256:old", AutoNone), true)
+	if v.Outcome != Ignore {
+		t.Errorf("outcome = %s, want %s (%s)", v.Outcome, Ignore, v.Why)
+	}
+}
+
+// One line means both tags: a rule the candidate misses, or that excludes
+// either, is no say-so, and the scheme check's refusal stands.
+func TestTheIncludeRuleMustCoverBothTags(t *testing.T) {
+	for _, tc := range []struct{ name, include, current, candidate string }{
+		{"candidate not included", `^\d+\.\d+ubu\d+-ls\d+$`, "12.1ubu2604-ls50", "a573727"},
+		{"current not included", `^\d+\.\d+ubu\d+-ls\d+$`, "a573727", "12.4ubu2604-ls61"},
+		{"candidate excluded", `ubu`, "12.1ubu2604-ls50", "12.4ubu2604-ls61-beta"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := jellyfin(tc.current, AutoNone)
+			s.IncludeTags = regexp.MustCompile(tc.include)
+			v := Decide(notice("example.com/app:"+tc.candidate, ""), s, true)
+			if v.Outcome != Ignore {
+				t.Errorf("%s -> %s: outcome %s, want %s (%s)", tc.current, tc.candidate, v.Outcome, Ignore, v.Why)
+			}
+		})
+	}
+}
+
+// Ordered by the numbers in the tag, so an older build is refused, and a build
+// number gaining a digit is still newer -- which a lexical compare gets wrong.
+func TestTheIncludeRuleOrdersByTheNumbers(t *testing.T) {
+	for _, tc := range []struct {
+		current, candidate string
+		want               Outcome
+	}{
+		{"12.4ubu2604-ls60", "12.4ubu2604-ls59", Ignore},
+		{"12.4ubu2604-ls60", "12.4ubu2604-ls60", Ignore},
+		{"12.4ubu2604-ls99", "12.4ubu2604-ls100", Queue},
+		{"9.9ubu2604-ls1", "10.0ubu2604-ls1", Queue},
+	} {
+		v := Decide(notice("example.com/app:"+tc.candidate, ""), jellyfin(tc.current, AutoNone), true)
+		if v.Outcome != tc.want {
+			t.Errorf("%s -> %s: outcome %s, want %s (%s)", tc.current, tc.candidate, v.Outcome, tc.want, v.Why)
+		}
+	}
+}
+
+// A version gaining a segment, under a rule that allows it. Compared run by
+// run, "12.4.1ubu" is before "12.4ubu" at the "." against "ubu"; the numbers
+// say otherwise. Tags with no leading number are still ordered by their runs.
+func TestTheIncludeRuleOrdersAVersionThatGainsASegment(t *testing.T) {
+	for _, tc := range []struct {
+		include, current, candidate string
+		want                        Outcome
+	}{
+		{`^\d+(\.\d+)+ubu\d+-ls\d+$`, "12.4ubu2604-ls60", "12.4.1ubu2604-ls61", Queue},
+		{`^\d+(\.\d+)+ubu\d+-ls\d+$`, "12.4.1ubu2604-ls61", "12.4ubu2604-ls62", Ignore},
+		{`^\d+(\.\d+)+ubu\d+-ls\d+$`, "12.4.1ubu2604-ls61", "12.5ubu2604-ls62", Queue},
+		{`^ls\d+$`, "ls99", "ls100", Queue},
+		{`^ls\d+$`, "ls100", "ls99", Ignore},
+	} {
+		s := svc(tc.current, "sha256:old", AutoNone)
+		s.IncludeTags = regexp.MustCompile(tc.include)
+		v := Decide(notice("example.com/app:"+tc.candidate, ""), s, true)
+		if v.Outcome != tc.want {
+			t.Errorf("%s -> %s: outcome %s, want %s (%s)", tc.current, tc.candidate, v.Outcome, tc.want, v.Why)
+		}
+	}
+}
+
+// Unknown is on the ladder where it always was: only duva.auto: major takes
+// it unattended, and every lesser policy leaves it to a person.
+func TestAnOrderedButUnsizedReleaseIsUnknownOnTheLadder(t *testing.T) {
+	for _, tc := range []struct {
+		auto Auto
+		want Outcome
+	}{
+		{AutoNone, Queue},
+		{AutoDigest, Queue},
+		{AutoPatch, Queue},
+		{AutoMinor, Queue},
+		{AutoMajor, Apply},
+	} {
+		v := Decide(notice("example.com/app:12.4ubu2604-ls61", ""), jellyfin("12.1ubu2604-ls50", tc.auto), true)
+		if v.Outcome != tc.want {
+			t.Errorf("duva.auto %s: outcome %s, want %s (%s)", tc.auto, v.Outcome, tc.want, v.Why)
+		}
+	}
+}
+
+// A service whose tags already pass the scheme check is decided exactly as
+// before when it also carries a rule: still sized, still applied within
+// policy. Most services with include_tags are this.
+func TestAnIncludeRuleChangesNothingTheSchemeCheckAlreadyPasses(t *testing.T) {
+	s := svc("2.11.9-alpine", "sha256:old", AutoPatch)
+	s.IncludeTags = regexp.MustCompile(`^\d+\.\d+\.\d+-alpine$`)
+	v := Decide(notice("example.com/app:2.11.10-alpine", ""), s, true)
+	if v.Outcome != Apply || v.Kind != version.KindPatch {
+		t.Errorf("outcome/kind = %s/%s, want apply/patch (%s)", v.Outcome, v.Kind, v.Why)
+	}
+	// And a flavour switch it does not cover is still no candidate.
+	v = Decide(notice("example.com/app:2.11.10-slim", ""), s, true)
+	if v.Outcome != Ignore {
+		t.Errorf("flavour switch: outcome %s, want %s (%s)", v.Outcome, Ignore, v.Why)
+	}
+}
+
+// Only what the service already runs is routine; a refused release is not.
+func TestOnlyWhatIsAlreadyRunIsRoutine(t *testing.T) {
+	if v := Decide(notice("example.com/app:1.0.0", "sha256:old"), svc("1.0.0", "sha256:old", AutoNone), true); !v.Routine {
+		t.Errorf("already on it: routine = false (%s)", v.Why)
+	}
+	if v := Decide(notice("example.com/app:a573727", ""), svc("0.3.22", "sha256:old", AutoNone), true); v.Routine {
+		t.Errorf("a refused release is routine (%s)", v.Why)
 	}
 }
 

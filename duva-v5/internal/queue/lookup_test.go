@@ -40,6 +40,50 @@ services:
 	}
 }
 
+// The tag rules come from the container too, the same labels the watcher
+// picks candidates by.
+func TestLookupReadsTheTagRulesFromTheContainer(t *testing.T) {
+	l := project(t, pinnedProject)
+	l.Labels = func(string) (map[string]string, bool, error) {
+		return map[string]string{
+			"duva.include_tags": `^\d+\.\d+ubu\d+-ls\d+$`,
+			"duva.exclude_tags": `beta`,
+		}, true, nil
+	}
+
+	svc, _, err := l.Service("my-app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if svc.IncludeTags == nil || !svc.IncludeTags.MatchString("12.1ubu2604-ls50") {
+		t.Errorf("include = %v, want the container's rule", svc.IncludeTags)
+	}
+	if svc.ExcludeTags == nil || !svc.ExcludeTags.MatchString("1.0-beta") {
+		t.Errorf("exclude = %v, want the container's rule", svc.ExcludeTags)
+	}
+}
+
+// A rule that does not compile is no rule, not a failed lookup: the watcher
+// already refuses the service by name, and failing here would also stop what
+// waits for it from being rechecked.
+func TestAnUncompilableTagRuleIsNoRule(t *testing.T) {
+	l := project(t, pinnedProject)
+	l.Labels = func(string) (map[string]string, bool, error) {
+		return map[string]string{"duva.auto": "patch", "duva.include_tags": `(`}, true, nil
+	}
+
+	svc, found, err := l.Service("my-app")
+	if err != nil || !found {
+		t.Fatalf("Service: %v found=%v, want the service read", err, found)
+	}
+	if svc.IncludeTags != nil {
+		t.Errorf("include = %v, want none", svc.IncludeTags)
+	}
+	if svc.Auto != AutoPatch {
+		t.Errorf("auto = %s, want the rest of the policy read as usual", svc.Auto)
+	}
+}
+
 // No container is no policy, not the file's: those labels describe nothing
 // that runs.
 func TestLookupWithoutAContainerIsAnError(t *testing.T) {
